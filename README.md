@@ -18,7 +18,7 @@ Go로 만든 팀 공용 지식 서버입니다. 프로젝트별 기획·결정·
 - 공식 Go MCP SDK 기반 Streamable HTTP `/mcp`
 - Railway용 Dockerfile, 배포 전 마이그레이션, `/healthz`
 
-Railway 개발·운영 프로젝트 리소스와 DB·Ollama를 생성했습니다. 앱 배포는 GitHub 저장소 지정과 공개 접근 범위 확인 후 진행합니다.
+Railway 개발·운영 앱을 배포했습니다. `develop`과 `main`을 각각 개발·운영에 연결했고, DB·Ollama와 사용자 데이터는 환경별로 분리됩니다.
 
 ## 기술 구성
 
@@ -158,11 +158,11 @@ Authorization: Bearer <발급받은 MCP 키>
 
 개발은 `development` / `develop`, 운영은 `production` / `main`으로 분리합니다. 각 환경에 앱과 PostgreSQL을 따로 만들고, `DATABASE_URL`은 **같은 환경의 Postgres 서비스 참조**로 주입합니다. 비밀번호를 코드에 기록하지 않습니다.
 
-[개발·운영 배포 절차](.railway/README.md)와 [실제 배포 설정](.railway/railway.ts)을 사용합니다. Docker 빌드, 배포 전 마이그레이션, `/healthz`, 재시작 정책, GitHub 브랜치 연결 설정이 포함되어 있습니다. GitHub 자동 배포는 설정 파일의 `repository`에 실제 저장소를 지정한 뒤 두 환경에 적용해야 활성화됩니다.
+[개발·운영 배포 절차](.railway/README.md)와 [실제 배포 설정](.railway/railway.ts)을 사용합니다. Docker 빌드, 배포 전 마이그레이션, `/healthz`, 재시작 정책, GitHub 브랜치 연결 설정이 포함되어 있습니다. GitHub 저장소 `patrickmonster/knowledge-base`의 `develop` → 개발, `main` → 운영 자동 배포를 연결했습니다.
 
 새 배포는 마이그레이션과 상태 확인을 통과해야 합니다. 앱 롤백이 DB를 되돌리지는 않으므로 스키마 변경은 이전 앱과 호환되게 추가합니다. 개발·운영의 최초 관리자도 각각 한 번 생성합니다.
 
-[Railway 프로젝트](https://railway.com/project/ee74d312-3e76-4908-b039-c290ce21d064)의 개발·운영 환경과 독립 DB·Ollama, 앱 배포 설정을 생성했습니다. 앱 소스 연결과 공개 도메인 생성은 아직 완료하지 않았으며, 실제 앱 배포·최초 관리자 생성·접속 검증이 남아 있습니다. 현재 상태와 서비스 이름은 [배포 기록](.railway/README.md)을 참고합니다.
+[Railway 프로젝트](https://railway.com/project/ee74d312-3e76-4908-b039-c290ce21d064)의 [운영 앱](https://knowledge-base-production-451e6aae.up.railway.app)과 [개발 앱](https://knowledge-base-dev-development.up.railway.app)을 배포했습니다. DB 마이그레이션, 상태 확인, 최초 관리자 로그인과 MCP 인증을 검증했습니다. 환경별 구성과 운영 절차는 [배포 기록](.railway/README.md)을 참고합니다.
 
 ## 감사·운영 범위
 

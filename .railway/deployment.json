@@ -8,7 +8,8 @@
       "app": {
         "id": "d5e5b771-da22-4a97-881d-90c7b81a0c2f",
         "name": "knowledge-base",
-        "domain": "knowledge-base-production-451e6aae.up.railway.app"
+        "domain": "knowledge-base-production-451e6aae.up.railway.app",
+        "branch": "main"
       },
       "database": {
         "id": "f42dfa81-5653-430e-9e6c-4bc9f4ce34b2",
@@ -24,7 +25,8 @@
       "app": {
         "id": "63eb7d34-37d0-4fdf-a7e3-8c68530a4633",
         "name": "knowledge-base-dev",
-        "domain": "knowledge-base-dev-development.up.railway.app"
+        "domain": "knowledge-base-dev-development.up.railway.app",
+        "branch": "develop"
       },
       "database": {
         "id": "23ff2302-e5e5-4b8c-beff-9754460a66d9",
@@ -35,5 +37,6 @@
         "name": "Ollama-QdV8"
       }
     }
-  }
+  },
+  "repository": "patrickmonster/knowledge-base"
 }
