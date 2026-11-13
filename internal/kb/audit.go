@@ -95,7 +95,7 @@ func (s *Store) Perform(ctx context.Context, identity Identity, action, projectI
 			var keyAccess string
 			var scope sql.NullString
 			err := tx.QueryRowContext(ctx, `SELECT access,project_id::text FROM api_keys WHERE id=$1 AND user_id=$2
-				AND revoked_at IS NULL AND expires_at>now() FOR SHARE`, identity.KeyID, identity.User.ID).Scan(&keyAccess, &scope)
+				AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at>now()) FOR SHARE`, identity.KeyID, identity.User.ID).Scan(&keyAccess, &scope)
 			if errors.Is(err, sql.ErrNoRows) {
 				return problem("UNAUTHORIZED", "Key is expired or revoked.")
 			}

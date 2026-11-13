@@ -99,10 +99,11 @@ func (s *Store) UpdateUser(ctx context.Context, actor Identity, in UserUpdate) (
 }
 
 type KeyInput struct {
-	Name      string `json:"name"`
-	Access    string `json:"access"`
-	ProjectID string `json:"project_id,omitempty"`
-	Days      int    `json:"days,omitempty"`
+	Name         string `json:"name"`
+	Access       string `json:"access"`
+	ProjectID    string `json:"project_id,omitempty"`
+	Days         int    `json:"days,omitempty"`
+	NeverExpires bool   `json:"never_expires,omitempty"`
 }
 
 func (s *Store) CreateKey(ctx context.Context, actor Identity, in KeyInput) (any, error) {
@@ -117,10 +118,13 @@ func (s *Store) CreateKey(ctx context.Context, actor Identity, in KeyInput) (any
 		if in.Access != "read_only" && in.Access != "read_write" {
 			return nil, problem("INVALID_INPUT", "Choose read_only or read_write.")
 		}
-		if in.Days == 0 {
+		if in.NeverExpires && in.Days != 0 {
+			return nil, problem("INVALID_INPUT", "Choose either no expiration or a lifetime in days.")
+		}
+		if !in.NeverExpires && in.Days == 0 {
 			in.Days = 30
 		}
-		if in.Days < 1 || in.Days > 90 {
+		if !in.NeverExpires && (in.Days < 1 || in.Days > 90) {
 			return nil, problem("INVALID_INPUT", "Key lifetime must be 1–90 days.")
 		}
 		if in.ProjectID != "" {
@@ -131,8 +135,13 @@ func (s *Store) CreateKey(ctx context.Context, actor Identity, in KeyInput) (any
 		raw := "kb_" + token()
 		id := uuid.NewString()
 		_, err := tx.ExecContext(ctx, `INSERT INTO api_keys(id,user_id,token_hash,name,prefix,access,project_id,expires_at)
-			VALUES($1,$2,$3,$4,$5,$6,NULLIF($7,'')::uuid,now()+make_interval(days=>$8))`, id, actor.User.ID, digest(raw), in.Name, raw[:10], in.Access, in.ProjectID, in.Days)
-		return map[string]any{"id": id, "token": raw, "name": in.Name, "expires_in_days": in.Days}, err
+			VALUES($1,$2,$3,$4,$5,$6,NULLIF($7,'')::uuid,
+			CASE WHEN $9 THEN NULL ELSE now()+make_interval(days=>$8) END)`, id, actor.User.ID, digest(raw), in.Name, raw[:10], in.Access, in.ProjectID, in.Days, in.NeverExpires)
+		var expiresInDays any = in.Days
+		if in.NeverExpires {
+			expiresInDays = nil
+		}
+		return map[string]any{"id": id, "token": raw, "name": in.Name, "expires_in_days": expiresInDays, "never_expires": in.NeverExpires}, err
 	})
 }
 func (s *Store) RevokeKey(ctx context.Context, actor Identity, id string) (any, error) {
@@ -201,7 +210,7 @@ func (s *Store) Stats(ctx context.Context, actor Identity) (any, error) {
 		return one[map[string]any](ctx, tx, `SELECT jsonb_build_object(
 		'active_users',(SELECT count(*) FROM users WHERE NOT disabled AND password_hash<>''),
 		'projects',(SELECT count(*) FROM projects),
-		'active_keys',(SELECT count(*) FROM api_keys k JOIN users u ON u.id=k.user_id WHERE NOT u.disabled AND k.revoked_at IS NULL AND k.expires_at>now()),
+		'active_keys',(SELECT count(*) FROM api_keys k JOIN users u ON u.id=k.user_id WHERE NOT u.disabled AND k.revoked_at IS NULL AND (k.expires_at IS NULL OR k.expires_at>now())),
 		'requests_24h',count(*),'denied_24h',count(*) FILTER(WHERE outcome='denied'),
 		'errors_24h',count(*) FILTER(WHERE outcome='error'),
 		'login_failures_24h',count(*) FILTER(WHERE action='login' AND outcome='denied'),

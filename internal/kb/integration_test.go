@@ -241,7 +241,7 @@ func TestAccountLifecycle(t *testing.T) {
 	ctx := context.Background()
 	admin := loginAs(t, s, "admin@example.com")
 	member := inviteAs(t, s, admin, "member@example.com")
-	out, err := s.CreateKey(ctx, member, KeyInput{Name: "before-reset", Access: "read_write"})
+	out, err := s.CreateKey(ctx, member, KeyInput{Name: "before-reset", Access: "read_write", NeverExpires: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -300,103 +300,107 @@ func (b bearerTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	return http.DefaultTransport.RoundTrip(clone)
 }
 func TestHTTPLoginAndMCP(t *testing.T) {
-	s := testStore(t)
-	ts := httptest.NewUnstartedServer(nil)
-	origin := "http://" + ts.Listener.Addr().String()
-	app, err := NewApp(s, Config{PublicURL: origin})
-	if err != nil {
-		t.Fatal(err)
-	}
-	ts.Config.Handler = app.Handler()
-	ts.Start()
-	defer ts.Close()
-	jar, _ := cookiejar.New(nil)
-	client := &http.Client{Jar: jar, Timeout: 10 * time.Second}
-	csrf := ""
-	request := func(method, path string, input any, originHeader string) (int, map[string]any, *http.Response) {
-		t.Helper()
-		var body io.Reader
-		if input != nil {
-			b, _ := json.Marshal(input)
-			body = bytes.NewReader(b)
-		}
-		r, _ := http.NewRequest(method, ts.URL+path, body)
-		r.Header.Set("Content-Type", "application/json")
-		r.Header.Set("Origin", originHeader)
-		r.Header.Set("X-CSRF-Token", csrf)
-		res, err := client.Do(r)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer res.Body.Close()
-		raw, _ := io.ReadAll(res.Body)
-		var data map[string]any
-		_ = json.Unmarshal(raw, &data)
-		return res.StatusCode, data, res
-	}
-	status, _, _ := request("POST", "/api/login", map[string]any{"email": "admin@example.com", "password": testPassword}, "https://evil.example")
-	if status != 403 {
-		t.Fatal("cross-origin login accepted", status)
-	}
-	status, _, res := request("POST", "/api/login", map[string]any{"email": "admin@example.com", "password": testPassword}, origin)
-	if status != 200 {
-		t.Fatal("login failed", status)
-	}
-	if len(res.Cookies()) != 1 || !res.Cookies()[0].HttpOnly || res.Cookies()[0].SameSite != http.SameSiteStrictMode {
-		t.Fatal("session cookie flags missing")
-	}
-	status, data, _ := request("GET", "/api/me", nil, origin)
-	if status != 200 {
-		t.Fatal(data)
-	}
-	csrf = data["data"].(map[string]any)["csrf_token"].(string)
-	saved := csrf
-	csrf = "wrong"
-	status, _, _ = request("POST", "/api/keys", KeyInput{Name: "test", Access: "read_only"}, origin)
-	if status != 403 {
-		t.Fatal("CSRF check bypassed")
-	}
-	csrf = saved
-	status, data, _ = request("POST", "/api/keys", KeyInput{Name: "test", Access: "read_only"}, origin)
-	if status != 200 {
-		t.Fatal(data)
-	}
-	key := data["data"].(map[string]any)
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-	mcpClient := mcp.NewClient(&mcp.Implementation{Name: "integration-test", Version: "1"}, nil)
-	session, err := mcpClient.Connect(ctx, &mcp.StreamableClientTransport{Endpoint: ts.URL + "/mcp", HTTPClient: &http.Client{Transport: bearerTransport{key["token"].(string)}}, MaxRetries: -1}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer session.Close()
-	listed, err := session.ListTools(ctx, nil)
-	if err != nil || len(listed.Tools) < 10 {
-		t.Fatalf("MCP tools unavailable: %v %v", listed, err)
-	}
-	result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "whoami", Arguments: map[string]any{}})
-	if err != nil || result.IsError {
-		t.Fatalf("MCP user lookup failed: %v %v", result, err)
-	}
-	result, err = session.CallTool(ctx, &mcp.CallToolParams{Name: "create_project", Arguments: map[string]any{"name": "blocked", "slug": "blocked"}})
-	if err != nil || !result.IsError {
-		t.Fatalf("MCP read-only key can write: %v %v", result, err)
-	}
-	status, _, _ = request("POST", "/api/keys/revoke", map[string]any{"id": key["id"]}, origin)
-	if status != 200 {
-		t.Fatal("key revocation failed")
-	}
-	_, err = session.CallTool(ctx, &mcp.CallToolParams{Name: "whoami", Arguments: map[string]any{}})
-	if err == nil {
-		t.Fatal("revoked key remains usable over MCP")
-	}
-	status, _, _ = request("POST", "/api/logout", map[string]any{}, origin)
-	if status != 200 {
-		t.Fatal("logout failed")
-	}
-	status, _, _ = request("GET", "/api/me", nil, origin)
-	if status != 401 {
-		t.Fatal("logout did not invalidate session")
+	for _, permanent := range []bool{false, true} {
+		t.Run(fmt.Sprintf("permanent=%t", permanent), func(t *testing.T) {
+			s := testStore(t)
+			ts := httptest.NewUnstartedServer(nil)
+			origin := "http://" + ts.Listener.Addr().String()
+			app, err := NewApp(s, Config{PublicURL: origin})
+			if err != nil {
+				t.Fatal(err)
+			}
+			ts.Config.Handler = app.Handler()
+			ts.Start()
+			defer ts.Close()
+			jar, _ := cookiejar.New(nil)
+			client := &http.Client{Jar: jar, Timeout: 10 * time.Second}
+			csrf := ""
+			request := func(method, path string, input any, originHeader string) (int, map[string]any, *http.Response) {
+				t.Helper()
+				var body io.Reader
+				if input != nil {
+					b, _ := json.Marshal(input)
+					body = bytes.NewReader(b)
+				}
+				r, _ := http.NewRequest(method, ts.URL+path, body)
+				r.Header.Set("Content-Type", "application/json")
+				r.Header.Set("Origin", originHeader)
+				r.Header.Set("X-CSRF-Token", csrf)
+				res, err := client.Do(r)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer res.Body.Close()
+				raw, _ := io.ReadAll(res.Body)
+				var data map[string]any
+				_ = json.Unmarshal(raw, &data)
+				return res.StatusCode, data, res
+			}
+			status, _, _ := request("POST", "/api/login", map[string]any{"email": "admin@example.com", "password": testPassword}, "https://evil.example")
+			if status != 403 {
+				t.Fatal("cross-origin login accepted", status)
+			}
+			status, _, res := request("POST", "/api/login", map[string]any{"email": "admin@example.com", "password": testPassword}, origin)
+			if status != 200 {
+				t.Fatal("login failed", status)
+			}
+			if len(res.Cookies()) != 1 || !res.Cookies()[0].HttpOnly || res.Cookies()[0].SameSite != http.SameSiteStrictMode {
+				t.Fatal("session cookie flags missing")
+			}
+			status, data, _ := request("GET", "/api/me", nil, origin)
+			if status != 200 {
+				t.Fatal(data)
+			}
+			csrf = data["data"].(map[string]any)["csrf_token"].(string)
+			saved := csrf
+			csrf = "wrong"
+			status, _, _ = request("POST", "/api/keys", KeyInput{Name: "test", Access: "read_only", NeverExpires: permanent}, origin)
+			if status != 403 {
+				t.Fatal("CSRF check bypassed")
+			}
+			csrf = saved
+			status, data, _ = request("POST", "/api/keys", KeyInput{Name: "test", Access: "read_only", NeverExpires: permanent}, origin)
+			if status != 200 {
+				t.Fatal(data)
+			}
+			key := data["data"].(map[string]any)
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			defer cancel()
+			mcpClient := mcp.NewClient(&mcp.Implementation{Name: "integration-test", Version: "1"}, nil)
+			session, err := mcpClient.Connect(ctx, &mcp.StreamableClientTransport{Endpoint: ts.URL + "/mcp", HTTPClient: &http.Client{Transport: bearerTransport{key["token"].(string)}}, MaxRetries: -1}, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer session.Close()
+			listed, err := session.ListTools(ctx, nil)
+			if err != nil || len(listed.Tools) < 10 {
+				t.Fatalf("MCP tools unavailable: %v %v", listed, err)
+			}
+			result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "whoami", Arguments: map[string]any{}})
+			if err != nil || result.IsError {
+				t.Fatalf("MCP user lookup failed: %v %v", result, err)
+			}
+			result, err = session.CallTool(ctx, &mcp.CallToolParams{Name: "create_project", Arguments: map[string]any{"name": "blocked", "slug": "blocked"}})
+			if err != nil || !result.IsError {
+				t.Fatalf("MCP read-only key can write: %v %v", result, err)
+			}
+			status, _, _ = request("POST", "/api/keys/revoke", map[string]any{"id": key["id"]}, origin)
+			if status != 200 {
+				t.Fatal("key revocation failed")
+			}
+			_, err = session.CallTool(ctx, &mcp.CallToolParams{Name: "whoami", Arguments: map[string]any{}})
+			if err == nil {
+				t.Fatal("revoked key remains usable over MCP")
+			}
+			status, _, _ = request("POST", "/api/logout", map[string]any{}, origin)
+			if status != 200 {
+				t.Fatal("logout failed")
+			}
+			status, _, _ = request("GET", "/api/me", nil, origin)
+			if status != 401 {
+				t.Fatal("logout did not invalidate session")
+			}
+		})
 	}
 }
 

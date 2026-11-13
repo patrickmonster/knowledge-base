@@ -10,3 +10,6 @@ var Auth string
 
 //go:embed 003_embeddings.sql
 var Embeddings string
+
+//go:embed 004_permanent_keys.sql
+var PermanentKeys string

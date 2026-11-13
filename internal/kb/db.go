@@ -43,7 +43,7 @@ func (s *Store) Migrate(ctx context.Context) error {
 		if _, err := tx.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations(version integer PRIMARY KEY)`); err != nil {
 			return err
 		}
-		for i, script := range []string{migrations.Initial, migrations.Auth, migrations.Embeddings} {
+		for i, script := range []string{migrations.Initial, migrations.Auth, migrations.Embeddings, migrations.PermanentKeys} {
 			var exists bool
 			if err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version=$1)", i+1).Scan(&exists); err != nil {
 				return err

@@ -192,7 +192,7 @@ func (s *Store) APIKey(ctx context.Context, raw string) (Identity, error) {
 	var project sql.NullString
 	err := s.DB.QueryRowContext(ctx, `SELECT to_jsonb(u)-'password_hash',k.id::text,k.access,k.project_id::text
 		FROM api_keys k JOIN users u ON u.id=k.user_id WHERE k.token_hash=$1 AND k.revoked_at IS NULL
-		AND k.expires_at>now() AND NOT u.disabled`, digest(raw)).Scan(&userJSON, &id, &access, &project)
+		AND (k.expires_at IS NULL OR k.expires_at>now()) AND NOT u.disabled`, digest(raw)).Scan(&userJSON, &id, &access, &project)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Identity{}, problem("UNAUTHORIZED", "Invalid, expired, or revoked API key.")
 	}
