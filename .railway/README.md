@@ -3,8 +3,8 @@
 2026-11-13에 [knowledge-base 프로젝트](https://railway.com/project/ee74d312-3e76-4908-b039-c290ce21d064)와 개발·운영 환경을 생성했습니다. 리소스 ID는 [deployment.json](deployment.json)에 기록했습니다.
 
 - 생성·설정 완료: 환경별 DB, 앱 서비스, Ollama, 영구 볼륨, 내부 연결 변수, 배포 전 마이그레이션·상태 확인 설정.
-- 앱 소스 연결 대기: GitHub 저장소와 `develop` / `main` 브랜치가 아직 지정되지 않았습니다. 앱 자체는 아직 배포되지 않았으므로 원격 DB의 앱 테이블도 아직 생성하지 않았습니다.
-- 공개 도메인: 미생성. 공개할 환경의 사용자 승인 대기입니다.
+- 앱 소스 연결 대기: GitHub 저장소와 `develop` / `main` 브랜치가 아직 지정되지 않았습니다. 로컬 업로드로 첫 배포 후 GitHub 자동 배포를 연결할 수 있습니다. 앱 자체는 아직 배포되지 않았으므로 원격 DB의 앱 테이블도 아직 생성하지 않았습니다.
+- 공개 도메인 생성 완료(사용자 승인): 운영 `https://knowledge-base-production-451e6aae.up.railway.app`, 개발 `https://knowledge-base-dev-development.up.railway.app`. 앱 배포가 끝나기 전에는 접속할 수 없습니다.
 - 최초 관리자 생성·앱 로그인·MCP 연결·원격 임베딩 요청: 앱 배포 후 검증합니다.
 - DB 자동 백업 일정: 아직 설정하지 않았습니다.
 

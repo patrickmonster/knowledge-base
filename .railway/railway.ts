@@ -1,9 +1,7 @@
 import { readFileSync } from "node:fs";
 import { defineRailway, github, image, postgres, project, service, volume } from "railway/iac";
 
-// Set this to owner/repository when the GitHub remote has been selected.
-// With no source, deploy the local checkout using `railway up`.
-const repository = "";
+const repository = "patrickmonster/knowledge-base";
 const ollamaScript = readFileSync(new URL("./ollama-start.sh", import.meta.url), "utf8");
 const ollamaStart = "/bin/sh -c '" + ollamaScript.replaceAll("'", "'\\''") + "'";
 
