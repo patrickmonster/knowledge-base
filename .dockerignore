@@ -1,0 +1,10 @@
+.git
+.env
+.env.*
+node_modules
+**/node_modules
+.railway
+.github
+bin
+coverage.out
+*.log

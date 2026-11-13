@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="ko">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>지식베이스 · 팀 관리</title><link rel="stylesheet" href="/style.css"><script defer src="/vectors.js"></script><script defer src="/app.js"></script></head>
+<body>
+<div id="notice" role="status" aria-live="polite" hidden></div>
+<main id="login-view" class="auth" hidden>
+  <div class="mark">K</div><p class="eyebrow">TEAM KNOWLEDGE</p><h1>팀의 지식을 이어가세요.</h1><p class="muted">프로젝트의 결정과 맥락을 한곳에.</p>
+  <form id="login-form" class="card"><h2>로그인</h2><label>이메일<input name="email" type="email" autocomplete="username" required></label><label>비밀번호<input name="password" type="password" autocomplete="current-password" required></label><button>로그인</button><p class="muted small">계정이 없거나 비밀번호를 잊었다면 관리자에게 초대 또는 재설정 링크를 요청하세요.</p></form>
+</main>
+<main id="invite-view" class="auth" hidden><div class="mark">K</div><h1>계정 비밀번호 설정</h1><p class="muted">초대 또는 재설정 링크는 24시간 동안 한 번 사용할 수 있습니다.</p><form id="accept-form" class="card"><label>새 비밀번호<input name="password" type="password" minlength="12" maxlength="128" autocomplete="new-password" required></label><label>비밀번호 확인<input name="confirmation" type="password" minlength="12" maxlength="128" autocomplete="new-password" required></label><p class="small muted">12~128자. 변경 후 기존 로그인과 MCP 키는 만료됩니다.</p><button>비밀번호 설정</button></form></main>
+<div id="app-view" hidden>
+  <aside><a class="brand" href="/">K<span>지식베이스</span></a><p class="eyebrow">WORKSPACE</p><nav><button data-page="projects">프로젝트</button><button data-page="vectors">벡터 탐색</button><button data-page="keys">MCP 접속 키</button><button data-page="account">내 계정</button><div class="admin-only" hidden><p class="eyebrow">ADMINISTRATION</p><button data-page="overview">운영 현황</button><button data-page="users">사용자 관리</button><button data-page="audit">접근 기록</button></div></nav><div class="identity"><strong id="identity-name"></strong><span id="identity-email"></span><button id="logout" class="secondary">로그아웃</button></div></aside>
+  <main class="workspace"><header><div><p class="eyebrow">KNOWLEDGE / TEAM CONSOLE</p><h1 id="page-title"></h1></div><span class="badge">팀 워크스페이스</span></header><div id="page"></div></main>
+</div>
+<dialog id="secret-dialog"><h2 id="secret-title"></h2><p id="secret-description" class="muted"></p><textarea id="secret-value" readonly rows="4" aria-label="발급된 값"></textarea><div class="actions"><button id="copy-secret">복사</button><button id="close-secret" class="secondary">닫기</button></div></dialog>
+</body></html>

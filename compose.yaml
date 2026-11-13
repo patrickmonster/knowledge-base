@@ -1,0 +1,68 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg18
+    environment:
+      POSTGRES_USER: knowledge
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: knowledge
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      - "127.0.0.1:55432:5432"
+    volumes:
+      - knowledge-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U knowledge -d knowledge"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+  migrate:
+    build: .
+    command: ["/app/knowledge-base", "migrate"]
+    environment:
+      DATABASE_URL: postgres://knowledge:${POSTGRES_PASSWORD}@postgres:5432/knowledge?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+  app:
+    build: .
+    ports: ["127.0.0.1:8080:8080"]
+    environment:
+      DATABASE_URL: postgres://knowledge:${POSTGRES_PASSWORD}@postgres:5432/knowledge?sslmode=disable
+      PUBLIC_URL: http://localhost:8080
+      APP_ENV: local
+      PORT: "8080"
+      OLLAMA_BASE_URL: http://ollama:11434
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-bge-m3}
+      EMBEDDING_ENABLED: ${EMBEDDING_ENABLED:-true}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      ollama:
+        condition: service_healthy
+  ollama:
+    image: ollama/ollama:latest
+    environment:
+      OLLAMA_HOST: 0.0.0.0:11434
+      OLLAMA_NO_CLOUD: "true"
+    volumes:
+      - ollama-data:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+  bootstrap:
+    profiles: ["setup"]
+    build: .
+    command: ["/app/knowledge-base", "bootstrap"]
+    environment:
+      DATABASE_URL: postgres://knowledge:${POSTGRES_PASSWORD}@postgres:5432/knowledge?sslmode=disable
+      BOOTSTRAP_EMAIL: ${BOOTSTRAP_EMAIL:-}
+      BOOTSTRAP_NAME: ${BOOTSTRAP_NAME:-}
+      BOOTSTRAP_PASSWORD: ${BOOTSTRAP_PASSWORD:-}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+volumes:
+  knowledge-data:
+  ollama-data:

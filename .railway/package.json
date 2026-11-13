@@ -1,0 +1,15 @@
+{
+  "name": "knowledge-base-infrastructure",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "railway": "3.17.0"
+  },
+  "devDependencies": {
+    "typescript": "~5.9.3",
+    "@types/node": "^22.0.0"
+  }
+}
