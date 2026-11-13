@@ -1,0 +1,19 @@
+{
+  "projectId": "ee74d312-3e76-4908-b039-c290ce21d064",
+  "projectUrl": "https://railway.com/project/ee74d312-3e76-4908-b039-c290ce21d064",
+  "workspaceId": "c9734080-2ae8-4e30-aaf8-3e7974d9c1f6",
+  "environments": {
+    "production": {
+      "id": "fba5304f-c97a-4be3-b626-ad316249559b",
+      "app": { "id": "d5e5b771-da22-4a97-881d-90c7b81a0c2f", "name": "knowledge-base" },
+      "database": { "id": "f42dfa81-5653-430e-9e6c-4bc9f4ce34b2", "name": "Postgres" },
+      "ollama": { "id": "43ffb678-a9a4-4b37-9239-1175b694e33b", "name": "Ollama" }
+    },
+    "development": {
+      "id": "20ee9abc-8a0e-4995-8acd-c0e5db30fe67",
+      "app": { "id": "63eb7d34-37d0-4fdf-a7e3-8c68530a4633", "name": "knowledge-base-dev" },
+      "database": { "id": "23ff2302-e5e5-4b8c-beff-9754460a66d9", "name": "Postgres-m91O" },
+      "ollama": { "id": "41931410-c57e-44d1-be11-aeac028729ac", "name": "Ollama-QdV8" }
+    }
+  }
+}
