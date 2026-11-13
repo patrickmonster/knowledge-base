@@ -158,11 +158,11 @@ Authorization: Bearer <발급받은 MCP 키>
 
 개발은 `development` / `develop`, 운영은 `production` / `main`으로 분리합니다. 각 환경에 앱과 PostgreSQL을 따로 만들고, `DATABASE_URL`은 **같은 환경의 Postgres 서비스 참조**로 주입합니다. 비밀번호를 코드에 기록하지 않습니다.
 
-[개발·운영 배포 절차](.railway/README.md)와 [실제 배포 설정](.railway/railway.ts)을 사용합니다. Docker 빌드, 배포 전 마이그레이션, `/healthz`, 재시작 정책, GitHub 브랜치 연결 설정이 포함되어 있습니다. GitHub 저장소 `patrickmonster/knowledge-base`의 `develop` → 개발, `main` → 운영 자동 배포를 연결했습니다.
+[개발·운영 배포 절차](.railway/README.md)와 [배포 설정](.railway/railway.ts)을 사용합니다. Docker 빌드, 배포 전 마이그레이션, `/healthz`, 재시작 정책, GitHub 브랜치 연결 설정이 포함되어 있습니다. 실제 저장소와 서비스 이름은 Git에서 제외한 `.railway/deployment.local.json`에 지정합니다.
 
 새 배포는 마이그레이션과 상태 확인을 통과해야 합니다. 앱 롤백이 DB를 되돌리지는 않으므로 스키마 변경은 이전 앱과 호환되게 추가합니다. 개발·운영의 최초 관리자도 각각 한 번 생성합니다.
 
-[Railway 프로젝트](https://railway.com/project/ee74d312-3e76-4908-b039-c290ce21d064)의 [운영 앱](https://knowledge-base-production-451e6aae.up.railway.app)과 [개발 앱](https://knowledge-base-dev-development.up.railway.app)을 배포했습니다. DB 마이그레이션, 상태 확인, 최초 관리자 로그인과 MCP 인증을 검증했습니다. 환경별 구성과 운영 절차는 [배포 기록](.railway/README.md)을 참고합니다.
+실제 도메인·프로젝트 ID와 로그인 정보는 공개 문서에 기록하지 않습니다. 환경별 구성과 운영 절차는 [배포 안내](.railway/README.md)를 참고합니다.
 
 ## 감사·운영 범위
 

@@ -8,3 +8,5 @@ node_modules
 bin
 coverage.out
 *.log
+*.pem
+*.key

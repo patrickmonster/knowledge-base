@@ -8,3 +8,7 @@ coverage.out
 *.log
 .DS_Store
 .railway/*plan*.json
+.railway/deployment.json
+.railway/*.local.json
+*.pem
+*.key

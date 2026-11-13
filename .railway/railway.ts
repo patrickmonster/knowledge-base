@@ -1,7 +1,34 @@
 import { readFileSync } from "node:fs";
 import { defineRailway, github, image, postgres, project, service, volume } from "railway/iac";
 
-const repository = "patrickmonster/knowledge-base";
+type DeploymentConfiguration = {
+  projectName: string;
+  repository: string;
+  environments: Record<"development" | "production", {
+    app: { name: string; branch: string };
+    database: { name: string };
+    ollama: { name: string; volumeName: string };
+  }>;
+};
+
+// Keep live resource names and identifiers out of the public repository.
+// Fail before planning changes when the local deployment configuration is absent.
+const configurationPath = new URL("./deployment.local.json", import.meta.url);
+let configuration: DeploymentConfiguration;
+try {
+  configuration = JSON.parse(readFileSync(configurationPath, "utf8"));
+} catch {
+  throw new Error("Create .railway/deployment.local.json from deployment.example.json and fill in your existing resources before planning or applying.");
+}
+for (const environment of ["development", "production"] as const) {
+  const resources = configuration.environments?.[environment];
+  const required = [configuration.projectName, configuration.repository, resources?.app?.name,
+    resources?.app?.branch, resources?.database?.name, resources?.ollama?.name,
+    resources?.ollama?.volumeName];
+  if (required.some((value) => typeof value !== "string" || !value.trim())) {
+    throw new Error(`Incomplete local deployment configuration for ${environment}.`);
+  }
+}
 const ollamaScript = readFileSync(new URL("./ollama-start.sh", import.meta.url), "utf8");
 const ollamaStart = "/bin/sh -c '" + ollamaScript.replaceAll("'", "'\\''") + "'";
 
@@ -11,11 +38,11 @@ export default defineRailway((ctx) => {
   }
 
   // Evaluated separately in each environment: credentials and data are isolated.
-  const development = ctx.environment === "development";
+  const resources = configuration.environments[ctx.environment];
   // Match the independently provisioned services in the existing project.
-  const db = postgres(development ? "Postgres-m91O" : "Postgres");
-  const models = volume(development ? "ollama-models-dev" : "ollama-models", { sizeMB: 4096 });
-  const ollamaName = development ? "Ollama-QdV8" : "Ollama";
+  const db = postgres(resources.database.name);
+  const models = volume(resources.ollama.volumeName, { sizeMB: 4096 });
+  const ollamaName = resources.ollama.name;
   const ollama = service(ollamaName, {
     source: image("ollama/ollama:0.40.16"),
     volumeMounts: { "/root/.ollama": models },
@@ -34,13 +61,11 @@ export default defineRailway((ctx) => {
       restartPolicyMaxRetries: 5,
     },
   });
-  const app = service(development ? "knowledge-base-dev" : "knowledge-base", {
-    ...(repository ? {
-      source: github(repository, {
-        branch: ctx.environment === "production" ? "main" : "develop",
-        checkSuites: true,
-      }),
-    } : {}),
+  const app = service(resources.app.name, {
+    source: github(configuration.repository, {
+      branch: resources.app.branch,
+      checkSuites: true,
+    }),
     build: { builder: "DOCKERFILE", dockerfilePath: "Dockerfile" },
     deploy: {
       startCommand: "/app/knowledge-base serve",
@@ -65,5 +90,5 @@ export default defineRailway((ctx) => {
     },
   });
 
-  return project("knowledge-base", { resources: [db, models, ollama, app] });
+  return project(configuration.projectName, { resources: [db, models, ollama, app] });
 });

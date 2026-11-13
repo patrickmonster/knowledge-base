@@ -1,0 +1,14 @@
+[extend]
+useDefault = true
+
+[[rules]]
+id = "knowledge-base-api-key"
+description = "Knowledge Base MCP bearer key"
+regex = '''\bkb_[A-Za-z0-9_-]{43}\b'''
+keywords = ["kb_"]
+
+[[rules]]
+id = "knowledge-base-invitation"
+description = "Knowledge Base invitation or password reset link"
+regex = '''#invite=[A-Za-z0-9_-]{43}\b'''
+keywords = ["#invite="]
