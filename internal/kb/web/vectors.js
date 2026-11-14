@@ -120,7 +120,7 @@ async function vectorPage() {
         if(!root.isConnected||!me||version!==generation||ticket!==selectionGeneration)return;
         const dialog=el('dialog',undefined,'vector-document'),close=btn('닫기',()=>dialog.close());
         dialog.append(el('h2',doc.title),el('p',`버전 ${doc.revision}`,'small muted'),renderMarkdown(doc.content,'vector-content'),close);
-        dialog.addEventListener('close',()=>dialog.remove(),{once:true});root.append(dialog);dialog.showModal();close.focus();
+        dialog.addEventListener('close',()=>dialog.remove(),{once:true});dialog.addEventListener('click',e=>{if(e.target!==dialog)return;const r=dialog.getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)dialog.close();});root.append(dialog);dialog.showModal();close.focus();
       }));
       detail.append(el('h3','유사한 조각'),el('p','같은 프로젝트·문서 상태에서 계산한 실제 코사인 유사도입니다. 1에 가까울수록 유사하며, 지도상의 거리와는 다를 수 있습니다.','small muted'));
       if(!result.neighbors.length)detail.append(el('p','비교할 다른 조각이 없습니다.','muted small'));
@@ -144,8 +144,9 @@ async function vectorPage() {
       if(!data.points.length){body.append(el('div',data.model?'아직 표시할 벡터가 없습니다. 선택한 상태의 문서가 임베딩을 마치면 새로고침해 주세요.':'임베딩을 활성화하고 모델을 준비하면 벡터 분포를 확인할 수 있습니다.','card empty'));return;}
       const layout=el('div',undefined,'vector-layout'),mapCard=card(),mapHeader=el('div',undefined,'vector-map-header');
       summary=el('strong');mapHeader.append(el('h2','문서 조각의 분포'),summary);mapCard.append(mapHeader);
-      const filters=el('div',undefined,'vector-controls');filter=field(filters,'조각 찾기','query','search');filter.required=false;filter.placeholder='제목 또는 발췌문';
-      kind=selectField(filters,'문서 종류','kind',[['','모든 종류'],...Object.entries(vectorKinds).map(([key,v])=>[key,v[0]])]);mapCard.append(filters);
+      const filters=el('div',undefined,'vector-controls vector-filters');
+      kind=selectField(filters,'문서 종류','kind',[['','모든 종류'],...Object.entries(vectorKinds).map(([key,v])=>[key,v[0]])]);kind.parentElement.classList.add('vector-kind-filter');
+      filter=field(filters,'조각 찾기','query','search');filter.required=false;filter.placeholder='제목 또는 발췌문';mapCard.append(filters);
       filter.addEventListener('input',renderList);kind.addEventListener('change',renderList);
       if(data.eligible>data.limit)mapCard.append(el('p',`최근 수정한 문서 순으로 최대 ${data.limit}개 조각을 표시합니다. 전체 ${data.eligible}개 중 일부이며, 유사한 조각 목록은 전체 준비된 벡터에서 찾습니다.`,'vector-warning'));
       const legend=el('div',undefined,'vector-legend');for(const [key,[label,color]]of Object.entries(vectorKinds)){const item=el('span',label);item.className='vector-kind-'+key;legend.append(item);}mapCard.append(legend);
