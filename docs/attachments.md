@@ -33,6 +33,13 @@
    - **Bearer 키:** `upload_path`(상대 경로)에 `Authorization: Bearer <예약에 사용한 사용자의 MCP 키>`로 보냅니다.
 
    두 방법 모두 `Content-Type: application/octet-stream`이 필요합니다. 웹 화면은 로그인 쿠키와 CSRF 토큰을 사용하며 업로드 링크를 받지 않습니다. 버킷 자격 증명은 반환하지 않습니다.
+   - **MCP 조각 업로드 (네트워크가 `upload_url`에 닿지 않는 경우):** claude.ai 채팅 샌드박스처럼 외부 접속이 허용 목록으로 막힌 환경은 PUT 대신 `upload_attachment_chunk`로 MCP 호출만으로 올립니다. 원본을 순서대로 최대 512 KiB(디코딩 기준, `max_chunk_bytes`) 조각으로 나눠 표준 base64로 보냅니다.
+
+     ```json
+     {"project_id":"PROJECT_UUID","attachment_id":"ATTACHMENT_UUID","offset":0,"data_base64":"..."}
+     ```
+
+     응답의 `next_offset`을 다음 조각의 `offset`으로 씁니다. 마지막 조각이 도착하면 PUT과 같은 크기·실행 파일·악성코드 검사를 거쳐 버킷에 저장하고 `complete: true`와 `attachment`(`status: ready`, `sha256`)를 돌려줍니다. 같은 조각을 같은 데이터로 다시 보내는 것은 안전합니다(마지막 조각 재시도는 저장된 결과를 다시 반환). 순서가 틀리면 `INVALID_INPUT`, 이미 받은 위치에 다른 데이터를 보내면 `CONFLICT`입니다. 첫 조각을 받으면 그 파일의 `upload_url`은 무효가 됩니다. 조각은 저장이 끝나면 지우고, 1시간 안에 끝내지 못한 예약은 정리 작업이 조각과 함께 제거합니다. base64는 모델이 직접 출력해야 하므로 큰 파일에는 느리고 토큰 비용이 큽니다. PUT이 가능하면 PUT을 쓰세요.
 3. PUT 응답의 `status: ready`와 SHA-256을 확인합니다. 응답이 끊겼다면 `list_attachments`로 상태부터 확인하세요. 예약은 한 번만 사용되며 같은 ID에 다시 PUT해서 파일을 덮어쓸 수 없습니다. 실패한 경우 새 예약을 생성합니다. `prepare_attachment_upload` 자체는 멱등 호출이 아니므로 응답이 불확실할 때 목록부터 확인하세요.
 4. `list_attachments`로 조회합니다. `project_id`, 선택적 `document_id`, `limit`(최대 100), `offset`을 지원합니다.
 5. `get_attachment_download`에 `project_id`, `attachment_id`를 전달하면 5분 유효 다운로드 링크를 받습니다.

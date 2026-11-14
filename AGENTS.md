@@ -23,6 +23,7 @@
 3. `prepare_attachment_upload`에 `project_id`, `document_id`, `filename`, `size_bytes`(실제 바이트 수)를 전달한다.
 4. 응답의 `upload_url`로 원본을 PUT 한다. 1회용·1시간 유효 링크이므로 별도 인증 헤더가 필요 없다.
    `curl --fail-with-body -T <파일> -H "Content-Type: application/octet-stream" "<upload_url>"`
+   네트워크 제한으로 PUT이 실패하면(claude.ai 샌드박스 등) `upload_attachment_chunk`로 512 KiB 이하 base64 조각을 `next_offset` 순서대로 보낸다. 큰 파일은 토큰 비용이 크므로 PUT을 우선한다.
    `upload_url`이 없으면(웹 세션) 화면의 **첨부 문서**에서 올린다. 링크는 응답·로그·지식 문서·커밋에 남기지 않는다.
 5. PUT 응답의 `status: ready`와 SHA-256을 확인한다. 응답이 불확실하면 `list_attachments`로 상태부터 확인하고, 실패했으면 새로 준비한다. 같은 파일을 무조건 다시 올리지 않는다.
 6. 최종 답변에 파일명, 연결한 문서 제목, 저장 상태를 알린다. 다운로드 링크(`get_attachment_download`)는 요청받을 때만 발급하고 문서에 기록하지 않는다.
