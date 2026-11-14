@@ -18,6 +18,8 @@ import (
 type MalwareScanner interface {
 	Scan(ctx context.Context, r io.Reader) (signature string, err error)
 	Name() string
+	// Ping checks that the scanner is reachable without scanning a file.
+	Ping(ctx context.Context) error
 }
 
 // ClamAV talks to clamd over TCP with the INSTREAM command. clamd's
@@ -29,6 +31,30 @@ type ClamAV struct {
 }
 
 func (c ClamAV) Name() string { return "clamav" }
+
+// Ping sends zPING and expects PONG. clamd answers only once its signature
+// database is loaded, so this also reports the first-start download window.
+func (c ClamAV) Ping(ctx context.Context) error {
+	conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", c.Address)
+	if err != nil {
+		return fmt.Errorf("clamd connect: %w", err)
+	}
+	defer conn.Close()
+	if deadline, ok := ctx.Deadline(); ok {
+		_ = conn.SetDeadline(deadline)
+	}
+	if _, err = conn.Write([]byte("zPING\x00")); err != nil {
+		return err
+	}
+	reply, err := io.ReadAll(io.LimitReader(conn, 64))
+	if err != nil {
+		return err
+	}
+	if string(bytes.TrimRight(reply, "\x00\n")) != "PONG" {
+		return errors.New("clamd ping: unexpected reply")
+	}
+	return nil
+}
 
 func (c ClamAV) Scan(ctx context.Context, r io.Reader) (string, error) {
 	timeout := c.Timeout

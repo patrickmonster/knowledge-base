@@ -62,9 +62,23 @@ DB 트랜잭션과 버킷 PUT은 하나의 원자적 작업이 아닙니다. 중
 
 - **총량**: 저장 완료 파일과 1시간 안의 진행 중 예약(`pending`·`uploading`)을 합산합니다. `prepare_attachment_upload`에서 초과하면 `QUOTA_EXCEEDED`(HTTP 413)입니다. 같은 프로젝트의 동시 예약은 프로젝트 행 잠금으로 순서대로 처리합니다. 사용량은 `get_attachment_usage`와 웹 첨부 목록에 표시됩니다.
 - **실행 파일 차단(기본)**: `.exe .dll .scr .com .msi .msp .bat .cmd .ps1 .psm1 .vbs .vbe .jse .wsf .wsh .hta .lnk .pif .cpl .jar .apk .appx .msix .reg` 이름은 예약 단계에서, 이름을 바꾼 Windows PE·ELF·Mach-O 실행 파일은 업로드 본문 앞부분으로 거부합니다(`BLOCKED_FILE`, HTTP 422).
-- **백신 검사(ClamAV)**: 앱이 임시 파일을 clamd `INSTREAM`으로 보내고, 깨끗하다는 응답을 받은 뒤에만 버킷에 저장합니다. 감염이면 `MALWARE_DETECTED`(422), clamd 연결 실패·오류·크기 초과면 `SCAN_UNAVAILABLE`(503)로 **저장하지 않습니다(fail closed)**. clamd의 `StreamMaxLength`를 26M 이상으로 설정하세요(기본 25M은 25 MiB 파일 경계에서 실패할 수 있음).
+- **백신 검사(ClamAV)**: 앱이 임시 파일을 clamd `INSTREAM`으로 보내고, 깨끗하다는 응답을 받은 뒤에만 버킷에 저장합니다. 감염이면 `MALWARE_DETECTED`(422), clamd 연결 실패·오류·크기 초과면 `SCAN_UNAVAILABLE`(503)로 **저장하지 않습니다(fail closed)**. clamd의 `StreamMaxLength`는 26M 이상이어야 합니다(현재 clamd 기본값은 100M이며, 제공 설정은 26M으로 고정).
 - 거부된 예약은 즉시 삭제 대기로 바뀌어 총량에서 빠집니다. 감사 로그 `attachment_rejected`에 사유와 백신 시그니처 이름만 남기며 파일명·내용은 남기지 않습니다.
-- 검사는 새 업로드에만 적용됩니다. 기능 도입 전 저장된 파일은 다시 검사하지 않습니다. ClamAV 서비스 배포·시그니처 갱신(freshclam)은 운영자가 별도로 구성해야 합니다.
+- 검사는 새 업로드에만 적용됩니다. 기능 도입 전 저장된 파일은 다시 검사하지 않습니다.
+- **검사 서비스 상태**: 첨부 화면의 연결 상태 카드와 `GET /api/attachments/storage`의 `scanner`가 clamd `PING` 결과를 `connected`·`not_configured`·`unavailable`로 보여 줍니다(주소는 응답하지 않음). `unavailable`이면 업로드 버튼이 비활성화됩니다.
+
+### ClamAV 서비스 구성
+
+| 환경 | 방법 |
+| --- | --- |
+| Railway | `.railway/deployment.local.json` 환경에 `"clamav": {"name": "ClamAV", "volumeName": "clamav-signatures"}`를 추가하거나 설정 생성기에 `--clamav`를 붙입니다. `railway config plan`/`apply` 시 clamd 서비스·1 GiB 시그니처 볼륨이 생기고 앱에 `CLAMAV_ADDRESS=${{ClamAV.RAILWAY_PRIVATE_DOMAIN}}:3310`이 연결됩니다. |
+| 로컬 Compose | `.env`에 `CLAMAV_ADDRESS=clamav:3310`을 넣고 `docker compose --profile clamav up`. |
+
+- 이미지 `clamav/clamav:1.4_base`(시그니처 미포함). 첫 시작 때 시그니처를 볼륨에 내려받은 뒤 clamd가 열리므로 **수 분간 `SCAN_UNAVAILABLE`** 입니다. 이후 재시작은 볼륨의 시그니처를 사용합니다.
+- 설정은 이미지 진입점의 `CLAMD_CONF_<키>` 환경변수로 넣습니다: `TCPAddr ::`(Railway 내부망 IPv6), `StreamMaxLength 26M`, `ConcurrentDatabaseReload no`. freshclam은 하루 12회(`FRESHCLAM_CHECKS`) 갱신을 확인합니다.
+- 메모리: 엔진 약 1.2~1.5 GiB. `ConcurrentDatabaseReload no`로 시그니처 갱신 중 메모리 2배 사용을 피하는 대신, 갱신 적용 동안(수십 초) 검사가 대기하며 앱 검사 제한 60초를 넘으면 `SCAN_UNAVAILABLE`입니다. Railway 사용량 요금이 늘어납니다.
+- 이미지 진입점은 clamd가 비정상 종료돼도 컨테이너를 유지합니다. 첨부 화면 검사 상태가 계속 `unavailable`이면 ClamAV 서비스를 재배포합니다.
+- 공개 도메인·TCP 프록시를 만들지 않습니다. clamd에는 인증이 없으므로 내부망에만 둡니다.
 
 
 ## 설치

@@ -9,6 +9,8 @@ type DeploymentConfiguration = {
     app: { name: string; branch: string };
     database: { name: string };
     ollama: { name: string; volumeName: string };
+    // Optional clamd service; when present every upload is scanned (fail closed).
+    clamav?: { name: string; volumeName: string };
   }>;
 };
 
@@ -31,6 +33,9 @@ for (const environment of Object.keys(configuration.environments ?? {})) {
   }
   if (resources.attachments && (!resources.attachments.name?.trim() || (resources.attachments.region && !["sjc","iad","ams","sin"].includes(resources.attachments.region)) || (resources.attachments.forcePathStyle !== undefined && typeof resources.attachments.forcePathStyle !== "boolean"))) {
     throw new Error(`Invalid bucket configuration for ${environment}.`);
+  }
+  if (resources.clamav && [resources.clamav.name, resources.clamav.volumeName].some((value) => typeof value !== "string" || !value.trim())) {
+    throw new Error(`Invalid ClamAV configuration for ${environment}.`);
   }
 }
 const ollamaScript = readFileSync(new URL("./ollama-start.sh", import.meta.url), "utf8");
@@ -70,6 +75,31 @@ export default defineRailway((ctx) => {
       restartPolicyMaxRetries: 5,
     },
   });
+  // clamd for upload malware scanning. The _base image has no signatures: the
+  // first start downloads them into the volume before clamd listens, so uploads
+  // return SCAN_UNAVAILABLE for a few minutes. freshclam then updates in place.
+  const signatures = resources.clamav ? volume(resources.clamav.volumeName, { sizeMB: 1024 }) : undefined;
+  const clamav = resources.clamav ? service(resources.clamav.name, {
+    source: image("clamav/clamav:1.4_base"),
+    volumeMounts: { "/var/lib/clamav": signatures! },
+    env: {
+      // The entrypoint maps CLAMD_CONF_<Key> / FRESHCLAM_CONF_<Key> onto the config files.
+      // Listen on the private network (IPv6) instead of IPv4-only INADDR_ANY.
+      CLAMD_CONF_TCPAddr: "::",
+      // Uploads are at most 25 MiB; INSTREAM framing needs a little headroom.
+      CLAMD_CONF_StreamMaxLength: "26M",
+      // Reload signatures in place: about half the peak memory, scans pause briefly.
+      CLAMD_CONF_ConcurrentDatabaseReload: "no",
+      FRESHCLAM_CHECKS: "12",
+      CLAMAV_NO_MILTERD: "true",
+    },
+    deploy: {
+      numReplicas: 1,
+      sleepApplication: false,
+      restartPolicyType: "ON_FAILURE",
+      restartPolicyMaxRetries: 5,
+    },
+  }) : undefined;
   const app = service(resources.app.name, {
     source: github(configuration.repository, {
       branch: resources.app.branch,
@@ -97,9 +127,10 @@ export default defineRailway((ctx) => {
       EMBEDDING_MODEL: "bge-m3",
       EMBEDDING_NUM_THREADS: "4",
       EMBEDDING_ENABLED: "true",
+      ...(clamav ? {CLAMAV_ADDRESS: "${{" + resources.clamav!.name + ".RAILWAY_PRIVATE_DOMAIN}}:3310"} : {}),
       ...(files ? {BUCKET_ENDPOINT: bucketRef("ENDPOINT"), BUCKET_NAME: bucketRef("BUCKET"), BUCKET_REGION: bucketRef("REGION"), BUCKET_ACCESS_KEY_ID: bucketRef("ACCESS_KEY_ID"), BUCKET_SECRET_ACCESS_KEY: bucketRef("SECRET_ACCESS_KEY"), BUCKET_FORCE_PATH_STYLE: String(resources.attachments?.forcePathStyle ?? false)} : {}),
     },
   });
 
-  return project(configuration.projectName, { resources: [db, models, ollama, app, ...(files ? [files] : [])] });
+  return project(configuration.projectName, { resources: [db, models, ollama, app, ...(files ? [files] : []), ...(clamav ? [signatures!, clamav] : [])] });
 });

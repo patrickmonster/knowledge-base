@@ -41,6 +41,8 @@ services:
       BUCKET_ACCESS_KEY_ID: ${BUCKET_ACCESS_KEY_ID:-}
       BUCKET_SECRET_ACCESS_KEY: ${BUCKET_SECRET_ACCESS_KEY:-}
       BUCKET_FORCE_PATH_STYLE: ${BUCKET_FORCE_PATH_STYLE:-false}
+      # Set CLAMAV_ADDRESS=clamav:3310 and run with --profile clamav to scan uploads.
+      CLAMAV_ADDRESS: ${CLAMAV_ADDRESS:-}
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -60,6 +62,16 @@ services:
       interval: 5s
       timeout: 5s
       retries: 20
+  clamav:
+    # Optional upload malware scanning. First start downloads signatures (several minutes, ~1.5 GB RAM).
+    profiles: ["clamav"]
+    image: clamav/clamav:1.4_base
+    environment:
+      CLAMD_CONF_StreamMaxLength: 26M
+      CLAMD_CONF_ConcurrentDatabaseReload: "no"
+      FRESHCLAM_CHECKS: "12"
+    volumes:
+      - clamav-data:/var/lib/clamav
   bootstrap:
     profiles: ["setup"]
     build: .
@@ -75,3 +87,4 @@ services:
 volumes:
   knowledge-data:
   ollama-data:
+  clamav-data:

@@ -17,6 +17,10 @@
       "attachments": {
         "name": "Attachments",
         "region": "sjc"
+      },
+      "clamav": {
+        "name": "ClamAV-prod",
+        "volumeName": "clamav-signatures-prod"
       }
     }
   }
