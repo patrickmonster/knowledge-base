@@ -42,6 +42,34 @@ func QueryText(text string) string {
 	}
 	return strings.Join(terms, " | ")
 }
+// taskLinkHeading is the generated block finish_task appends to history documents.
+const taskLinkHeading = "## 작업 연결 정보"
+
+var kbCitation = regexp.MustCompile(`kb://\S+`)
+
+// IndexableText removes generated metadata before chunking: the task link block
+// of history documents (run ID, start time, starting citations) and kb:// citation
+// URLs, whose UUID fragments otherwise dominate keyword and vector matches.
+// Stored document content is unchanged; only chunks are affected.
+func IndexableText(kind, content string) string {
+	if kind == "history" {
+		lines := strings.Split(content, "\n")
+		kept := make([]string, 0, len(lines))
+		skip := false
+		for _, line := range lines {
+			trimmed := strings.TrimSpace(line)
+			if strings.HasPrefix(trimmed, "# ") || strings.HasPrefix(trimmed, "## ") {
+				skip = trimmed == taskLinkHeading
+			}
+			if !skip {
+				kept = append(kept, line)
+			}
+		}
+		content = strings.Join(kept, "\n")
+	}
+	return strings.TrimSpace(kbCitation.ReplaceAllString(content, ""))
+}
+
 func SplitChunks(text string) []string {
 	r := []rune(text)
 	result := []string{}

@@ -167,7 +167,7 @@ func NewTools(s *Store) Tools {
 	add(t, s, "get_embedding_status", "Inspect local embedding progress and failure codes for a project.", false, func(in ProjectInput) string { return in.ProjectID }, func(ctx context.Context, tx *sql.Tx, a Identity, in ProjectInput) (any, error) {
 		return s.embeddingStatus(ctx, tx, a, in.ProjectID)
 	})
-	add(t, s, "reindex_project_embeddings", "Owner only: clear current vectors and queue local embedding regeneration for this project. Use after model changes or exhausted retries.", true, func(in ProjectInput) string { return in.ProjectID }, func(ctx context.Context, tx *sql.Tx, a Identity, in ProjectInput) (any, error) {
+	add(t, s, "reindex_project_embeddings", "Owner only: rebuild chunks from current document content and queue local embedding regeneration for this project. Use after model or chunking changes, or exhausted retries.", true, func(in ProjectInput) string { return in.ProjectID }, func(ctx context.Context, tx *sql.Tx, a Identity, in ProjectInput) (any, error) {
 		p, err := projectAccess(ctx, tx, a.User.ID, in.ProjectID, true)
 		if err != nil {
 			return nil, err
@@ -175,12 +175,21 @@ func NewTools(s *Store) Tools {
 		if p.OwnerID != a.User.ID {
 			return nil, problem("FORBIDDEN", "Only the owner can reindex a project.")
 		}
-		result, err := tx.ExecContext(ctx, `UPDATE chunks SET embedding=NULL,embedding_model=NULL,embedding_status='pending',embedding_attempts=0,
-		embedding_retry_at=now(),embedding_lease=NULL,embedding_lease_until=NULL,embedding_error=NULL WHERE document_id IN (SELECT id FROM documents WHERE project_id=$1)`, in.ProjectID)
+		// Rebuilding (not only clearing vectors) applies chunking rule changes such
+		// as IndexableText to existing documents without creating revisions.
+		docs, err := many[Document](ctx, tx, `SELECT to_jsonb(d) FROM documents d WHERE project_id=$1 ORDER BY id FOR UPDATE`, in.ProjectID)
 		if err != nil {
 			return nil, err
 		}
-		count, _ := result.RowsAffected()
+		for _, d := range docs {
+			if err := rebuildChunks(ctx, tx, d); err != nil {
+				return nil, err
+			}
+		}
+		var count int64
+		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM chunks WHERE document_id IN (SELECT id FROM documents WHERE project_id=$1)`, in.ProjectID).Scan(&count); err != nil {
+			return nil, err
+		}
 		return map[string]any{"project_id": in.ProjectID, "queued_chunks": count}, nil
 	})
 	add(t, s, "get_task_context", "Collect relevant excerpts and recent decision pointers, with source document IDs and revisions, for a task.", false, func(in ContextInput) string { return in.ProjectID }, func(ctx context.Context, tx *sql.Tx, a Identity, in ContextInput) (any, error) {

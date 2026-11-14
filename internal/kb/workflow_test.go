@@ -123,6 +123,10 @@ func TestTaskWorkflowLifecycle(t *testing.T) {
 	if err = s.DB.QueryRow("SELECT count(*) FROM chunks WHERE document_id=$1 AND embedding_status='pending'", history.ID).Scan(&queued); err != nil || queued == 0 {
 		t.Fatalf("history not queued for embedding: %d %v", queued, err)
 	}
+	var noisy int
+	if err = s.DB.QueryRow(`SELECT count(*) FROM chunks WHERE document_id=$1 AND (content LIKE '%작업 연결 정보%' OR content LIKE '%kb://%' OR content LIKE '%'||$2||'%')`, history.ID, run.ID).Scan(&noisy); err != nil || noisy != 0 {
+		t.Fatalf("generated task metadata was indexed: %d %v", noisy, err)
+	}
 	again := mustCall(t, tools, admin, "finish_task", finish).(TaskCompletion)
 	if again.Documents[0].ID != history.ID {
 		t.Fatal("replayed finish duplicated history")

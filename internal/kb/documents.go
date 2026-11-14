@@ -20,12 +20,18 @@ func indexDocument(ctx context.Context, tx *sql.Tx, d Document, reason string) e
 	if _, err = tx.ExecContext(ctx, `INSERT INTO revisions(document_id,revision,snapshot,reason,actor_id) VALUES($1,$2,$3,$4,$5)`, d.ID, d.Revision, raw, reason, d.UpdatedBy); err != nil {
 		return err
 	}
-	if _, err = tx.ExecContext(ctx, "DELETE FROM chunks WHERE document_id=$1", d.ID); err != nil {
+	return rebuildChunks(ctx, tx, d)
+}
+
+// rebuildChunks replaces a document's chunks from its current content. New chunks
+// default to pending, so the embedding worker regenerates their vectors.
+func rebuildChunks(ctx context.Context, tx *sql.Tx, d Document) error {
+	if _, err := tx.ExecContext(ctx, "DELETE FROM chunks WHERE document_id=$1", d.ID); err != nil {
 		return err
 	}
 	title := strings.Join(Lexemes(d.Title+" "+strings.Join(d.Tags, " ")), " ")
-	for position, content := range SplitChunks(d.Content) {
-		_, err = tx.ExecContext(ctx, `INSERT INTO chunks(id,document_id,position,content,search_vector)
+	for position, content := range SplitChunks(IndexableText(d.Kind, d.Content)) {
+		_, err := tx.ExecContext(ctx, `INSERT INTO chunks(id,document_id,position,content,search_vector)
 		VALUES($1,$2,$3,$4,setweight(to_tsvector('simple',$5),'A')||setweight(to_tsvector('simple',$6),'B'))`, uuid.NewString(), d.ID, position, content, title, strings.Join(Lexemes(content), " "))
 		if err != nil {
 			return err
