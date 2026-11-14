@@ -9,8 +9,7 @@ async function documentsPage() {
     const batch=await tool('list_projects',{limit:50,offset});
     projects.push(...batch); if(batch.length<50)break;
   }
-  const controls=card('지식 문서');
-  controls.append(el('p','프로젝트 문서를 종류·상태·태그·기간·작성자로 찾습니다. 오래 갱신되지 않은 active 참고(reference)·기획(brief) 문서에는 "재확인 필요"가 붙습니다. 내용이 여전히 맞는지 확인한 뒤 갱신하면 표시가 사라집니다.','muted'));
+  const controls=card();
   root.append(controls);
   if (!projects.length) { controls.append(el('p','먼저 프로젝트에 참여해 주세요.','empty')); return root; }
 
@@ -30,9 +29,14 @@ async function documentsPage() {
   controls.append(form);
   const summary=el('p','','small muted');summary.setAttribute('role','status');
   controls.append(summary);
-  const list=el('div',undefined,'document-list'), more=btn('더 보기',()=>load(false));
+  const list=el('tbody'), more=btn('더 보기',()=>load(false).catch(e=>notify(e.message,true)));
   more.hidden=true;
-  root.append(list,more);
+  const tableWrap=el('div',undefined,'table-wrap document-table'), tbl=el('table'), headRow=el('tr'), thead=el('thead');
+  for (const h of ['제목','종류','상태','버전','작성자','수정일']) headRow.append(el('th',h));
+  thead.append(headRow);tbl.append(thead,list);tableWrap.append(tbl);
+  const listCard=card();listCard.append(tableWrap,more);
+  root.append(listCard);
+  function message(text,cls) { const tr=el('tr'), td=el('td',text,cls); td.colSpan=6; tr.append(td); return tr; }
 
   let generation=0, offset=0, names={}, shown=0, staleShown=0;
   async function loadMembers() {
@@ -62,37 +66,54 @@ async function documentsPage() {
   async function load(reset) {
     if (after.value&&before.value&&after.value>before.value) throw Error('수정일 시작이 끝보다 늦습니다.');
     const ticket=reset?++generation:generation;
-    if (reset) { offset=0;shown=0;staleShown=0;list.replaceChildren(el('p','불러오는 중…','muted')); }
+    if (reset) { offset=0;shown=0;staleShown=0;list.replaceChildren(message('불러오는 중…','muted')); }
     const batch=await tool('list_documents',filters());
     if (ticket!==generation) return;
     if (reset) list.replaceChildren();
     offset+=batch.length;shown+=batch.length;
     staleShown+=batch.filter(d=>d.needs_recheck).length;
     list.append(...batch.map(row));
-    if (!shown) list.replaceChildren(el('p','조건에 맞는 문서가 없습니다.','empty'));
+    if (!shown) list.replaceChildren(message('조건에 맞는 문서가 없습니다.','empty'));
     more.hidden=batch.length<50;
     summary.textContent=`${shown}건${batch.length<50?'':' 이상'} · 재확인 필요 ${staleShown}건 (기준 ${Number(staleDays.value)||90}일)`;
   }
   function person(id) { return names[id]||id?.slice(0,8)||'—'; }
-  function row(d) {
-    const item=el('details',undefined,'document-row'+(d.needs_recheck?' is-stale':''));
-    const head=el('summary'), title=el('div',undefined,'document-title');
-    title.append(el('strong',d.title));
+  function byline(d) { return d.created_by===d.updated_by?person(d.created_by):`${person(d.created_by)} → ${person(d.updated_by)}`; }
+  function titleCell(d) {
+    const cell=el('div',undefined,'document-title');
+    cell.append(el('strong',d.title));
     if (d.needs_recheck) {
       const badge=el('span','재확인 필요','pill stale');
       badge.title=`${d.days_since_update}일 동안 갱신되지 않았습니다 (기준 ${d.stale_after_days}일).`;
-      title.append(badge);
+      cell.append(badge);
     }
-    if (d.status!=='active') title.append(el('span',d.status,'pill'));
-    head.append(title);
-    const by=d.created_by===d.updated_by?person(d.created_by):`${person(d.created_by)} → ${person(d.updated_by)}`;
-    head.append(el('p',`${documentKinds[d.kind]||d.kind} · 버전 ${d.revision} · ${by} · 수정 ${new Date(d.updated_at).toLocaleString()} (${d.days_since_update}일 전)`,'small muted'));
-    if (d.tags?.length) head.append(el('p',d.tags.map(t=>'#'+t).join(' '),'small document-tags'));
-    const content=el('div');
-    item.append(head,content);
-    item.addEventListener('toggle',async()=>{
-      if (!item.open||content.childElementCount) return;
-      content.append(el('p','불러오는 중…','muted'));
+    return cell;
+  }
+  function row(d) {
+    const tr=el('tr',undefined,'document-row'+(d.needs_recheck?' is-stale':''));
+    tr.tabIndex=0;tr.setAttribute('role','button');tr.setAttribute('aria-label',`${d.title} 열기`);
+    const first=el('td');first.append(titleCell(d));
+    if (d.tags?.length) first.append(el('p',d.tags.map(t=>'#'+t).join(' '),'small document-tags'));
+    const statusCell=el('td');statusCell.append(el('span',d.status,'pill'));
+    const updated=el('td');updated.append(el('span',new Date(d.updated_at).toLocaleString()),el('span',`${d.days_since_update}일 전`,'small muted document-age'));
+    tr.append(first,el('td',documentKinds[d.kind]||d.kind),statusCell,el('td',String(d.revision)),el('td',byline(d)),updated);
+    tr.addEventListener('click',()=>openDocument(d));
+    tr.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();openDocument(d);}});
+    return tr;
+  }
+  function openDocument(d) {
+    const dialog=el('dialog',undefined,'document-dialog'), close=btn('닫기',()=>dialog.close(),'secondary');
+    const head=el('div',undefined,'document-dialog-head');
+    head.append(titleCell(d),close);
+    const meta=el('p',`${documentKinds[d.kind]||d.kind} · ${d.status} · 버전 ${d.revision} · ${byline(d)} · 수정 ${new Date(d.updated_at).toLocaleString()} (${d.days_since_update}일 전)`,'small muted');
+    const content=el('div');content.append(el('p','불러오는 중…','muted'));
+    dialog.append(head,meta);
+    if (d.tags?.length) dialog.append(el('p',d.tags.map(t=>'#'+t).join(' '),'small document-tags'));
+    dialog.append(content);
+    dialog.addEventListener('close',()=>dialog.remove(),{once:true});
+    dialog.addEventListener('click',e=>{if(e.target!==dialog)return;const r=dialog.getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)dialog.close();});
+    root.append(dialog);dialog.showModal();close.focus();
+    (async()=>{
       try {
         const doc=await tool('get_document',{project_id:d.project_id,document_id:d.id});
         const role=projects.find(p=>p.id===d.project_id)?.role, canEdit=['owner','admin','editor'].includes(role);
@@ -105,8 +126,7 @@ async function documentsPage() {
         }
         content.replaceChildren(...parts);
       } catch(e) { content.replaceChildren(el('p',e.message,'muted')); }
-    });
-    return item;
+    })();
   }
   form.addEventListener('submit',e=>{e.preventDefault();search.disabled=true;load(true).catch(err=>notify(err.message,true)).finally(()=>search.disabled=false);});
   project.addEventListener('change',async()=>{author.value='';await loadMembers();load(true).catch(e=>notify(e.message,true));});
