@@ -124,6 +124,9 @@ func (s *Store) RunRetention(ctx context.Context) {
 			if _, err := s.ApplyRetention(c); err != nil {
 				slog.Error("retention purge failed")
 			}
+			if _, err := s.PurgeSearchMisses(c); err != nil {
+				slog.Error("search miss purge failed")
+			}
 			cancel()
 		}
 	}

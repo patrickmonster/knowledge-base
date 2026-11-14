@@ -28,7 +28,7 @@ async function usagePage(){
     const [stats,quality]=await Promise.all([tool('get_usage_stats',{project_id:current.id,days}),tool('get_retrieval_metrics',{project_id:current.id,days}).catch(()=>null)]);
     if(ticket!==generation)return;
     summary.textContent=`${current.name} · ${stats.from} ~ ${stats.to} (${stats.timezone}) · 통계를 조회한 이 요청은 집계에서 빠집니다.`;
-    body.replaceChildren(usageTiles(stats),usageTrends(stats),usageQuality(quality),usageTables(stats));
+    body.replaceChildren(usageTiles(stats),usageTrends(stats),usageKindGrowth(stats),usageQuality(quality),usageSearchMisses(stats),usageTables(stats));
   }
   await refresh();
   return root;
@@ -40,7 +40,7 @@ function usageTiles(s){
   grid.append(
     tile('도구 호출',usageNumber(t.calls),t.denied||t.errors?`거부 ${usageNumber(t.denied)} · 오류 ${usageNumber(t.errors)}`:'거부·오류 없음'),
     tile('활성 사용자',usageNumber(t.active_users),`참여자 ${usageNumber(inv.members)}명 중`),
-    tile('검색',usageNumber(t.searches),`문서 열람 ${usageNumber(t.document_reads)}회`),
+    tile('검색',usageNumber(t.searches),`결과 0건 ${usageNumber(t.search_misses)}회 · 문서 열람 ${usageNumber(t.document_reads)}회`),
     tile('문서 작성·수정',usageNumber(t.document_writes),`새 문서 ${usageNumber(t.documents_new)}건`),
     tile('작업 시작',usageNumber(t.tasks_started),`완료 ${usageNumber(t.tasks_completed)} · 중단 ${usageNumber(t.tasks_abandoned)} · 열림 ${usageNumber(inv.open_tasks)}`),
     tile('보유 지식',usageNumber(inv.documents),`첨부 ${usageNumber(inv.attachments)}개 · ${usageBytes(inv.attachment_bytes)}`)
@@ -92,6 +92,34 @@ function usageBarChart(daily,key,label){
   const maxLabel=mk('text',{x:W-right,y:top-6,'text-anchor':'end',class:'usage-tick'});maxLabel.textContent='최대 '+usageNumber(max);svg.append(maxLabel);
   const plot=el('div',undefined,'usage-plot');plot.append(svg,tip);wrap.append(plot);
   return wrap;
+}
+
+// 종류별 증가 추이: 종류마다 기간 시작·추가·현재 수와 누적 추이 스파크라인(종류별 단일 계열).
+function usageKindGrowth(s){
+  const c=card('문서 종류별 증가 추이');
+  if(!s.kind_growth?.length){c.append(el('p','아직 문서가 없습니다.','muted'));return c;}
+  c.append(table(['종류','기간 시작','추가','현재','누적 추이'],s.kind_growth.map(g=>[usageKinds[g.kind]||g.kind,usageNumber(g.start),g.added?'+'+usageNumber(g.added):'0',usageNumber(g.total),usageSparkline(g.cumulative,s.daily,usageKinds[g.kind]||g.kind)])));
+  c.append(el('p','문서의 현재 종류 기준이며 보관(archived) 문서도 포함합니다.','small muted'));
+  return c;
+}
+
+function usageSparkline(values,daily,label){
+  const NS='http://www.w3.org/2000/svg',W=160,H=32,pad=3,min=Math.min(...values),max=Math.max(...values),span=Math.max(1,max-min);
+  const svg=document.createElementNS(NS,'svg');svg.setAttribute('viewBox',`0 0 ${W} ${H}`);svg.setAttribute('class','usage-spark');svg.setAttribute('role','img');
+  svg.setAttribute('aria-label',`${label} 누적 ${values[0]}건에서 ${values.at(-1)}건`);
+  const x=i=>pad+(values.length<2?0:i*(W-2*pad)/(values.length-1)),y=v=>H-pad-(v-min)/span*(H-2*pad);
+  const path=document.createElementNS(NS,'path');path.setAttribute('d',values.map((v,i)=>(i?'L':'M')+x(i).toFixed(1)+','+y(v).toFixed(1)).join(''));path.setAttribute('class','usage-spark-line');svg.append(path);
+  const end=document.createElementNS(NS,'circle');end.setAttribute('cx',x(values.length-1));end.setAttribute('cy',y(values.at(-1)));end.setAttribute('r',2.5);end.setAttribute('class','usage-spark-dot');svg.append(end);
+  const title=document.createElementNS(NS,'title');title.textContent=`${daily[0]?.date} ${usageNumber(values[0])}건 → ${daily.at(-1)?.date} ${usageNumber(values.at(-1))}건`;svg.append(title);
+  return svg;
+}
+
+// 결과 0건 검색어: 쓰지 않은 지식이나 용어집 동의어 후보.
+function usageSearchMisses(s){
+  const c=card('결과 0건 검색어');
+  c.append(el('p','search_knowledge에서 결과가 없던 검색어입니다. 공백·대소문자를 정리해 묶고, 검색한 사용자는 저장하지 않으며 최대 365일 보관합니다. 자주 나오면 문서를 쓰거나 용어집 동의어를 추가하세요.','small muted'));
+  c.append(table(['검색어','횟수','마지막 검색'],(s.search_misses||[]).map(m=>[m.query,usageNumber(m.count),new Date(m.last_at).toLocaleString()])));
+  return c;
 }
 
 function usageQuality(q){

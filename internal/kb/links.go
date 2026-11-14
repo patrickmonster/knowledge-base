@@ -262,6 +262,9 @@ func (s *Store) searchCurrentKnowledge(ctx context.Context, tx *sql.Tx, a Identi
 	}
 	out.Hits, err = demoteSuperseded(ctx, tx, out.Hits)
 	markRecheck(out.Hits, time.Now())
+	if err == nil && len(out.Hits) == 0 {
+		err = recordSearchMiss(ctx, tx, in.ProjectID, in.Query, out.Retrieval)
+	}
 	return out, err
 }
 
