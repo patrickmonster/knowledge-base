@@ -184,12 +184,15 @@ func validateDocument(in *DocumentInput) error {
 	}
 	return nil
 }
+// maxPageLimit is the largest limit list and search tools accept.
+const maxPageLimit = 100
+
 func pagination(limit, offset int) (int, error) {
 	if limit == 0 {
 		limit = 20
 	}
-	if limit < 1 || limit > 50 || offset < 0 || offset > 100000 {
-		return 0, problem("INVALID_INPUT", "Invalid pagination: limit 1–50; offset 0–100000.")
+	if limit < 1 || limit > maxPageLimit || offset < 0 || offset > 100000 {
+		return 0, problem("INVALID_INPUT", fmt.Sprintf("Invalid pagination: limit 1–%d; offset 0–100000.", maxPageLimit))
 	}
 	return limit, nil
 }

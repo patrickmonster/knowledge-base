@@ -34,7 +34,7 @@
 
    두 방법 모두 `Content-Type: application/octet-stream`이 필요합니다. 웹 화면은 로그인 쿠키와 CSRF 토큰을 사용하며 업로드 링크를 받지 않습니다. 버킷 자격 증명은 반환하지 않습니다.
 3. PUT 응답의 `status: ready`와 SHA-256을 확인합니다. 응답이 끊겼다면 `list_attachments`로 상태부터 확인하세요. 예약은 한 번만 사용되며 같은 ID에 다시 PUT해서 파일을 덮어쓸 수 없습니다. 실패한 경우 새 예약을 생성합니다. `prepare_attachment_upload` 자체는 멱등 호출이 아니므로 응답이 불확실할 때 목록부터 확인하세요.
-4. `list_attachments`로 조회합니다. `project_id`, 선택적 `document_id`, `limit`(최대 50), `offset`을 지원합니다.
+4. `list_attachments`로 조회합니다. `project_id`, 선택적 `document_id`, `limit`(최대 100), `offset`을 지원합니다.
 5. `get_attachment_download`에 `project_id`, `attachment_id`를 전달하면 5분 유효 다운로드 링크를 받습니다.
 6. `delete_attachment`에 같은 식별자를 전달하면 접근을 차단하고 버킷 삭제 대기 상태로 바꿉니다. 진행 중인 업로드는 삭제할 수 없습니다.
 
