@@ -130,6 +130,8 @@ func TestNotifierPost(t *testing.T) {
 
 func TestNotifierEmail(t *testing.T) {
 	job := outboxJob{ID: "mail-1", Event: eventIssueAnswered, Kind: "email", RecipientEmail: "owner@example.com", Payload: testPayload()}
+	// The message text comes from the stored payload's event, not the job column.
+	job.Payload.Event = eventIssueAnswered
 	err := (&Notifier{}).deliver(context.Background(), job)
 	var de *deliveryError
 	if !errors.As(err, &de) || de.Code != "SMTP_NOT_CONFIGURED" || !de.Permanent {
