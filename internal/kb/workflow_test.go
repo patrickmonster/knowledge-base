@@ -61,6 +61,9 @@ func TestTemplateValidationAndMCPWorkflowSchemas(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer cs.Close()
+	if init := cs.InitializeResult(); init == nil || !strings.Contains(init.Instructions, "list_rules") || !strings.Contains(init.Instructions, "start_task") {
+		t.Fatalf("server instructions must point clients at start_task and list_rules: %+v", init)
+	}
 	list, err := cs.ListTools(ctx, nil)
 	if err != nil {
 		t.Fatal(err)

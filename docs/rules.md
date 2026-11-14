@@ -25,5 +25,14 @@ AI가 프로젝트에서 커밋하거나 작업할 때 따를 규칙을 저장�
 - `list_rules`: 현재 규칙 다시 읽기. `save_rule`, `delete_rule`: 개별 규칙 관리(소유자 규칙은 웹 화면에서).
 - 규칙은 권한 있는 참여자가 쓴 지시이므로 검색 결과(sources)와 달리 따른다. 규칙이 불명확하거나 작업을 막으면 사용자에게 묻는다.
 
+### 규칙 전달 경로
+규칙은 서버가 밀어 넣지 않고 AI가 `start_task`·`get_task_context`·`list_rules`를 호출할 때만 전달된다. 이미 진행 중인 세션은 그 뒤에 추가된 규칙을 모르므로 아래 세 곳에서 다시 읽도록 안내한다.
+
+- **MCP 서버 instructions**(`internal/kb/instructions.go`): 연결 시(initialize) 모든 클라이언트에 "변경 작업마다, 같은 세션의 후속 요청이라도 `start_task`를 새로 호출하거나 `list_rules`를 읽으라"고 알린다. AGENTS.md가 없는 저장소에도 적용된다.
+- **AGENTS.md / `get_agents_template`**: 후속 요청도 새 작업으로 보고 시작 순서를 처음부터 따르며, `start_task`를 하지 않았으면 브랜치·파일 수정 전에 `list_rules`를 읽는다. Claude Code용으로 `CLAUDE.md`에서 `@AGENTS.md`를 불러온다.
+- **Claude Code 훅**(`.claude/settings.json` UserPromptSubmit): 매 메시지마다 `[rules-first]` 리마인더를 주입한다.
+
+모두 안내일 뿐 호출을 강제하지는 않는다.
+
 ## 마이그레이션
 `migrations/013_project_rules.sql`: `project_members.role`에 `admin` 허용, `project_rules` 테이블 추가.
