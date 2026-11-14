@@ -177,7 +177,7 @@ func listWorkAreas(ctx context.Context, tx *sql.Tx, a Identity, in ProjectInput)
 
 const workAreaSelect = `SELECT to_jsonb(w)||jsonb_build_object('owner_name',u.name,
 	'open_issues',(SELECT count(*) FROM issues i WHERE i.area_id=w.id AND i.status IN ('open','answered')),
-	'owner_active',EXISTS(SELECT 1 FROM project_members m WHERE m.project_id=w.project_id AND m.user_id=w.owner_id AND m.role IN ('owner','editor') AND NOT u.disabled))
+	'owner_active',EXISTS(SELECT 1 FROM project_members m WHERE m.project_id=w.project_id AND m.user_id=w.owner_id AND m.role IN ('owner','admin','editor') AND NOT u.disabled))
 	FROM work_areas w JOIN users u ON u.id=w.owner_id`
 
 func setWorkArea(ctx context.Context, tx *sql.Tx, a Identity, in WorkAreaInput) (any, error) {
@@ -280,12 +280,12 @@ func projectEditor(ctx context.Context, q Querier, projectID, userID, field stri
 	}
 	var ok bool
 	err := q.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM project_members m JOIN users u ON u.id=m.user_id
-		WHERE m.project_id=$1 AND m.user_id=$2 AND m.role IN ('owner','editor') AND NOT u.disabled)`, projectID, userID).Scan(&ok)
+		WHERE m.project_id=$1 AND m.user_id=$2 AND m.role IN ('owner','admin','editor') AND NOT u.disabled)`, projectID, userID).Scan(&ok)
 	if err != nil {
 		return err
 	}
 	if !ok {
-		return problem("INVALID_INPUT", field+" must be an active project owner or editor.")
+		return problem("INVALID_INPUT", field+" must be an active project owner, admin, or editor.")
 	}
 	return nil
 }

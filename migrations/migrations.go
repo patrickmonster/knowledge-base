@@ -37,3 +37,6 @@ var TeamRollout string
 
 //go:embed 012_knowledge_quality.sql
 var KnowledgeQuality string
+
+//go:embed 013_project_rules.sql
+var ProjectRules string

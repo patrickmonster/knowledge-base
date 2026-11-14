@@ -121,6 +121,8 @@ type TaskContext struct {
 	Issues          *TaskIssues      `json:"issues,omitempty"`
 	// Rechecks lists documents the caller owns for re-checking that are due.
 	Rechecks        *TaskRechecks    `json:"rechecks,omitempty"`
+	// Rules are the project (owner/admin) and personal commit and work rules to follow.
+	Rules *RuleSet `json:"rules,omitempty"`
 }
 
 type SearchResult struct {

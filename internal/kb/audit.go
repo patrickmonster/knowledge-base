@@ -32,7 +32,7 @@ func auditInput(ctx context.Context, input any) context.Context {
 	var fields map[string]any
 	_ = json.Unmarshal(raw, &fields)
 	safe := map[string]any{}
-	for _, key := range []string{"attachment_id", "document_id", "task_id", "user_id", "id", "reset_user_id", "role", "global_role", "disabled", "access", "expected_revision", "decision", "source_id", "target_id", "relation", "issue_id", "area_id", "status", "move_to_area_id", "channel_id", "kind", "enabled", "remove", "format", "previous_owner_role"} {
+	for _, key := range []string{"attachment_id", "document_id", "task_id", "user_id", "id", "reset_user_id", "role", "global_role", "disabled", "access", "expected_revision", "decision", "source_id", "target_id", "relation", "issue_id", "area_id", "status", "move_to_area_id", "channel_id", "kind", "enabled", "remove", "format", "previous_owner_role", "rule_id", "scope", "category"} {
 		if value, ok := fields[key]; ok {
 			if text, ok := value.(string); ok && len(text) > 100 {
 				continue
@@ -70,7 +70,7 @@ func (s *Store) Perform(ctx context.Context, identity Identity, action, projectI
 	e := Event{ActorID: identity.User.ID, Action: action, ProjectID: projectID, RequestID: uuid.NewString(), Outcome: "success"}
 	if details, ok := ctx.Value(auditInputKey{}).(map[string]any); ok {
 		e.Details = details
-		for _, key := range []string{"issue_id", "area_id", "attachment_id", "document_id", "task_id", "user_id", "id", "reset_user_id"} {
+		for _, key := range []string{"rule_id", "issue_id", "area_id", "attachment_id", "document_id", "task_id", "user_id", "id", "reset_user_id"} {
 			if id, ok := details[key].(string); ok && id != "" {
 				e.TargetID = id
 				break
@@ -174,7 +174,7 @@ func projectAccess(ctx context.Context, q Querier, userID, projectID string, wri
 		return p, notFound(err)
 	}
 	if write && p.Role == "viewer" {
-		return p, problem("FORBIDDEN", "Editor or owner access is required.")
+		return p, problem("FORBIDDEN", "Editor, admin, or owner access is required.")
 	}
 	return p, nil
 }

@@ -95,7 +95,7 @@ async function documentsPage() {
       content.append(el('p','불러오는 중…','muted'));
       try {
         const doc=await tool('get_document',{project_id:d.project_id,document_id:d.id});
-        const role=projects.find(p=>p.id===d.project_id)?.role, canEdit=role==='owner'||role==='editor';
+        const role=projects.find(p=>p.id===d.project_id)?.role, canEdit=['owner','admin','editor'].includes(role);
         const parts=[el('code',d.id),renderMarkdown(doc.content,'vector-content'),linksPanel(d,canEdit)];
         if (d.revision>1) {
           const versions=el('details',undefined,'version-details');

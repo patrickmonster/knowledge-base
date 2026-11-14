@@ -25,7 +25,7 @@ async function issuesPage() {
   root.append(list,createCard,areaCard,notifyCard);
   let generation=0, members=[], areas=[];
   const current=()=>projects.find(p=>p.id===project.value);
-  const canWrite=()=>['owner','editor'].includes(current().role);
+  const canWrite=()=>['owner','admin','editor'].includes(current().role);
 
   async function loadProject() {
     const ticket=++generation, p=current();

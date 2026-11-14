@@ -32,6 +32,9 @@ func (s *Store) taskContext(ctx context.Context, tx *sql.Tx, a Identity, in Cont
 	if out.Rechecks, err = taskRechecks(ctx, tx, a.User.ID, in.ProjectID); err != nil {
 		return TaskContext{}, err
 	}
+	if out.Rules, err = taskRules(ctx, tx, a.User.ID, p); err != nil {
+		return TaskContext{}, err
+	}
 	remaining := in.ExcerptBudget
 	for _, hit := range results.Hits {
 		if remaining == 0 {
