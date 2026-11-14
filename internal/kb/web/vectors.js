@@ -4,17 +4,17 @@ const vectorKinds = {brief:['기획','#3d7963'],decision:['결정','#667bc0'],hi
 
 async function vectorPage() {
   const root=el('div',undefined,'vector-page'),toolbar=card(),controls=el('div',undefined,'vector-controls');
-  const projects=await tool('list_projects',{limit:50});
+  const projects=[];
+  for (let offset=0; offset<=100000; offset+=50) {
+    const batch=await tool('list_projects',{limit:50,offset});
+    projects.push(...batch); if(batch.length<50)break;
+  }
   root.append(el('p','문서 조각이 어떻게 연결되어 있는지 살펴보세요. 참여한 프로젝트의 자료만 표시합니다.','muted'));
   if(!projects.length){root.append(card('먼저 프로젝트에 참여하세요'));return root;}
-  const project=selectField(controls,'프로젝트','project',projects.map(p=>[p.id,p.name]));
+  const project=projectSelect(projects);
   const status=selectField(controls,'문서 상태','status',[['active','활성 문서'],['draft','초안'],['archived','보관 문서']]);
   const refresh=btn('새로고침',()=>load(),'secondary');
-  const moreProjects=btn('프로젝트 더 불러오기',async()=>{
-    const next=await tool('list_projects',{limit:50,offset:projects.length});projects.push(...next);
-    for(const p of next){const option=el('option',p.name);option.value=p.id;project.append(option);}moreProjects.hidden=next.length<50;
-  });moreProjects.hidden=projects.length<50;
-  controls.append(refresh,moreProjects);toolbar.append(controls);root.append(toolbar);
+  controls.append(refresh);toolbar.append(controls);root.append(toolbar);
   const metrics=el('div',undefined,'vector-metrics'),body=el('div');root.append(metrics,body);
   let generation=0,selectionGeneration=0,data,selectedID='',visible=[],mapScale=1,view={x:0,y:0,w:1000,h:600};
   let svg,pointsLayer,detail,list,summary,filter,kind,selectionNote, circles=new Map(),neighborIDs=new Set();

@@ -46,7 +46,7 @@ async function attachmentsPage() {
   controls.append(el('p','파일 원본을 비공개 Railway 버킷에 보관합니다. PDF·Word 본문은 자동 검색되지 않습니다. 검색할 요약은 지식 문서에 작성해 주세요.','muted'));
   controls.append(el('p','목록에는 이 서비스에서 선택한 프로젝트에 등록한 파일만 표시됩니다. 버킷에 직접 올린 파일은 자동으로 표시되지 않습니다.','small muted'));
   if (!projects.length) { controls.append(el('p','먼저 프로젝트에 참여해 주세요.','empty')); return root; }
-  const project = selectField(controls,'프로젝트','project',projects.map(p=>[p.id,p.name]));
+  const project = projectSelect(projects);
   const upload = card('파일 추가'), form = el('form');
   const documentID = field(uploadFields,'연결할 지식 문서 ID (선택)','document_id');
   documentID.required=false;

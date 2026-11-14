@@ -15,7 +15,7 @@ async function documentsPage() {
   if (!projects.length) { controls.append(el('p','먼저 프로젝트에 참여해 주세요.','empty')); return root; }
 
   const form=el('form',undefined,'vector-controls document-filters');
-  const project=selectField(form,'프로젝트','project',projects.map(p=>[p.id,p.name]));
+  const project=projectSelect(projects);
   const kind=selectField(form,'종류','kind',[['','전체'],...Object.entries(documentKinds)]);
   const status=selectField(form,'상태','status',[['','전체'],...Object.entries(documentStatuses)]);
   const author=selectField(form,'작성자 (작성·최종 수정)','author',[['','전체']]);

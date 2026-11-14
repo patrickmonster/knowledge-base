@@ -15,7 +15,7 @@ async function issuesPage() {
   root.append(controls);
   if (!projects.length) { controls.append(el('p','먼저 프로젝트에 참여해 주세요.','empty')); return root; }
   const filters=el('div',undefined,'vector-controls');
-  const project=selectField(filters,'프로젝트','project',projects.map(p=>[p.id,p.name]));
+  const project=projectSelect(projects);
   const scope=selectField(filters,'보기','scope',[['all','전체'],['assigned','내게 배정'],['asked','내가 남긴']]);
   const status=selectField(filters,'상태','status',[['active','진행 중 (대기·답변됨)'],['open','답변 대기'],['answered','답변됨'],['resolved','해결'],['closed','닫힘'],['all','모든 상태']]);
   const query=selectQuery(filters);

@@ -13,7 +13,7 @@ async function reviewsPage() {
   controls.append(el('p','draft 문서는 기본 검색과 작업 시작 조회에 포함되지 않습니다. 승인하면 바로 검색 대상이 됩니다. 검토는 로그인한 사람만 할 수 있으며 MCP 키로는 할 수 없습니다.','small muted'));
   root.append(controls);
   if (!projects.length) { controls.append(el('p','먼저 프로젝트에 참여해 주세요.','empty')); return root; }
-  const project=selectField(controls,'프로젝트','project',projects.map(p=>[p.id,p.name]));
+  const project=projectSelect(projects);
   const summary=el('p','','small muted');summary.setAttribute('role','status');
   const list=el('div');
   controls.append(summary);root.append(list);
