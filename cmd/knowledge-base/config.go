@@ -10,6 +10,39 @@ import (
 	"knowledge-base/internal/kb"
 )
 
+// notifierConfig enables issue notification delivery unless
+// NOTIFICATIONS_ENABLED=false. Email channels additionally need SMTP_HOST and
+// SMTP_FROM; SMTP_USERNAME/SMTP_PASSWORD are optional (PLAIN auth over TLS).
+func notifierConfig() (*kb.Notifier, error) {
+	enabled := os.Getenv("NOTIFICATIONS_ENABLED")
+	if enabled != "" && enabled != "true" && enabled != "false" {
+		return nil, errors.New("NOTIFICATIONS_ENABLED must be true or false")
+	}
+	if enabled == "false" {
+		return nil, nil
+	}
+	host := os.Getenv("SMTP_HOST")
+	if host == "" {
+		return kb.NewNotifier(nil), nil
+	}
+	port := 587
+	if raw := os.Getenv("SMTP_PORT"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 1 || n > 65535 {
+			return nil, errors.New("SMTP_PORT must be between 1 and 65535")
+		}
+		port = n
+	}
+	from := os.Getenv("SMTP_FROM")
+	if from == "" || strings.ContainsAny(from, "\r\n") {
+		return nil, errors.New("SMTP_FROM is required when SMTP_HOST is set")
+	}
+	if (os.Getenv("SMTP_USERNAME") == "") != (os.Getenv("SMTP_PASSWORD") == "") {
+		return nil, errors.New("set SMTP_USERNAME and SMTP_PASSWORD together")
+	}
+	return kb.NewNotifier(&kb.SMTPConfig{Host: host, Port: port, Username: os.Getenv("SMTP_USERNAME"), Password: os.Getenv("SMTP_PASSWORD"), From: from}), nil
+}
+
 func serveConfig() (string, kb.Config, error) {
 	port := os.Getenv("PORT")
 	if port == "" {

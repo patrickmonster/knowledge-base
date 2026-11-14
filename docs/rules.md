@@ -26,4 +26,4 @@ AI가 프로젝트에서 커밋하거나 작업할 때 따를 규칙을 저장�
 - 규칙은 권한 있는 참여자가 쓴 지시이므로 검색 결과(sources)와 달리 따른다. 규칙이 불명확하거나 작업을 막으면 사용자에게 묻는다.
 
 ## 마이그레이션
-`migrations/011_project_rules.sql`: `project_members.role`에 `admin` 허용, `project_rules` 테이블 추가.
+`migrations/012_project_rules.sql`: `project_members.role`에 `admin` 허용, `project_rules` 테이블 추가.

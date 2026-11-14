@@ -32,5 +32,8 @@ var DocumentLinks string
 //go:embed 010_issues.sql
 var Issues string
 
-//go:embed 011_project_rules.sql
+//go:embed 011_team_rollout.sql
+var TeamRollout string
+
+//go:embed 012_project_rules.sql
 var ProjectRules string
