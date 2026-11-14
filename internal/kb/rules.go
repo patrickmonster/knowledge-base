@@ -15,6 +15,9 @@ import (
 //     freely added or changed (also through a writable MCP key).
 //
 // Project rules win when a personal rule conflicts with them.
+//
+// A rule can be switched off (enabled=false, 미사용) without deleting it. Disabled
+// rules are listed only on request (the web console) and never reach AI task context.
 const (
 	maxProjectRules  = 50
 	maxPersonalRules = 50
@@ -29,6 +32,7 @@ type Rule struct {
 	Category  string `json:"category"`
 	Title     string `json:"title"`
 	Body      string `json:"body"`
+	Enabled   bool   `json:"enabled"`
 	Revision  int    `json:"revision"`
 	CreatedBy string `json:"created_by"`
 	UpdatedBy string `json:"updated_by"`
@@ -65,6 +69,17 @@ type RuleRef struct {
 	RuleID    string `json:"rule_id"`
 }
 
+type ListRulesInput struct {
+	ProjectID       string `json:"project_id"`
+	IncludeDisabled bool   `json:"include_disabled,omitempty" jsonschema:"Also return rules switched off (enabled=false). Disabled rules must not be followed; omit when reading rules to work by."`
+}
+
+type SetRuleEnabledInput struct {
+	ProjectID string `json:"project_id"`
+	RuleID    string `json:"rule_id"`
+	Enabled   bool   `json:"enabled" jsonschema:"true to use the rule (사용), false to switch it off (미사용)"`
+}
+
 // canManageProjectRules: the owner and project admins.
 func canManageProjectRules(role string) bool { return role == "owner" || role == "admin" }
 
@@ -91,10 +106,11 @@ func projectRuleWriter(a Identity, role string) error {
 	return nil
 }
 
-func listRules(ctx context.Context, q Querier, userID string, p Project) (RuleSet, error) {
+// listRules returns the caller's rules; disabled ones only when includeDisabled.
+func listRules(ctx context.Context, q Querier, userID string, p Project, includeDisabled bool) (RuleSet, error) {
 	rules, err := many[Rule](ctx, q, `SELECT to_jsonb(r) FROM project_rules r
-		WHERE r.project_id=$1 AND (r.scope='project' OR r.user_id=$2)
-		ORDER BY r.scope, CASE r.category WHEN 'commit' THEN 0 WHEN 'work' THEN 1 ELSE 2 END, r.created_at, r.id`, p.ID, userID)
+		WHERE r.project_id=$1 AND (r.scope='project' OR r.user_id=$2) AND (r.enabled OR $3)
+		ORDER BY r.scope, CASE r.category WHEN 'commit' THEN 0 WHEN 'work' THEN 1 ELSE 2 END, r.created_at, r.id`, p.ID, userID, includeDisabled)
 	if err != nil {
 		return RuleSet{}, err
 	}
@@ -221,21 +237,49 @@ func deleteRule(ctx context.Context, tx *sql.Tx, a Identity, in RuleRef) (any, e
 	return map[string]any{"id": r.ID, "project_id": p.ID, "scope": r.Scope, "deleted": true}, nil
 }
 
+// setRuleEnabled switches a rule on (사용) or off (미사용) with the same permissions as
+// deleting it. A real change bumps the revision so an open edit form sees a conflict;
+// setting the current value again returns the rule unchanged.
+func setRuleEnabled(ctx context.Context, tx *sql.Tx, a Identity, in SetRuleEnabledInput) (any, error) {
+	p, err := projectAccess(ctx, tx, a.User.ID, in.ProjectID, false)
+	if err != nil {
+		return nil, err
+	}
+	if err := validID(in.RuleID); err != nil {
+		return nil, err
+	}
+	r, err := lockRule(ctx, tx, a.User.ID, p.ID, in.RuleID)
+	if err != nil {
+		return nil, err
+	}
+	if r.Scope == "project" {
+		if err := projectRuleWriter(a, p.Role); err != nil {
+			return nil, err
+		}
+	}
+	if r.Enabled == in.Enabled {
+		return r, nil
+	}
+	return one[Rule](ctx, tx, `WITH r AS (UPDATE project_rules SET enabled=$2,updated_by=$3,updated_at=now(),revision=revision+1
+		WHERE id=$1 RETURNING *) SELECT to_jsonb(r) FROM r`, r.ID, in.Enabled, a.User.ID)
+}
+
 func registerRuleTools(t Tools, s *Store) {
-	add(t, s, "list_rules", "Read the commit and work rules for a project: project_rules set by the owner or admins (apply to everyone) and your own personal_rules. Follow them while working; project rules win on conflict. start_task also returns them in context.rules.", false, func(in ProjectInput) string { return in.ProjectID }, func(ctx context.Context, tx *sql.Tx, a Identity, in ProjectInput) (any, error) {
+	add(t, s, "list_rules", "Read the commit and work rules for a project: project_rules set by the owner or admins (apply to everyone) and your own personal_rules. Follow them while working; project rules win on conflict. start_task also returns them in context.rules. Rules switched off (enabled=false) are left out unless include_disabled is set, and must not be followed.", false, func(in ListRulesInput) string { return in.ProjectID }, func(ctx context.Context, tx *sql.Tx, a Identity, in ListRulesInput) (any, error) {
 		p, err := projectAccess(ctx, tx, a.User.ID, in.ProjectID, false)
 		if err != nil {
 			return nil, err
 		}
-		return listRules(ctx, tx, a.User.ID, p)
+		return listRules(ctx, tx, a.User.ID, p, in.IncludeDisabled)
 	})
 	add(t, s, "save_rule", "Add or change a rule. scope personal: your own rules, any member. scope project: owner or admin in the web console only (MCP keys are refused). To change a rule pass rule_id and expected_revision.", true, func(in SaveRuleInput) string { return in.ProjectID }, saveRule)
 	add(t, s, "delete_rule", "Delete one of your personal rules, or (owner/admin in the web console) a project rule.", true, func(in RuleRef) string { return in.ProjectID }, deleteRule)
+	add(t, s, "set_rule_enabled", "Switch a rule on (enabled=true, 사용) or off (enabled=false, 미사용) without deleting it. Same permissions as delete_rule: your own personal rules, or (owner/admin in the web console) a project rule.", true, func(in SetRuleEnabledInput) string { return in.ProjectID }, setRuleEnabled)
 }
 
 // taskRules attaches the caller's rules to the task context; nil when there are none.
 func taskRules(ctx context.Context, q Querier, userID string, p Project) (*RuleSet, error) {
-	rules, err := listRules(ctx, q, userID, p)
+	rules, err := listRules(ctx, q, userID, p, false)
 	if err != nil {
 		return nil, err
 	}
