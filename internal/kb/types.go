@@ -113,6 +113,9 @@ type TaskContext struct {
 	Guidance        string           `json:"guidance"`
 	Warning         string           `json:"warning,omitempty"`
 	UnindexedChunks int              `json:"unindexed_chunks"`
+	// Issues lists open questions and shared work areas relevant to the task
+	// so the agent asks area owners before changing shared work.
+	Issues          *TaskIssues      `json:"issues,omitempty"`
 }
 
 type SearchResult struct {

@@ -28,3 +28,6 @@ var NormalizeTags string
 
 //go:embed 009_document_links.sql
 var DocumentLinks string
+
+//go:embed 010_issues.sql
+var Issues string
