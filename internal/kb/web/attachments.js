@@ -4,18 +4,19 @@ async function attachmentsPage() {
   const root = el('div'), connection = card('버킷 연결 상태');
   const connectionState = el('p','연결 확인 중…');
   connectionState.setAttribute('role','status');
-  const connectionHelp = el('p','','small muted'), checkedAt = el('p','','small muted');
+  const connectionHelp = el('p','','small muted'), scannerState = el('p','','small muted'), checkedAt = el('p','','small muted');
   // storageReady gates the upload button; syncUpload is replaced once the list card exists.
-  let storageReady=false, syncUpload=()=>{};
+  let storageReady=false, uploadBlockedReason='버킷 연결이 확인된 뒤 업로드할 수 있습니다.', syncUpload=()=>{};
   const checkButton=btn('연결 다시 확인',checkStorage);
-  connection.append(connectionState,connectionHelp,checkedAt,checkButton);
+  connection.append(connectionState,connectionHelp,scannerState,checkedAt,checkButton);
   root.append(connection);
   async function checkStorage() {
     checkButton.disabled=true;
     storageReady=false;syncUpload();
     connectionState.textContent='연결 확인 중…';
     connectionState.className='';
-    connectionHelp.textContent='';checkedAt.textContent='';
+    connectionHelp.textContent='';scannerState.textContent='';checkedAt.textContent='';
+    uploadBlockedReason='버킷 연결이 확인된 뒤 업로드할 수 있습니다.';
     try {
       const result=await api('/api/attachments/storage');
       const states={
@@ -28,7 +29,17 @@ async function attachmentsPage() {
       connectionState.textContent=state[0];connectionHelp.textContent=state[1];
       connectionState.className=result.state==='connected'?'pill':'pill error';
       checkedAt.textContent='마지막 확인: '+new Date(result.checked_at).toLocaleString();
-      storageReady=result.state==='connected';syncUpload();
+      // A configured but unreachable scanner rejects every upload (fail closed).
+      const scanners={
+        connected:'악성 파일 검사(ClamAV): 연결됨',
+        not_configured:'악성 파일 검사: 설정 안 됨(실행 파일 차단만 적용)',
+        unavailable:'악성 파일 검사(ClamAV): 응답 없음 — 서비스가 시작 중이거나 중지되어 업로드가 거부됩니다.'
+      };
+      scannerState.textContent=scanners[result.scanner]??'';
+      scannerState.className=result.scanner==='unavailable'?'pill error':'small muted';
+      storageReady=result.state==='connected'&&result.scanner!=='unavailable';
+      if(result.state==='connected'&&!storageReady)uploadBlockedReason='악성 파일 검사 서비스가 응답한 뒤 업로드할 수 있습니다.';
+      syncUpload();
     } catch(e) {
       connectionState.textContent='연결 상태 확인 실패';connectionState.className='pill error';
       connectionHelp.textContent=e.message+' 연결 다시 확인을 눌러 재시도해 주세요.';
@@ -53,7 +64,7 @@ async function attachmentsPage() {
   syncUpload=()=>{
     uploadButton.hidden=currentProject().role==='viewer';
     uploadButton.disabled=!storageReady;
-    uploadButton.title=storageReady?'':'버킷 연결이 확인된 뒤 업로드할 수 있습니다.';
+    uploadButton.title=storageReady?'':uploadBlockedReason;
   };
   function listHead() { const head=el('div',undefined,'attachments-head');head.append(el('h2','첨부 목록'),uploadButton);return head; }
   async function refresh() {

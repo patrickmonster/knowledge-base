@@ -9,7 +9,10 @@ import (
 )
 
 type attachmentStorageStatus struct {
-	State     string    `json:"state"`
+	State string `json:"state"`
+	// Scanner is not_configured, connected or unavailable (clamd PING).
+	// Uploads fail closed while a configured scanner is unavailable.
+	Scanner   string    `json:"scanner"`
 	CheckedAt time.Time `json:"checked_at"`
 }
 
@@ -17,7 +20,16 @@ func (a *App) attachmentStorage(r *http.Request, id Identity) (any, error) {
 	if err := a.Store.RateLimit(r.Context(), "storage-check:"+id.User.ID, 12, 60); err != nil {
 		return nil, err
 	}
-	status := attachmentStorageStatus{State: "not_configured"}
+	status := attachmentStorageStatus{State: "not_configured", Scanner: "not_configured"}
+	if a.Store.Scanner != nil {
+		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+		status.Scanner = "connected"
+		if err := a.Store.Scanner.Ping(ctx); err != nil {
+			// Never echo the private scanner address.
+			status.Scanner = "unavailable"
+		}
+		cancel()
+	}
 	if a.Store.Objects != nil {
 		ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
 		defer cancel()

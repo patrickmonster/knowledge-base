@@ -10,6 +10,7 @@ import (
 	"net"
 	"strings"
 	"testing"
+	"time"
 )
 
 type fakeScanner struct {
@@ -18,7 +19,8 @@ type fakeScanner struct {
 	scanned   []byte
 }
 
-func (f *fakeScanner) Name() string { return "fake" }
+func (f *fakeScanner) Name() string                 { return "fake" }
+func (f *fakeScanner) Ping(_ context.Context) error { return f.err }
 func (f *fakeScanner) Scan(_ context.Context, r io.Reader) (string, error) {
 	f.scanned, _ = io.ReadAll(r)
 	return f.signature, f.err
@@ -120,6 +122,41 @@ func TestClamAVInstream(t *testing.T) {
 	ln.Close()
 	if _, err := (ClamAV{Address: ln.Addr().String()}).Scan(context.Background(), strings.NewReader("x")); err == nil {
 		t.Fatal("unreachable clamd must fail closed")
+	}
+}
+
+// TestClamAVPing checks the PING health probe against a fake daemon.
+func TestClamAVPing(t *testing.T) {
+	for _, tc := range []struct {
+		reply string
+		ok    bool
+	}{{"PONG\x00", true}, {"UNKNOWN COMMAND\x00", false}} {
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		go func() {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			defer conn.Close()
+			if cmd, _ := bufio.NewReader(conn).ReadString(0); cmd == "zPING\x00" {
+				conn.Write([]byte(tc.reply))
+			}
+		}()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		err = ClamAV{Address: ln.Addr().String()}.Ping(ctx)
+		cancel()
+		ln.Close()
+		if (err == nil) != tc.ok {
+			t.Fatalf("ping reply %q: %v", tc.reply, err)
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := (ClamAV{Address: "127.0.0.1:1"}).Ping(ctx); err == nil {
+		t.Fatal("unreachable clamd must report unavailable")
 	}
 }
 
