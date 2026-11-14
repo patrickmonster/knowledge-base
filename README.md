@@ -143,6 +143,8 @@ Authorization: Bearer <발급받은 MCP 키>
 | --- | --- |
 | `OLLAMA_BASE_URL` | `http://localhost:11434`; Compose는 `http://ollama:11434`로 지정 |
 | `EMBEDDING_MODEL` | `bge-m3`; 현재 DB는 1,024차원 모델만 허용 |
+| `EMBEDDING_NUM_THREADS` | `4`; 요청마다 Ollama `num_thread`로 전달. `0`이면 Ollama가 정하며 컨테이너 CPU 한도보다 많은 호스트 코어를 잡아 타임아웃이 날 수 있음 (허용 0~64) |
+| `OLLAMA_NUM_PARALLEL`, `OLLAMA_MAX_LOADED_MODELS` | Ollama 서비스에 `1` 지정; 동시 요청과 적재 모델을 하나로 제한 |
 | `EMBEDDING_ENABLED` | `true`; `false`이면 생성 작업을 멈추고 기본 검색을 키워드 방식으로 수행 |
 | `OLLAMA_NO_CLOUD` | Ollama 서비스에 `true` 지정; 클라우드 모델 비활성화 |
 

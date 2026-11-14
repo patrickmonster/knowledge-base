@@ -55,6 +55,9 @@ export default defineRailway((ctx) => {
     env: {
       OLLAMA_HOST: "[::]:11434",
       OLLAMA_NO_CLOUD: "true",
+      // One model and one request at a time; the app sets num_thread per request.
+      OLLAMA_NUM_PARALLEL: "1",
+      OLLAMA_MAX_LOADED_MODELS: "1",
       PORT: "11434",
     },
     deploy: {
@@ -92,6 +95,7 @@ export default defineRailway((ctx) => {
       TRUST_PROXY: "true",
       OLLAMA_BASE_URL: "http://${{" + ollamaName + ".RAILWAY_PRIVATE_DOMAIN}}:11434",
       EMBEDDING_MODEL: "bge-m3",
+      EMBEDDING_NUM_THREADS: "4",
       EMBEDDING_ENABLED: "true",
       ...(files ? {BUCKET_ENDPOINT: bucketRef("ENDPOINT"), BUCKET_NAME: bucketRef("BUCKET"), BUCKET_REGION: bucketRef("REGION"), BUCKET_ACCESS_KEY_ID: bucketRef("ACCESS_KEY_ID"), BUCKET_SECRET_ACCESS_KEY: bucketRef("SECRET_ACCESS_KEY"), BUCKET_FORCE_PATH_STYLE: String(resources.attachments?.forcePathStyle ?? false)} : {}),
     },

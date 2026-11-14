@@ -9,11 +9,28 @@ import (
 	"math"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
 
 const EmbeddingDimensions = 1024
+
+// DefaultEmbeddingThreads keeps Ollama from sizing its CPU thread pool to every host core it can see.
+// Oversubscribing a CPU-quota container throttles the runner and makes batches time out.
+const DefaultEmbeddingThreads = 4
+
+// ParseEmbeddingThreads reads EMBEDDING_NUM_THREADS. Empty uses the default; 0 lets Ollama decide.
+func ParseEmbeddingThreads(value string) (int, error) {
+	if strings.TrimSpace(value) == "" {
+		return DefaultEmbeddingThreads, nil
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil || n < 0 || n > 64 {
+		return 0, fmt.Errorf("EMBEDDING_NUM_THREADS must be an integer from 0 to 64")
+	}
+	return n, nil
+}
 
 type Embedder interface {
 	Model() string
@@ -22,6 +39,9 @@ type Embedder interface {
 type OllamaEmbedder struct {
 	baseURL, model string
 	client         *http.Client
+
+	// NumThreads is sent as Ollama's num_thread option when positive.
+	NumThreads int
 }
 
 func NewOllamaEmbedder(baseURL, model string) (*OllamaEmbedder, error) {
@@ -47,7 +67,11 @@ func (e *OllamaEmbedder) Embed(ctx context.Context, texts []string) ([][]float32
 			return nil, problem("EMBEDDING_INPUT", "Cannot embed empty text.")
 		}
 	}
-	body, _ := json.Marshal(map[string]any{"model": e.model, "input": texts, "truncate": false, "keep_alive": "10m"})
+	request := map[string]any{"model": e.model, "input": texts, "truncate": false, "keep_alive": "10m"}
+	if e.NumThreads > 0 {
+		request["options"] = map[string]any{"num_thread": e.NumThreads}
+	}
+	body, _ := json.Marshal(request)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, e.baseURL+"/api/embed", bytes.NewReader(body))
 	if err != nil {
 		return nil, err

@@ -52,11 +52,12 @@ func TestOllamaEmbeddingClient(t *testing.T) {
 			Input     []string
 			Truncate  *bool
 			KeepAlive string `json:"keep_alive"`
+			Options   map[string]any
 		}
 		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 			t.Error(err)
 		}
-		if in.Model != "bge-m3" || in.Truncate == nil || *in.Truncate || in.KeepAlive != "10m" {
+		if in.Model != "bge-m3" || in.Truncate == nil || *in.Truncate || in.KeepAlive != "10m" || in.Options["num_thread"] != float64(3) {
 			t.Errorf("invalid embedding request: %+v", in)
 		}
 		switch in.Input[0] {
@@ -77,6 +78,7 @@ func TestOllamaEmbeddingClient(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	e.NumThreads = 3
 	vectors, err := e.Embed(context.Background(), []string{"안녕하세요"})
 	if err != nil || len(vectors) != 1 || len(vectors[0]) != 1024 {
 		t.Fatalf("embedding failed: %v", err)
@@ -280,4 +282,38 @@ func TestLiveOllamaStorageAndRetrieval(t *testing.T) {
 		t.Fatalf("real model retrieval failed: %+v", result)
 	}
 	t.Logf("local bge-m3: stored 2 documents as %d-dimensional vectors; Korean paraphrase retrieved refund policy (cosine %.4f)", EmbeddingDimensions, result.Hits[0].Score)
+}
+
+func TestParseEmbeddingThreads(t *testing.T) {
+	for input, want := range map[string]int{"": DefaultEmbeddingThreads, " 8 ": 8, "0": 0, "64": 64} {
+		if got, err := ParseEmbeddingThreads(input); err != nil || got != want {
+			t.Errorf("ParseEmbeddingThreads(%q) = %d, %v; want %d", input, got, err, want)
+		}
+	}
+	for _, input := range []string{"-1", "65", "four", "1.5"} {
+		if _, err := ParseEmbeddingThreads(input); err == nil {
+			t.Errorf("ParseEmbeddingThreads(%q) accepted", input)
+		}
+	}
+}
+
+func TestOllamaEmbeddingOmitsZeroThreads(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var in map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			t.Error(err)
+		}
+		if _, ok := in["options"]; ok {
+			t.Errorf("options sent with automatic threads: %v", in["options"])
+		}
+		json.NewEncoder(w).Encode(map[string]any{"embeddings": [][]float32{unitVector(0)}})
+	}))
+	defer ts.Close()
+	e, err := NewOllamaEmbedder(ts.URL, "bge-m3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.Embed(context.Background(), []string{"자동"}); err != nil {
+		t.Fatal(err)
+	}
 }

@@ -63,10 +63,16 @@ func run() error {
 			if model == "" {
 				model = "bge-m3"
 			}
-			store.Embedder, err = kb.NewOllamaEmbedder(baseURL, model)
+			threads, err := kb.ParseEmbeddingThreads(os.Getenv("EMBEDDING_NUM_THREADS"))
 			if err != nil {
 				return err
 			}
+			embedder, err := kb.NewOllamaEmbedder(baseURL, model)
+			if err != nil {
+				return err
+			}
+			embedder.NumThreads = threads
+			store.Embedder = embedder
 			workerCtx, stopWorker := context.WithCancel(ctx)
 			workerDone := make(chan struct{})
 			go func() { defer close(workerDone); store.RunEmbeddingWorker(workerCtx) }()
