@@ -34,6 +34,12 @@ services:
       OLLAMA_BASE_URL: http://ollama:11434
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-bge-m3}
       EMBEDDING_ENABLED: ${EMBEDDING_ENABLED:-true}
+      BUCKET_ENDPOINT: ${BUCKET_ENDPOINT:-}
+      BUCKET_NAME: ${BUCKET_NAME:-}
+      BUCKET_REGION: ${BUCKET_REGION:-}
+      BUCKET_ACCESS_KEY_ID: ${BUCKET_ACCESS_KEY_ID:-}
+      BUCKET_SECRET_ACCESS_KEY: ${BUCKET_SECRET_ACCESS_KEY:-}
+      BUCKET_FORCE_PATH_STYLE: ${BUCKET_FORCE_PATH_STYLE:-false}
     depends_on:
       migrate:
         condition: service_completed_successfully

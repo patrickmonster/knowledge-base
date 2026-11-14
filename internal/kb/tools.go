@@ -187,6 +187,7 @@ func NewTools(s *Store) Tools {
 		return s.taskContext(ctx, tx, a, in)
 	})
 	registerWorkflowTools(t, s)
+	registerAttachmentTools(t, s)
 
 	return t
 }

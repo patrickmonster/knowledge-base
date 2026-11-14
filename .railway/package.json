@@ -3,7 +3,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "check": "tsc --noEmit"
+    "check": "tsc --noEmit",
+    "setup": "node setup.mjs",
+    "test": "node --test setup.test.mjs"
   },
   "dependencies": {
     "railway": "3.17.0"

@@ -1,10 +1,11 @@
 import { readFileSync } from "node:fs";
-import { defineRailway, github, image, postgres, project, service, volume } from "railway/iac";
+import { bucket, defineRailway, github, image, postgres, project, service, volume } from "railway/iac";
 
 type DeploymentConfiguration = {
   projectName: string;
   repository: string;
-  environments: Record<"development" | "production", {
+  environments: Record<string, {
+    attachments?: { name: string; region?: "sjc" | "iad" | "ams" | "sin"; forcePathStyle?: boolean };
     app: { name: string; branch: string };
     database: { name: string };
     ollama: { name: string; volumeName: string };
@@ -20,7 +21,7 @@ try {
 } catch {
   throw new Error("Create .railway/deployment.local.json from deployment.example.json and fill in your existing resources before planning or applying.");
 }
-for (const environment of ["development", "production"] as const) {
+for (const environment of Object.keys(configuration.environments ?? {})) {
   const resources = configuration.environments?.[environment];
   const required = [configuration.projectName, configuration.repository, resources?.app?.name,
     resources?.app?.branch, resources?.database?.name, resources?.ollama?.name,
@@ -28,19 +29,24 @@ for (const environment of ["development", "production"] as const) {
   if (required.some((value) => typeof value !== "string" || !value.trim())) {
     throw new Error(`Incomplete local deployment configuration for ${environment}.`);
   }
+  if (resources.attachments && (!resources.attachments.name?.trim() || (resources.attachments.region && !["sjc","iad","ams","sin"].includes(resources.attachments.region)) || (resources.attachments.forcePathStyle !== undefined && typeof resources.attachments.forcePathStyle !== "boolean"))) {
+    throw new Error(`Invalid bucket configuration for ${environment}.`);
+  }
 }
 const ollamaScript = readFileSync(new URL("./ollama-start.sh", import.meta.url), "utf8");
 const ollamaStart = "/bin/sh -c '" + ollamaScript.replaceAll("'", "'\\''") + "'";
 
 export default defineRailway((ctx) => {
-  if (ctx.environment !== "development" && ctx.environment !== "production") {
-    throw new Error("Select development or production explicitly before applying.");
+  if (!ctx.environment || !configuration.environments[ctx.environment] || ctx.environment === "development") {
+    throw new Error("Select an explicitly configured environment. The retired development environment cannot be applied.");
   }
 
   // Evaluated separately in each environment: credentials and data are isolated.
   const resources = configuration.environments[ctx.environment];
   // Match the independently provisioned services in the existing project.
   const db = postgres(resources.database.name);
+  const files = resources.attachments ? bucket(resources.attachments.name, {region:resources.attachments.region ?? "sjc"}) : undefined;
+  const bucketRef = (key: string) => "${{" + files!.name + "." + key + "}}";
   const models = volume(resources.ollama.volumeName, { sizeMB: 4096 });
   const ollamaName = resources.ollama.name;
   const ollama = service(ollamaName, {
@@ -79,7 +85,7 @@ export default defineRailway((ctx) => {
       sleepApplication: false,
     },
     env: {
-      APP_ENV: ctx.environment,
+      APP_ENV: "production",
       DATABASE_URL: db.env.DATABASE_URL,
       PUBLIC_URL: "https://${{RAILWAY_PUBLIC_DOMAIN}}",
       PORT: "8080",
@@ -87,8 +93,9 @@ export default defineRailway((ctx) => {
       OLLAMA_BASE_URL: "http://${{" + ollamaName + ".RAILWAY_PRIVATE_DOMAIN}}:11434",
       EMBEDDING_MODEL: "bge-m3",
       EMBEDDING_ENABLED: "true",
+      ...(files ? {BUCKET_ENDPOINT: bucketRef("ENDPOINT"), BUCKET_NAME: bucketRef("BUCKET"), BUCKET_REGION: bucketRef("REGION"), BUCKET_ACCESS_KEY_ID: bucketRef("ACCESS_KEY_ID"), BUCKET_SECRET_ACCESS_KEY: bucketRef("SECRET_ACCESS_KEY"), BUCKET_FORCE_PATH_STYLE: String(resources.attachments?.forcePathStyle ?? false)} : {}),
     },
   });
 
-  return project(configuration.projectName, { resources: [db, models, ollama, app] });
+  return project(configuration.projectName, { resources: [db, models, ollama, app, ...(files ? [files] : [])] });
 });

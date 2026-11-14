@@ -2,15 +2,22 @@
   "projectName": "your-project",
   "repository": "your-org/your-repository",
   "environments": {
-    "development": {
-      "app": { "name": "app-dev", "branch": "develop" },
-      "database": { "name": "Postgres-dev" },
-      "ollama": { "name": "Ollama-dev", "volumeName": "models-dev" }
-    },
     "production": {
-      "app": { "name": "app-prod", "branch": "main" },
-      "database": { "name": "Postgres-prod" },
-      "ollama": { "name": "Ollama-prod", "volumeName": "models-prod" }
+      "app": {
+        "name": "app-prod",
+        "branch": "main"
+      },
+      "database": {
+        "name": "Postgres-prod"
+      },
+      "ollama": {
+        "name": "Ollama-prod",
+        "volumeName": "models-prod"
+      },
+      "attachments": {
+        "name": "Attachments",
+        "region": "sjc"
+      }
     }
   }
 }

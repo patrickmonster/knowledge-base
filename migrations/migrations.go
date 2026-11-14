@@ -16,3 +16,6 @@ var PermanentKeys string
 
 //go:embed 005_task_workflow.sql
 var TaskWorkflow string
+
+//go:embed 006_attachments.sql
+var Attachments string

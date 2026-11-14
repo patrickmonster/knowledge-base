@@ -32,3 +32,4 @@ jobs:
           cache-dependency-path: .railway/package-lock.json
       - run: npm ci --prefix .railway
       - run: npm --prefix .railway run check
+      - run: npm --prefix .railway test

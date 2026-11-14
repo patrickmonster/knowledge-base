@@ -126,7 +126,7 @@ Authorization: Bearer <발급받은 MCP 키>
 
 문서 종류는 `brief`, `decision`, `history`, `artifact`, `reference`입니다. 상태는 `draft`, `active`, `archived`이고 기본 검색에는 활성 문서의 최신 버전만 포함됩니다. `update_document`는 `expected_revision`과 수정 이유 `reason`이 필요합니다. 충돌하면 최신 내용을 읽고 변경을 병합해야 합니다.
 
-원본 문서는 최대 100,000자입니다. 작업 맥락은 기본 8,000자의 발췌문 예산을 사용하며 메타데이터는 예산에서 제외합니다. 기본 검색은 의미·키워드 검색을 결합합니다. 모델의 의미 판단과 검색 결과는 실제 프로젝트 자료로 평가해야 합니다. 작업물은 본문·링크로 저장하며 파일 업로드는 아직 지원하지 않습니다.
+원본 문서는 최대 100,000자입니다. 작업 맥락은 기본 8,000자의 발췌문 예산을 사용하며 메타데이터는 예산에서 제외합니다. 기본 검색은 의미·키워드 검색을 결합합니다. 모델의 의미 판단과 검색 결과는 실제 프로젝트 자료로 평가해야 합니다. 작업물 본문·링크 외에 [Railway 버킷 첨부 파일](docs/attachments.md)을 지원합니다. 파일당 최대 25 MiB이며 PDF·Word 본문 자동 추출과 임베딩은 포함하지 않습니다.
 
 ## 로컬 임베딩 동작
 
@@ -167,13 +167,16 @@ Authorization: Bearer <발급받은 MCP 키>
 
 ## Railway 배포
 
-개발은 `development` / `develop`, 운영은 `production` / `main`으로 분리합니다. 각 환경에 앱과 PostgreSQL을 따로 만들고, `DATABASE_URL`은 **같은 환경의 Postgres 서비스 참조**로 주입합니다. 비밀번호를 코드에 기록하지 않습니다.
+현재는 `production` / `main` 단일 서버로 운영합니다. 기존 개발 앱·DB·Ollama 서버는 제거하고 데이터 볼륨은 보관합니다. 로컬 Compose와 자동 테스트는 계속 사용할 수 있습니다.
 
-[개발·운영 배포 절차](.railway/README.md)와 [배포 설정](.railway/railway.ts)을 사용합니다. Docker 빌드, 배포 전 마이그레이션, `/healthz`, 재시작 정책, GitHub 브랜치 연결 설정이 포함되어 있습니다. 실제 저장소와 서비스 이름은 Git에서 제외한 `.railway/deployment.local.json`에 지정합니다.
+[설치·운영 안내](.railway/README.md)와 [배포 설정](.railway/railway.ts)에 앱·DB·Ollama·첨부 버킷 구성이 포함되어 있습니다. 나중에 다른 Railway 프로젝트에 설치할 때 새 체크아웃에서 아래 명령으로 로컬 설정만 준비할 수 있습니다. 현재 서버를 복제하거나 새 프로젝트를 즉시 생성하지 않습니다.
 
-새 배포는 마이그레이션과 상태 확인을 통과해야 합니다. 앱 롤백이 DB를 되돌리지는 않으므로 스키마 변경은 이전 앱과 호환되게 추가합니다. 개발·운영의 최초 관리자도 각각 한 번 생성합니다.
+```sh
+npm ci --prefix .railway
+npm --prefix .railway run setup -- --project your-team-knowledge --repo your-org/your-repository
+```
 
-실제 도메인·프로젝트 ID와 로그인 정보는 공개 문서에 기록하지 않습니다. 환경별 구성과 운영 절차는 [배포 안내](.railway/README.md)를 참고합니다.
+실제 배포 정보는 Git에서 제외한 `.railway/deployment.local.json`에 보관하며 생성기는 기존 파일을 덮어쓰지 않습니다. 새 환경 설치 시 도메인 생성, 마이그레이션, 최초 관리자 생성과 업로드·검색 검증이 필요합니다. 기존 계정·DB·파일은 자동 이관되지 않습니다.
 
 ## 감사·운영 범위
 
@@ -244,3 +247,7 @@ TEST_DATABASE_URL='<test-only PostgreSQL URL>' TEST_OLLAMA_URL=http://localhost:
 `start_task`로 관련 자료와 시작 시점의 문서 버전을 모으고, 작업 후 `finish_task`로 히스토리와 추가 기획·결정을 함께 저장합니다. 같은 입력 재시도는 중복 기록을 만들지 않습니다. 기획·결정은 기본 초안이고, 원문 저장과 의미 검색 준비는 구분됩니다.
 
 [호출 예시·작성 양식·AI 클라이언트 적용 규칙](docs/task-workflow.md)을 참고하세요. 이 저장소의 `AGENTS.md`에도 시작 조회·완료 저장 규칙을 반영했습니다. 다른 프로젝트에는 해당 클라이언트 지침에 규칙을 추가해야 하며 MCP 서버가 작업 시작·종료를 자동으로 감지하지는 않습니다. 새 도구는 새 버전과 마이그레이션을 배포한 후 제공됩니다.
+
+## 첨부 파일
+
+내부 화면 **첨부 문서**에서 버킷 연결 상태·마지막 확인 시각·연결 재확인과 프로젝트별 파일 업로드·다운로드·삭제와 지식 문서 연결을 지원합니다. MCP는 `prepare_attachment_upload`, `list_attachments`, `get_attachment_download`, `delete_attachment`를 제공합니다. 업로드 본문은 인증된 HTTP PUT으로 전송합니다. 기존 프로젝트 권한·키 범위·읽기 전용 제한과 감사 기록을 그대로 적용합니다. 버킷 연결 설정, 실패 복구와 검색 제한은 [첨부 안내](docs/attachments.md)를 참고하세요.

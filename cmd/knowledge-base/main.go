@@ -37,6 +37,20 @@ func run() error {
 	case "bootstrap":
 		return store.Bootstrap(ctx, os.Getenv("BOOTSTRAP_EMAIL"), os.Getenv("BOOTSTRAP_NAME"), os.Getenv("BOOTSTRAP_PASSWORD"))
 	case "serve":
+		style := os.Getenv("BUCKET_FORCE_PATH_STYLE")
+		if style != "" && style != "false" && style != "true" {
+			return errors.New("BUCKET_FORCE_PATH_STYLE must be true or false")
+		}
+		store.Objects, err = kb.NewRailwayBucket(kb.BucketConfig{Endpoint: os.Getenv("BUCKET_ENDPOINT"), Bucket: os.Getenv("BUCKET_NAME"), Region: os.Getenv("BUCKET_REGION"), AccessKeyID: os.Getenv("BUCKET_ACCESS_KEY_ID"), SecretAccessKey: os.Getenv("BUCKET_SECRET_ACCESS_KEY"), ForcePathStyle: style == "true"})
+		if err != nil {
+			return err
+		}
+		if store.Objects != nil {
+			workerCtx, stopWorker := context.WithCancel(ctx)
+			workerDone := make(chan struct{})
+			go func() { defer close(workerDone); store.RunAttachmentCleanup(workerCtx) }()
+			defer func() { stopWorker(); <-workerDone }()
+		}
 		embeddingEnabled := os.Getenv("EMBEDDING_ENABLED")
 		if embeddingEnabled != "" && embeddingEnabled != "true" && embeddingEnabled != "false" {
 			return errors.New("EMBEDDING_ENABLED must be true or false")
@@ -66,7 +80,7 @@ func run() error {
 		if err != nil {
 			return err
 		}
-		server := &http.Server{Addr: ":" + port, Handler: app.Handler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 35 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 32 << 10}
+		server := &http.Server{Addr: ":" + port, Handler: app.Handler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 120 * time.Second, WriteTimeout: 130 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 32 << 10}
 		go func() {
 			ticker := time.NewTicker(time.Hour)
 			defer ticker.Stop()

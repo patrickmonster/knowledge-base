@@ -46,6 +46,8 @@ func NewApp(s *Store, c Config) (*App, error) {
 }
 func (a *App) Handler() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("PUT /api/attachments/{id}/content", a.attachmentUpload)
+	a.sessionRoute(mux, "GET /api/attachments/storage", a.attachmentStorage)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 		defer cancel()
@@ -204,8 +206,12 @@ func (a *App) Handler() http.Handler {
 		if a.secure {
 			w.Header().Set("Strict-Transport-Security", "max-age=31536000")
 		}
-		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+		limit, timeout := int64(1<<20), 30*time.Second
+		if r.Method == "PUT" && strings.HasPrefix(r.URL.Path, "/api/attachments/") && strings.HasSuffix(r.URL.Path, "/content") {
+			limit, timeout = MaxAttachmentBytes+1, 120*time.Second
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, limit)
+		ctx, cancel := context.WithTimeout(r.Context(), timeout)
 		defer cancel()
 		mux.ServeHTTP(w, r.WithContext(ctx))
 	})
@@ -338,6 +344,8 @@ func (a *App) fail(w http.ResponseWriter, err error) {
 	case "RATE_LIMITED":
 		status = 429
 		w.Header().Set("Retry-After", "900")
+	case "STORAGE_UNAVAILABLE":
+		status = 503
 	}
 	if status == 500 {
 		slog.Error("request failed", "code", code)
