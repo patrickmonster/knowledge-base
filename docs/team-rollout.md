@@ -28,6 +28,7 @@
 - 채널 종류
   - **Slack**: incoming webhook URL(`https://hooks.slack.com/...`). `{"text": "..."}`로 보냅니다.
   - **웹훅**: 임의 HTTPS 주소에 JSON을 POST 합니다. 헤더 `X-KB-Event`(이벤트), `X-KB-Delivery`(재전송 시에도 같은 ID)로 중복을 거를 수 있습니다.
+    - **Discord**: 주소가 Discord 웹훅(`https://discord.com/api/webhooks/…`, `discordapp.com`·`ptb.`·`canary.` 포함)이면 자동으로 Discord 형식(`{"content": "...", "username": "knowledge-base"}`)으로 보냅니다. 메시지는 2,000자에서 자르고, 제목에 `@everyone` 등이 있어도 멘션되지 않도록 `allowed_mentions`를 비웁니다. Discord 채널 설정 → 연동 → 웹후크에서 만든 URL을 종류 **웹훅**으로 등록하면 됩니다.
   - **이메일**: 받는 사람의 계정 이메일로 보냅니다. 서버에 `SMTP_HOST`, `SMTP_FROM`(필요하면 `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`)을 설정해야 하며, 없으면 `SMTP_NOT_CONFIGURED`로 실패 처리됩니다.
 - 채널 주소에는 비밀 값이 들어 있을 수 있어 저장 후에는 호스트와 끝 4자리만 보여 주고, 감사 로그에도 복사하지 않습니다. 수정할 때 주소를 비워 두면 기존 주소를 유지합니다.
 - 내부망 보호: 접속 시점에 실제 IP를 확인해 루프백·사설·링크 로컬·CGNAT 주소로는 보내지 않고(`BLOCKED_ADDRESS`), 리디렉션을 따라가지 않으며, 프록시를 쓰지 않습니다.
