@@ -267,4 +267,35 @@ func TestIssueNotifications(t *testing.T) {
 	if err := s.DB.QueryRow(`SELECT count(*) FROM notification_outbox WHERE channel_id=$1`, hook.ID).Scan(&queued); err != nil || queued != 0 {
 		t.Fatalf("removing a channel kept its outbox rows: %d %v", queued, err)
 	}
+
+	// Members removed from the project stop receiving notifications: a row
+	// queued while they were a member is not mailed, and no new rows are queued.
+	comments := mustCall(t, tools, admin, "set_notification_channel", NotificationChannelInput{ProjectID: p.ID, Kind: "email", Name: "comments", Events: []string{eventIssueCommented}}).(NotificationChannel)
+	mustCall(t, tools, admin, "comment_issue", CommentIssueInput{ProjectID: p.ID, IssueID: issue.ID, Body: "멤버일 때 댓글"})
+	mustCall(t, tools, admin, "set_project_member", MemberInput{ProjectID: p.ID, UserID: owner.User.ID, Role: "remove"})
+	s.Notifier = &Notifier{SMTP: &SMTPConfig{Host: "smtp.example.com", Port: 587, From: "kb@example.com"},
+		sendMail: func(string, smtp.Auth, string, []string, []byte) error {
+			t.Error("mail was sent to a user removed from the project")
+			return nil
+		}}
+	for {
+		n, err := s.ProcessNotificationBatch(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n == 0 {
+			break
+		}
+	}
+	var status, code string
+	if err := s.DB.QueryRow(`SELECT status,last_error FROM notification_outbox WHERE channel_id=$1`, comments.ID).Scan(&status, &code); err != nil {
+		t.Fatal(err)
+	}
+	if status != "failed" || code != "NO_RECIPIENT_EMAIL" {
+		t.Fatalf("queued mail to a removed member: %s %s", status, code)
+	}
+	mustCall(t, tools, admin, "comment_issue", CommentIssueInput{ProjectID: p.ID, IssueID: issue.ID, Body: "제외 후 댓글"})
+	if err := s.DB.QueryRow(`SELECT count(*) FROM notification_outbox WHERE channel_id=$1`, comments.ID).Scan(&queued); err != nil || queued != 1 {
+		t.Fatalf("notification queued for a removed member: %d %v", queued, err)
+	}
 }

@@ -342,8 +342,11 @@ func notifyIssue(ctx context.Context, tx *sql.Tx, actor Identity, issueID, event
 	if err != nil {
 		return err
 	}
+	// Only current project members are notified: someone removed from the
+	// project may still be an issue's asker or assignee.
 	payload.Recipients, err = many[notificationRecipient](ctx, tx, `SELECT jsonb_build_object('id',u.id,'name',u.name) FROM users u
-		WHERE u.id::text=ANY($1::text[]) AND NOT u.disabled ORDER BY u.name,u.id`, ids)
+		WHERE u.id::text=ANY($1::text[]) AND NOT u.disabled
+		AND EXISTS(SELECT 1 FROM project_members m WHERE m.project_id=$2::uuid AND m.user_id=u.id) ORDER BY u.name,u.id`, ids, payload.ProjectID)
 	if err != nil || len(payload.Recipients) == 0 {
 		return err
 	}
@@ -467,7 +470,9 @@ func (s *Store) ProcessNotificationBatch(ctx context.Context) (int, error) {
 			FROM candidates WHERE o.id=candidates.id RETURNING o.*
 		) SELECT jsonb_build_object('id',o.id,'event',o.event,'attempts',o.attempts,'kind',c.kind,'target',c.target,
 			'recipient_email',coalesce(u.email,''),'payload',o.payload)
-		FROM claimed o JOIN notification_channels c ON c.id=o.channel_id LEFT JOIN users u ON u.id=o.recipient_id AND NOT u.disabled`, "lease:"+lease)
+		FROM claimed o JOIN notification_channels c ON c.id=o.channel_id
+		LEFT JOIN users u ON u.id=o.recipient_id AND NOT u.disabled
+			AND EXISTS(SELECT 1 FROM project_members m WHERE m.project_id=o.project_id AND m.user_id=u.id)`, "lease:"+lease)
 		return err
 	})
 	if err != nil || len(jobs) == 0 {
