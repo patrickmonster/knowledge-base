@@ -29,13 +29,50 @@ async function documentsPage() {
   controls.append(form);
   const summary=el('p','','small muted');summary.setAttribute('role','status');
   controls.append(summary);
-  const list=el('tbody'), more=btn('더 보기',()=>load(false).catch(e=>notify(e.message,true)));
+  const list=el('tbody'), more=btn('더 보기',()=>loadMore(),'secondary');
   more.hidden=true;
   const tableWrap=el('div',undefined,'table-wrap document-table'), tbl=el('table'), headRow=el('tr'), thead=el('thead');
-  for (const h of ['제목','종류','상태','버전','작성자','수정일']) headRow.append(el('th',h));
+  // Header buttons change the server-side sort; the same column again flips the order.
+  const columns=[['title','제목'],['kind','종류'],['status','상태'],['revision','버전'],['author','작성자'],['updated_at','수정일']];
+  const defaultOrder=key=>key==='updated_at'||key==='revision'?'desc':'asc';
+  let sortKey='updated_at', sortOrder='desc';
+  const sortHeads=columns.map(([key,label])=>{
+    const th=el('th'), b=el('button',undefined,'sort-button');
+    b.type='button';b.append(el('span',label),el('span','','sort-indicator'));
+    b.addEventListener('click',()=>{
+      if (sortKey===key) sortOrder=sortOrder==='asc'?'desc':'asc'; else { sortKey=key;sortOrder=defaultOrder(key); }
+      updateSortHeads();load(true).catch(e=>notify(e.message,true));
+    });
+    th.append(b);headRow.append(th);return {key,th,b};
+  });
+  function updateSortHeads() {
+    for (const {key,th,b} of sortHeads) {
+      const active=key===sortKey;
+      th.setAttribute('aria-sort',active?(sortOrder==='asc'?'ascending':'descending'):'none');
+      b.classList.toggle('is-sorted',active);
+      b.lastChild.textContent=active?(sortOrder==='asc'?'▲':'▼'):'';
+    }
+  }
+  updateSortHeads();
   thead.append(headRow);tbl.append(thead,list);tableWrap.append(tbl);
   const listCard=card();listCard.append(tableWrap,more);
   root.append(listCard);
+  // Infinite scroll: when the "more" button scrolls into view, load the next page.
+  // The button stays as a fallback (keyboard users, observer unsupported, after an error).
+  let hasMore=false, busy=false;
+  const observer='IntersectionObserver' in window?new IntersectionObserver(entries=>{
+    if (entries.some(e=>e.isIntersecting)) loadMore();
+  },{rootMargin:'200px 0px'}):null;
+  observer?.observe(more);
+  function loadMore() {
+    if (!hasMore||busy) return;
+    busy=true;more.disabled=true;more.textContent='불러오는 중…';
+    load(false).catch(e=>notify(e.message,true)).finally(()=>{
+      busy=false;more.disabled=false;more.textContent='더 보기';
+      // Re-observe so a still-visible button (tall screen) triggers the next page too.
+      if (observer&&hasMore&&more.isConnected) { observer.unobserve(more);observer.observe(more); }
+    });
+  }
   function message(text,cls) { const tr=el('tr'), td=el('td',text,cls); td.colSpan=6; tr.append(td); return tr; }
 
   let generation=0, offset=0, names={}, shown=0, staleShown=0;
@@ -50,7 +87,7 @@ async function documentsPage() {
     } catch(e) { notify(e.message,true); }
   }
   function filters() {
-    const input={project_id:project.value,limit:50,offset};
+    const input={project_id:project.value,limit:50,offset,sort:sortKey,order:sortOrder};
     if (kind.value) input.kind=kind.value;
     if (status.value) input.status=status.value;
     if (author.value) input.author=author.value;
@@ -66,7 +103,7 @@ async function documentsPage() {
   async function load(reset) {
     if (after.value&&before.value&&after.value>before.value) throw Error('수정일 시작이 끝보다 늦습니다.');
     const ticket=reset?++generation:generation;
-    if (reset) { offset=0;shown=0;staleShown=0;list.replaceChildren(message('불러오는 중…','muted')); }
+    if (reset) { offset=0;shown=0;staleShown=0;hasMore=false;more.hidden=true;list.replaceChildren(message('불러오는 중…','muted')); }
     const batch=await tool('list_documents',filters());
     if (ticket!==generation) return;
     if (reset) list.replaceChildren();
@@ -74,7 +111,7 @@ async function documentsPage() {
     staleShown+=batch.filter(d=>d.needs_recheck).length;
     list.append(...batch.map(row));
     if (!shown) list.replaceChildren(message('조건에 맞는 문서가 없습니다.','empty'));
-    more.hidden=batch.length<50;
+    hasMore=batch.length>=50;more.hidden=!hasMore;
     summary.textContent=`${shown}건${batch.length<50?'':' 이상'} · 재확인 필요 ${staleShown}건 (기준 ${Number(staleDays.value)||90}일)`;
   }
   function person(id) { return names[id]||id?.slice(0,8)||'—'; }

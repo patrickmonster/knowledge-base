@@ -26,6 +26,28 @@ func TestParseListTime(t *testing.T) {
 	}
 }
 
+func TestListOrder(t *testing.T) {
+	cases := []struct{ sort, order, want string }{
+		{"", "", "l.updated_at DESC,l.id"},
+		{"updated_at", "asc", "l.updated_at ASC,l.id"},
+		{"title", "", "lower(l.title) ASC,l.updated_at DESC,l.id"},
+		{"revision", "", "l.revision DESC,l.updated_at DESC,l.id"},
+		{"kind", "desc", "l.kind DESC,l.updated_at DESC,l.id"},
+	}
+	for _, c := range cases {
+		got, err := listOrder(c.sort, c.order)
+		if err != nil || got != c.want {
+			t.Fatalf("listOrder(%q,%q)=%q,%v want %q", c.sort, c.order, got, err, c.want)
+		}
+	}
+	if _, err := listOrder("content; DROP TABLE documents", ""); err == nil {
+		t.Fatal("unknown sort key accepted")
+	}
+	if _, err := listOrder("title", "sideways"); err == nil {
+		t.Fatal("unknown order accepted")
+	}
+}
+
 func TestListDocumentFilters(t *testing.T) {
 	s := testStore(t)
 	tools := NewTools(s)

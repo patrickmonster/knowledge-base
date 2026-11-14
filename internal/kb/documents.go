@@ -155,6 +155,45 @@ type ListInput struct {
 	Author        string   `json:"author,omitempty" jsonschema:"User ID that created or last updated the document"`
 	StaleOnly     bool     `json:"stale_only,omitempty" jsonschema:"Only active reference/brief documents that need re-checking"`
 	StaleDays     int      `json:"stale_days,omitempty" jsonschema:"Days without updates before active reference/brief documents need re-checking; default 90, 1–3650"`
+	Sort          string   `json:"sort,omitempty" jsonschema:"Sort key: updated_at (default), title, kind, status, revision, or author (creator name)"`
+	Order         string   `json:"order,omitempty" jsonschema:"asc or desc; default desc for updated_at and revision, asc otherwise"`
+}
+
+// listSortColumns maps list_documents sort keys to SQL over the listed alias l.
+// Only these fixed expressions are ever interpolated into the query.
+var listSortColumns = map[string]string{
+	"updated_at": "l.updated_at",
+	"title":      "lower(l.title)",
+	"kind":       "l.kind",
+	"status":     "l.status",
+	"revision":   "l.revision",
+	"author":     "lower(coalesce((SELECT u.name FROM users u WHERE u.id=l.created_by),''))",
+}
+
+// listOrder returns the ORDER BY clause for list_documents.
+func listOrder(sortKey, order string) (string, error) {
+	if sortKey == "" {
+		sortKey = "updated_at"
+	}
+	column, ok := listSortColumns[sortKey]
+	if !ok {
+		return "", problem("INVALID_INPUT", "sort must be one of updated_at, title, kind, status, revision, author.")
+	}
+	switch order {
+	case "":
+		order = "asc"
+		if sortKey == "updated_at" || sortKey == "revision" {
+			order = "desc"
+		}
+	case "asc", "desc":
+	default:
+		return "", problem("INVALID_INPUT", "order must be asc or desc.")
+	}
+	clause := column + " " + strings.ToUpper(order)
+	if sortKey != "updated_at" {
+		clause += ",l.updated_at DESC"
+	}
+	return clause + ",l.id", nil
 }
 
 // DefaultStaleDays is how long an active reference or brief may go without an
@@ -232,6 +271,10 @@ func listDocuments(ctx context.Context, tx *sql.Tx, actor Identity, in ListInput
 	if staleDays < 1 || staleDays > 3650 {
 		return nil, problem("INVALID_INPUT", "stale_days must be 1–3650.")
 	}
+	orderBy, err := listOrder(in.Sort, in.Order)
+	if err != nil {
+		return nil, err
+	}
 	return many[map[string]any](ctx, tx, `WITH listed AS (
 		SELECT d.*, d.kind=ANY($11::text[]) AND d.status='active' AND d.updated_at < now()-make_interval(days=>$10::int) AS needs_recheck
 		FROM documents d WHERE d.project_id=$1
@@ -242,7 +285,7 @@ func listDocuments(ctx context.Context, tx *sql.Tx, actor Identity, in ListInput
 		AND ($9='' OR d.created_by::text=$9 OR d.updated_by::text=$9))
 	SELECT (to_jsonb(l)-'content')||jsonb_build_object('days_since_update',floor(extract(epoch FROM now()-l.updated_at)/86400)::int,'stale_after_days',$10::int)
 	FROM listed l WHERE NOT $12::bool OR l.needs_recheck
-	ORDER BY l.updated_at DESC,l.id LIMIT $2 OFFSET $3`,
+	ORDER BY `+orderBy+` LIMIT $2 OFFSET $3`,
 		in.ProjectID, limit, in.Offset, in.Status, in.Kind, tags, after, before, in.Author, staleDays, staleKinds, in.StaleOnly)
 }
 
