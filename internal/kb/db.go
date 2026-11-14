@@ -38,6 +38,9 @@ func Open(ctx context.Context, dsn string) (*Store, error) {
 	}
 	return &Store{DB: db}, nil
 }
+// migrationScripts are applied in order; version N is migrationScripts[N-1].
+var migrationScripts = []string{migrations.Initial, migrations.Auth, migrations.Embeddings, migrations.PermanentKeys, migrations.TaskWorkflow, migrations.Attachments, migrations.AttachmentUploadTokens, migrations.NormalizeTags, migrations.DocumentLinks, migrations.Issues}
+
 func (s *Store) Migrate(ctx context.Context) error {
 	return transaction(ctx, s.DB, func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx, "SELECT pg_advisory_xact_lock(51283167)"); err != nil {
@@ -46,7 +49,7 @@ func (s *Store) Migrate(ctx context.Context) error {
 		if _, err := tx.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations(version integer PRIMARY KEY)`); err != nil {
 			return err
 		}
-		for i, script := range []string{migrations.Initial, migrations.Auth, migrations.Embeddings, migrations.PermanentKeys, migrations.TaskWorkflow, migrations.Attachments, migrations.AttachmentUploadTokens, migrations.NormalizeTags, migrations.DocumentLinks, migrations.Issues} {
+		for i, script := range migrationScripts {
 			var exists bool
 			if err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version=$1)", i+1).Scan(&exists); err != nil {
 				return err

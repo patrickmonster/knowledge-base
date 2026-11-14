@@ -69,6 +69,7 @@ railway config apply
 | 앱 | 루트 Dockerfile, `/app/knowledge-base serve` |
 | 배포 전 | `/app/knowledge-base migrate`, 최대 300초 |
 | 상태 확인 | `/healthz`, 최대 60초; DB 연결만 검사 |
+| 배포 확인 | `/version`: 배포 커밋(`commit`)과 마이그레이션 적용 여부(`schema_version`/`schema_expected`) |
 | 인스턴스 | 앱·Ollama 각각 1개, 자동 수면 꺼짐 |
 | `APP_ENV` | `production` (임의 환경명도 HTTPS 설정 적용) |
 | `DATABASE_URL` | 같은 환경 DB 서비스의 변수 참조 |

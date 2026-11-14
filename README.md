@@ -18,7 +18,7 @@ Go로 만든 팀 공용 지식 서버입니다. 프로젝트별 기획·결정·
 - 문서 저장·수정 시 자동 임베딩 대기열, 실패 재시도·상태 조회·소유자 재색인
 - 이슈·질의 베이스: 공통 작업 영역과 담당자, 질의·이슈 등록·답변·해결, 작업 시작 시 관련 질의 표시, 질의응답의 지식 문서화([안내](docs/issues.md))
 - 공식 Go MCP SDK 기반 Streamable HTTP `/mcp`
-- Railway용 Dockerfile, 배포 전 마이그레이션, `/healthz`
+- Railway용 Dockerfile, 배포 전 마이그레이션, `/healthz`, 배포 커밋·스키마 버전 확인 `/version`
 
 Railway 개발·운영 앱을 배포했습니다. `develop`과 `main`을 각각 개발·운영에 연결했고, DB·Ollama와 사용자 데이터는 환경별로 분리됩니다.
 
@@ -114,6 +114,7 @@ Authorization: Bearer <발급받은 MCP 키>
 | 도구 | 역할 |
 | --- | --- |
 | `whoami` | 인증된 사용자 확인 |
+| `get_server_version` | 실행 중인 배포 커밋과 DB 스키마 버전(적용/기대 마이그레이션 수) 확인 |
 | `create_project`, `list_projects` | 프로젝트 생성·조회 |
 | `set_project_member`, `list_project_members` | 참여자 권한 관리 |
 | `create_document`, `update_document` | 지식 추가·버전 기반 수정 |
@@ -203,6 +204,8 @@ Authorization: Bearer <발급받은 MCP 키>
 - 웹 **지식 검색** 화면에서 프로젝트를 골라(기본: 전체) 같은 검색을 실행하고 결과 본문을 바로 열람합니다.
 
 모델 준비 후 MCP에서 문서를 저장하고 `get_embedding_status`의 `ready` 증가를 확인한 다음, `search_knowledge`에 `mode: "semantic"`을 지정해 검사합니다. `/healthz`는 DB 연결 상태만 검사하며 모델 준비 여부를 보장하지 않습니다.
+
+배포 확인은 `GET /version`(인증 불필요) 또는 MCP `get_server_version`을 사용합니다. 응답의 `commit`이 배포한 커밋이고, `schema_version`이 `schema_expected`와 같으면(`schema_current: true`) 모든 마이그레이션이 적용된 상태입니다. 커밋은 Docker 빌드 인자 `RAILWAY_GIT_COMMIT_SHA`(`commit_source: build`), 런타임 변수(`railway`), 로컬 Go VCS 정보(`vcs`) 순으로 찾고 없으면 `unknown`입니다. 응답에는 커밋 해시·스키마 번호·프로세스 시작 시각만 담기며 비밀값은 포함하지 않습니다.
 
 참고: [Ollama 임베딩 API](https://docs.ollama.com/api/embed), [bge-m3 모델](https://ollama.com/library/bge-m3), [Ollama 로컬 설정](https://docs.ollama.com/faq), [pgvector](https://github.com/pgvector/pgvector).
 

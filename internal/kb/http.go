@@ -58,6 +58,22 @@ func (a *App) Handler() http.Handler {
 		}
 		w.Write([]byte("ok"))
 	})
+	// Public, unauthenticated: commit and schema numbers only, so operators can
+	// confirm which build and migrations are live without platform access.
+	mux.HandleFunc("GET /version", func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+		defer cancel()
+		w.Header().Set("Cache-Control", "no-store")
+		v, err := serverVersion(ctx, a.Store.DB)
+		if err != nil {
+			commit, source := buildCommit()
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"commit": commit, "commit_source": source, "schema_expected": len(migrationScripts)}, "error": map[string]string{"code": "DATABASE_UNAVAILABLE", "message": "Schema version is unavailable."}})
+			return
+		}
+		a.json(w, v)
+	})
 	mux.HandleFunc("POST /api/login", func(w http.ResponseWriter, r *http.Request) {
 		if !a.origin(w, r) {
 			return

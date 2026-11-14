@@ -80,6 +80,9 @@ type ContextInput struct {
 func NewTools(s *Store) Tools {
 	t := Tools{}
 	add(t, s, "whoami", "Return the authenticated user. User identity cannot be supplied as an argument.", false, nil, func(ctx context.Context, tx *sql.Tx, a Identity, _ struct{}) (any, error) { return a.User, nil })
+	add(t, s, "get_server_version", "Return the deployed commit and database schema version (applied vs expected migrations). Use to confirm a deployment.", false, nil, func(ctx context.Context, tx *sql.Tx, a Identity, _ struct{}) (any, error) {
+		return serverVersion(ctx, tx)
+	})
 	add(t, s, "create_project", "Create a project. The creator is its owner.", true, nil, func(ctx context.Context, tx *sql.Tx, a Identity, in CreateProjectInput) (any, error) {
 		if !slugPattern.MatchString(in.Slug) {
 			return nil, problem("INVALID_INPUT", "Use a lowercase slug with letters, digits, or hyphens (1–80 characters).")
@@ -217,7 +220,11 @@ func NewTools(s *Store) Tools {
 	return t
 }
 func (t Tools) MCP(actor Identity) *mcp.Server {
-	server := mcp.NewServer(&mcp.Implementation{Name: "project-knowledge", Version: "0.1.0"}, nil)
+	version := "0.1.0"
+	if commit, _ := buildCommit(); commit != "unknown" {
+		version += "+" + commit[:7]
+	}
+	server := mcp.NewServer(&mcp.Implementation{Name: "project-knowledge", Version: version}, nil)
 	for _, tool := range t {
 		tool.Register(server, actor)
 	}
