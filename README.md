@@ -20,6 +20,7 @@ Go로 만든 팀 공용 지식 서버입니다. 프로젝트별 기획·결정·
 - 이슈·질의 베이스: 공통 작업 영역과 담당자, 질의·이슈 등록·답변·해결, 작업 시작 시 관련 질의 표시, 질의응답의 지식 문서화([안내](docs/issues.md))
 - 팀 확산([안내](docs/team-rollout.md)): 이슈 담당자 알림(웹훅·Slack·이메일), 웹 문서 관계 보기·편집, 문서 버전 비교, 검토 대기 사이드바 배지, 공통 작업 영역 삭제·정리, 다른 저장소용 AGENTS.md 생성, 프로젝트 내보내기·가져오기(JSON·Markdown)
 - 지식 품질과 AI 작업 흐름: 중복·충돌 결정 감지, 재확인 담당자·주기 요약, start_task 맥락 활용도 피드백과 검색 품질 지표, finish_task 결정 후보 추출, 오래 열린 작업 정리, 용어집(glossary)과 검색 동의어 확장([안내](docs/knowledge-quality.md))
+- 사용 통계 대시보드: 프로젝트별 도구 호출·활성 사용자·검색·문서 열람·작성·작업 수의 일별 추이, 많이 쓴 도구·활동 사용자·많이 열람한 문서, 보유 현황, 검색 품질(`get_usage_stats`, 웹 '사용 통계')
 - 공식 Go MCP SDK 기반 Streamable HTTP `/mcp`
 - Railway용 Dockerfile, 배포 전 마이그레이션, `/healthz`, 배포 커밋·스키마 버전 확인 `/version`
 
@@ -143,6 +144,7 @@ Authorization: Bearer <발급받은 MCP 키>
 | `list_work_areas`, `set_work_area` | 공통 작업 영역과 담당자 조회·관리 |
 | `create_issue`, `list_issues`, `get_issue` | 질의·이슈 등록·목록(상태·담당자·검색어 필터)·상세 |
 | `answer_issue`, `comment_issue`, `update_issue` | 답변·댓글·해결/닫기/다시 열기, 질의응답 지식 문서화(`publish_answer`) |
+| `get_usage_stats` | 프로젝트 사용 통계(최근 1~365일, 기본 30일, 한국 시간 일 단위): 합계·일별 추이·상위 도구·사용자·열람 문서·보유 현황 |
 
 문서 종류는 `brief`, `decision`, `history`, `artifact`, `reference`입니다. 상태는 `draft`, `active`, `archived`이고 기본 검색에는 활성 문서의 최신 버전만 포함됩니다. `update_document`는 `expected_revision`과 수정 이유 `reason`이 필요합니다. 충돌하면 최신 내용을 읽고 변경을 병합해야 합니다.
 
@@ -294,6 +296,7 @@ TEST_DATABASE_URL='<test-only PostgreSQL URL>' TEST_OLLAMA_URL=http://localhost:
 - `internal/kb/embedding_worker.go`: 비동기 생성·pgvector 저장·재시도
 - `internal/kb/vector_search.go`: 질문 임베딩·권한 범위 내 의미 검색·하이브리드 순위
 - `internal/kb/issues.go`, `web/issues.js`: 이슈·질의 베이스와 작업 시작 연동
+- `internal/kb/usage.go`, `web/usage.js`: 사용 통계 집계와 대시보드
 - `migrations/003_embeddings.sql`: 벡터 컬럼과 작업 대기열
 - `migrations/`: 버전 관리되는 DB 스키마
 
