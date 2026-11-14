@@ -81,7 +81,7 @@ type CountInput struct {
 type ContextInput struct {
 	ProjectID     string `json:"project_id"`
 	Task          string `json:"task"`
-	ExcerptBudget int    `json:"excerpt_budget,omitempty"`
+	ExcerptBudget int    `json:"excerpt_budget,omitempty" jsonschema:"Maximum total excerpt characters, 1000 to 20000; omit for the default 8000"`
 }
 
 func NewTools(s *Store) Tools {

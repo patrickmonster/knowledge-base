@@ -19,7 +19,7 @@ type StartTaskInput struct {
 	RequestKey    string `json:"request_key" jsonschema:"Stable unique identifier for this task; reuse with identical inputs on retries, never put credentials here"`
 	Title         string `json:"title" jsonschema:"Short task title, up to 150 characters"`
 	Task          string `json:"task" jsonschema:"Requested work and retrieval query, up to 1000 characters"`
-	ExcerptBudget int    `json:"excerpt_budget,omitempty"`
+	ExcerptBudget int    `json:"excerpt_budget,omitempty" jsonschema:"Maximum total excerpt characters, 1000 to 20000; omit for the default 8000"`
 }
 type TaskRef struct {
 	ProjectID string `json:"project_id"`
