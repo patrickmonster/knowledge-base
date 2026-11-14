@@ -71,6 +71,6 @@ MCP 도구와 기존 작업 흐름(`start_task`·`finish_task`)에 붙는 품질
 
 ## 마이그레이션
 
-`014_search_misses.sql`은 결과 0건 검색어 테이블 `search_misses`를 추가합니다(스키마 버전 14).
+`015_search_misses.sql`은 결과 0건 검색어 테이블 `search_misses`를 추가합니다(스키마 버전 15).
 
 `012_knowledge_quality.sql`은 documents의 kind 제약에 glossary를 추가하고, `recheck_assignments`·`task_source_feedback` 테이블과 task_runs의 피드백·닫힘 열과 `abandoned` 상태를 추가합니다. `migrationScripts`에서 011(`011_team_rollout.sql`) 다음, 스키마 버전 12로 적용됩니다.

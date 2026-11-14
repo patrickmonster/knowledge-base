@@ -14,6 +14,14 @@ AI가 프로젝트에서 커밋하거나 작업할 때 따를 규칙을 저장�
 - 다른 참여자의 개별 규칙은 `NOT_FOUND`로 처리해 존재 여부를 드러내지 않는다.
 - 감사 로그에는 규칙 ID·scope·category만 남고 제목·내용은 복사하지 않는다.
 
+## 사용 / 미사용
+규칙을 지우지 않고 잠시 끌 수 있다. 웹 규칙 표의 **사용** 열 스위치로 바꾸며, 권한은 삭제와 같다(소유자 규칙은 소유자·관리자가 웹 화면에서, 개별 규칙은 본인이 웹 화면이나 쓰기 가능한 MCP 키로).
+
+- `set_rule_enabled`(`project_id`, `rule_id`, `enabled`). 상태가 바뀌면 revision이 1 올라가므로 열려 있던 수정 창은 `CONFLICT`가 난다. 같은 값을 다시 보내면 그대로 돌려준다.
+- 미사용 규칙(`enabled: false`)은 `start_task`/`get_task_context`의 `context.rules`와 `list_rules` 기본 결과에서 빠진다. AI는 따르지 않는다.
+- 웹 화면은 `list_rules`의 `include_disabled: true`로 미사용 규칙도 받아 흐리게 표시한다.
+- 미사용 규칙도 개수 제한(50개)에 포함된다.
+
 ## 프로젝트 관리자 역할
 소유자는 **프로젝트 → 참여자**에서 `관리자 — 편집 + 소유자 규칙 관리`를 부여한다(`set_project_member`, `role: admin`). 관리자는 편집자 권한에 소유자 규칙 관리를 더한 역할이며, 참여자 관리·재색인·소유자 이전은 할 수 없다. 소유자를 관리자에게 이전할 수 있고, 이전 소유자는 관리자로 남을 수도 있다.
 
@@ -22,7 +30,7 @@ AI가 프로젝트에서 커밋하거나 작업할 때 따를 규칙을 저장�
 
 ## AI 사용
 - `start_task`/`get_task_context`의 `context.rules`에 `project_rules`, `personal_rules`, `guidance`가 담긴다(규칙이 없으면 생략).
-- `list_rules`: 현재 규칙 다시 읽기. `save_rule`, `delete_rule`: 개별 규칙 관리(소유자 규칙은 웹 화면에서).
+- `list_rules`: 현재 사용 중인 규칙 다시 읽기. `save_rule`, `delete_rule`, `set_rule_enabled`: 개별 규칙 관리(소유자 규칙은 웹 화면에서).
 - 규칙은 권한 있는 참여자가 쓴 지시이므로 검색 결과(sources)와 달리 따른다. 규칙이 불명확하거나 작업을 막으면 사용자에게 묻는다.
 
 ### 규칙 전달 경로
@@ -36,3 +44,4 @@ AI가 프로젝트에서 커밋하거나 작업할 때 따를 규칙을 저장�
 
 ## 마이그레이션
 `migrations/013_project_rules.sql`: `project_members.role`에 `admin` 허용, `project_rules` 테이블 추가.
+`migrations/014_rule_enabled.sql`: `project_rules.enabled`(기본 true) 추가. 기존 규칙은 모두 사용 상태로 남는다.
