@@ -176,7 +176,8 @@ func (s *Store) ListKeys(ctx context.Context, actor Identity) (any, error) {
 func (s *Store) Users(ctx context.Context, actor Identity) (any, error) {
 	return s.Perform(ctx, actor, "list_users", "", false, true, func(tx *sql.Tx) (any, error) {
 		return many[map[string]any](ctx, tx, `SELECT jsonb_build_object('id',id,'email',email,'name',name,'global_role',global_role,
-		'disabled',disabled,'activated',password_hash<>'') FROM users ORDER BY created_at DESC LIMIT 200`)
+		'disabled',disabled,'activated',password_hash<>'',
+		'mfa_enabled',EXISTS(SELECT 1 FROM user_mfa m WHERE m.user_id=users.id AND m.enabled_at IS NOT NULL)) FROM users ORDER BY created_at DESC LIMIT 200`)
 	})
 }
 
@@ -213,7 +214,7 @@ func (s *Store) Stats(ctx context.Context, actor Identity) (any, error) {
 		'active_keys',(SELECT count(*) FROM api_keys k JOIN users u ON u.id=k.user_id WHERE NOT u.disabled AND k.revoked_at IS NULL AND (k.expires_at IS NULL OR k.expires_at>now())),
 		'requests_24h',count(*),'denied_24h',count(*) FILTER(WHERE outcome='denied'),
 		'errors_24h',count(*) FILTER(WHERE outcome='error'),
-		'login_failures_24h',count(*) FILTER(WHERE action='login' AND outcome='denied'),
+		'login_failures_24h',count(*) FILTER(WHERE action IN ('login','login_mfa') AND outcome='denied'),
 		'average_duration_ms',coalesce(round(avg(duration_ms)),0)) FROM audit_events WHERE created_at>now()-interval '24 hours'`)
 	})
 }
