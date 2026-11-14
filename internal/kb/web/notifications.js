@@ -26,7 +26,7 @@ async function notificationCard(project) {
   if (!owner) { c.append(el('p','알림 채널은 프로젝트 소유자가 관리합니다.','small muted')); return c; }
   const f=el('form');
   f.append(el('h3','채널 추가'));
-  const kind=selectField(f,'종류','kind',[['slack','Slack — incoming webhook URL'],['webhook','웹훅 — 임의 HTTPS 주소에 JSON 전송'],['email','이메일 — 받는 사람 계정 주소로 발송 (서버 SMTP 설정 필요)']]);
+  const kind=selectField(f,'종류','kind',[['slack','Slack — incoming webhook URL'],['webhook','웹훅 — HTTPS 주소에 JSON 전송 (Discord 웹훅 주소 자동 지원)'],['email','이메일 — 받는 사람 계정 주소로 발송 (서버 SMTP 설정 필요)']]);
   const name=field(f,'이름','name');name.maxLength=100;name.placeholder='예: #team-knowledge';
   const target=field(f,'주소 (HTTPS)','target','url');target.maxLength=2000;target.placeholder='https://hooks.slack.com/services/…';
   const events=el('fieldset',undefined,'search-scope');events.append(el('legend','보낼 알림'));

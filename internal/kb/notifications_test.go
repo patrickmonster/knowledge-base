@@ -129,6 +129,55 @@ func TestNotifierPost(t *testing.T) {
 	}
 }
 
+func TestDiscordWebhook(t *testing.T) {
+	for target, want := range map[string]bool{
+		"https://discord.com/api/webhooks/123/token":        true,
+		"https://DISCORDAPP.com/api/webhooks/123/token":     true,
+		"https://ptb.discord.com/api/webhooks/123/token":    true,
+		"https://canary.discord.com/api/webhooks/123/token": true,
+		"https://discord.com/channels/1/2":                  false,
+		"https://evil.example.com/api/webhooks/123/token":   false,
+		"https://discord.com.evil.example/api/webhooks/1/t": false,
+		"https://hooks.slack.com/services/a/b/c":            false,
+		"::bad":                                             false,
+	} {
+		if got := isDiscordWebhook(target); got != want {
+			t.Errorf("isDiscordWebhook(%q) = %v, want %v", target, got, want)
+		}
+	}
+
+	p := testPayload()
+	p.IssueTitle = "@everyone 세션 만료?"
+	var body struct {
+		Content         string `json:"content"`
+		Username        string `json:"username"`
+		AllowedMentions struct {
+			Parse []string `json:"parse"`
+		} `json:"allowed_mentions"`
+		IssueTitle *string `json:"issue_title"`
+	}
+	if err := json.Unmarshal(discordBody(p), &body); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(body.Content, "[결제] 질의 담당 배정: @everyone 세션 만료?") || body.Username != "knowledge-base" {
+		t.Fatalf("unexpected Discord body: %+v", body)
+	}
+	if body.AllowedMentions.Parse == nil || len(body.AllowedMentions.Parse) != 0 {
+		t.Fatalf("mentions must be disabled: %+v", body.AllowedMentions)
+	}
+	if body.IssueTitle != nil {
+		t.Fatal("Discord body must not carry the generic webhook fields")
+	}
+
+	p.IssueTitle = strings.Repeat("가", 3000)
+	if err := json.Unmarshal(discordBody(p), &body); err != nil {
+		t.Fatal(err)
+	}
+	if n := len([]rune(body.Content)); n != discordContentLimit || !strings.HasSuffix(body.Content, "…") {
+		t.Fatalf("content not truncated to the Discord limit: %d runes", n)
+	}
+}
+
 func TestNotifierEmail(t *testing.T) {
 	job := outboxJob{ID: "mail-1", Event: eventIssueAnswered, Kind: "email", RecipientEmail: "owner@example.com", Payload: testPayload()}
 	// The message text comes from the stored payload's event, not the job column.

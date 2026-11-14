@@ -68,7 +68,7 @@ type NotificationChannelInput struct {
 	ChannelID string   `json:"channel_id,omitempty" jsonschema:"Existing channel to update or remove; omit to create"`
 	Kind      string   `json:"kind,omitempty" jsonschema:"webhook, slack, or email"`
 	Name      string   `json:"name,omitempty"`
-	Target    string   `json:"target,omitempty" jsonschema:"HTTPS URL for webhook/slack; empty keeps the current URL when updating; unused for email"`
+	Target    string   `json:"target,omitempty" jsonschema:"HTTPS URL for webhook/slack (a Discord webhook URL gets Discord-formatted messages); empty keeps the current URL when updating; unused for email"`
 	Events    []string `json:"events,omitempty" jsonschema:"issue_assigned, issue_answered, issue_commented, issue_status; empty means all"`
 	Enabled   *bool    `json:"enabled,omitempty"`
 	Remove    bool     `json:"remove,omitempty"`
@@ -647,10 +647,44 @@ func (n *Notifier) deliver(ctx context.Context, job outboxJob) error {
 		body, _ := json.Marshal(map[string]string{"text": notificationText(job.Payload)})
 		return n.post(ctx, job, body)
 	case "webhook":
+		if isDiscordWebhook(job.Target) {
+			return n.post(ctx, job, discordBody(job.Payload))
+		}
 		body, _ := json.Marshal(job.Payload)
 		return n.post(ctx, job, body)
 	}
 	return &deliveryError{Code: "UNKNOWN_CHANNEL", Permanent: true}
+}
+
+// discordHosts serve Discord incoming webhooks (https://<host>/api/webhooks/<id>/<token>).
+var discordHosts = map[string]bool{"discord.com": true, "discordapp.com": true, "ptb.discord.com": true, "canary.discord.com": true}
+
+// discordContentLimit is Discord's maximum message length in characters.
+const discordContentLimit = 2000
+
+// isDiscordWebhook reports whether a webhook channel points at Discord, which
+// rejects the generic JSON body and needs {"content": ...} instead.
+func isDiscordWebhook(target string) bool {
+	u, err := url.Parse(target)
+	if err != nil {
+		return false
+	}
+	return discordHosts[strings.ToLower(u.Hostname())] && strings.HasPrefix(u.Path, "/api/webhooks/")
+}
+
+// discordBody formats a notification as a Discord webhook message. Mentions
+// are disabled so issue titles or names cannot ping @everyone or roles.
+func discordBody(p notificationPayload) []byte {
+	text := []rune(notificationText(p))
+	if len(text) > discordContentLimit {
+		text = append(text[:discordContentLimit-1], '…')
+	}
+	body, _ := json.Marshal(map[string]any{
+		"content":          string(text),
+		"username":         "knowledge-base",
+		"allowed_mentions": map[string]any{"parse": []string{}},
+	})
+	return body
 }
 
 func (n *Notifier) post(ctx context.Context, job outboxJob, body []byte) error {
