@@ -268,7 +268,7 @@ func (t Tools) MCP(actor Identity) *mcp.Server {
 	if commit, _ := buildCommit(); commit != "unknown" {
 		version += "+" + commit[:7]
 	}
-	server := mcp.NewServer(&mcp.Implementation{Name: "project-knowledge", Version: version}, nil)
+	server := mcp.NewServer(&mcp.Implementation{Name: "project-knowledge", Version: version}, &mcp.ServerOptions{Instructions: serverInstructions})
 	for _, tool := range t {
 		tool.Register(server, actor)
 	}
