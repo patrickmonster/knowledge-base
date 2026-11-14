@@ -183,6 +183,7 @@ func (a *App) Handler() http.Handler {
 		return a.Store.AuditLog(r.Context(), id, in)
 	})
 	a.sessionRoute(mux, "GET /api/admin/stats", func(r *http.Request, id Identity) (any, error) { return a.Store.Stats(r.Context(), id) })
+	a.sessionRoute(mux, "GET /api/admin/retention", func(r *http.Request, id Identity) (any, error) { return a.Store.RetentionStatus(r.Context(), id) })
 	a.sessionRoute(mux, "POST /api/vectors/map", func(r *http.Request, id Identity) (any, error) {
 		var in VectorMapInput
 		if err := decode(r, &in); err != nil {
@@ -361,8 +362,12 @@ func (a *App) fail(w http.ResponseWriter, err error) {
 	case "RATE_LIMITED":
 		status = 429
 		w.Header().Set("Retry-After", "900")
-	case "STORAGE_UNAVAILABLE":
+	case "STORAGE_UNAVAILABLE", "SCAN_UNAVAILABLE":
 		status = 503
+	case "QUOTA_EXCEEDED":
+		status = 413
+	case "BLOCKED_FILE", "MALWARE_DETECTED":
+		status = 422
 	}
 	if status == 500 {
 		slog.Error("request failed", "code", code)
