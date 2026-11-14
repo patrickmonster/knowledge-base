@@ -28,6 +28,7 @@ async function reviewsPage() {
     }
     if (ticket!==generation) return;
     const canReview=current.role==='owner'||current.role==='editor';
+    if (current.id===currentProjectID) refreshReviewBadge();
     summary.textContent=`검토 대기 ${drafts.length}건`+(canReview?'':' · 조회 권한만 있어 승인·반려할 수 없습니다.');
     if (!drafts.length) { list.replaceChildren(el('p','검토할 draft 문서가 없습니다.','empty')); return; }
     list.replaceChildren(...drafts.map(d=>draftCard(current,d,canReview)));
@@ -57,6 +58,7 @@ async function reviewsPage() {
       if (!confirm(question)) return;
       await tool('review_document',{project_id:current.id,document_id:d.id,expected_revision:d.revision,decision,reason:text});
       notify(decision==='approve'?'승인했습니다. 이제 검색 대상입니다.':'반려했습니다. 문서는 보관 상태로 남습니다.');
+      refreshReviewBadge();
       await refresh();
     };
     actions.append(btn('승인',decide('approve','이 문서를 active로 승인할까요?'),''),btn('반려',decide('reject','이 문서를 반려하고 보관(archived)할까요?'),'danger'));

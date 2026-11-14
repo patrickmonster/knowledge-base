@@ -58,4 +58,4 @@ MCP 도구와 기존 작업 흐름(`start_task`·`finish_task`)에 붙는 품질
 
 ## 마이그레이션
 
-`012_knowledge_quality.sql`은 documents의 kind 제약에 glossary를 추가하고, `recheck_assignments`·`task_source_feedback` 테이블과 task_runs의 피드백·닫힘 열과 `abandoned` 상태를 추가합니다. 2단계 브랜치가 011을 사용하므로 012로 이름 지었습니다. 브랜치를 병합할 때 `migrationScripts`에서 011 다음에 오도록 순서를 맞춰야 합니다.
+`012_knowledge_quality.sql`은 documents의 kind 제약에 glossary를 추가하고, `recheck_assignments`·`task_source_feedback` 테이블과 task_runs의 피드백·닫힘 열과 `abandoned` 상태를 추가합니다. `migrationScripts`에서 011(`011_team_rollout.sql`) 다음, 스키마 버전 12로 적용됩니다.

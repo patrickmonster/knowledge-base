@@ -1,6 +1,5 @@
 -- 3단계 · 지식 품질과 AI 작업 흐름
--- Numbered 012 because 011 is reserved by the team-rollout branch; keep this
--- script after 011 in migrationScripts when the branches are merged.
+-- Applied after 011_team_rollout.sql (schema version 12).
 
 -- Glossary documents define a term and its synonyms; search expands queries
 -- with them. Drop the original kind CHECK by definition, not by guessed name.

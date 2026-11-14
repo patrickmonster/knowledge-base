@@ -32,5 +32,8 @@ var DocumentLinks string
 //go:embed 010_issues.sql
 var Issues string
 
+//go:embed 011_team_rollout.sql
+var TeamRollout string
+
 //go:embed 012_knowledge_quality.sql
 var KnowledgeQuality string

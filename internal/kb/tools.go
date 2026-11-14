@@ -71,6 +71,11 @@ type MemberInput struct {
 	UserID    string `json:"user_id"`
 	Role      string `json:"role" jsonschema:"editor, viewer, or remove; only the owner may change members"`
 }
+type CountInput struct {
+	ProjectID string `json:"project_id"`
+	Status    string `json:"status,omitempty" jsonschema:"draft, active, or archived; omitted counts all"`
+	Kind      string `json:"kind,omitempty"`
+}
 type ContextInput struct {
 	ProjectID     string `json:"project_id"`
 	Task          string `json:"task"`
@@ -166,6 +171,20 @@ func NewTools(s *Store) Tools {
 	add(t, s, "list_documents", "Browse document metadata; use get_document to read the body. Filter by kind, status, tags (all must match), updated_after/updated_before, and author (creator or last editor user ID). Active reference/brief documents not updated for stale_days (default 90) have needs_recheck=true; stale_only lists only those. Re-verify needs_recheck documents before relying on them.", false, func(in ListInput) string { return in.ProjectID }, func(ctx context.Context, tx *sql.Tx, a Identity, in ListInput) (any, error) {
 		return listDocuments(ctx, tx, a, in)
 	})
+	add(t, s, "count_documents", "Count documents by status and kind without reading them, e.g. status=draft for the review queue.", false, func(in CountInput) string { return in.ProjectID }, func(ctx context.Context, tx *sql.Tx, a Identity, in CountInput) (any, error) {
+		if _, err := projectAccess(ctx, tx, a.User.ID, in.ProjectID, false); err != nil {
+			return nil, err
+		}
+		if in.Status != "" && !validStatus(in.Status) {
+			return nil, problem("INVALID_INPUT", "Unknown status.")
+		}
+		if in.Kind != "" && !validKind(in.Kind) {
+			return nil, problem("INVALID_INPUT", "Unknown kind.")
+		}
+		var count int
+		err := tx.QueryRowContext(ctx, `SELECT count(*) FROM documents WHERE project_id=$1 AND ($2='' OR status=$2) AND ($3='' OR kind=$3)`, in.ProjectID, in.Status, in.Kind).Scan(&count)
+		return map[string]any{"project_id": in.ProjectID, "status": in.Status, "kind": in.Kind, "count": count}, err
+	})
 	add(t, s, "get_document_history", "Read up to 50 recent revisions, authors and reasons. Use get_document with revision for old content.", false, func(in DocumentRef) string { return in.ProjectID }, func(ctx context.Context, tx *sql.Tx, a Identity, in DocumentRef) (any, error) {
 		if _, err := getDocument(ctx, tx, a, DocumentRef{ProjectID: in.ProjectID, DocumentID: in.DocumentID}); err != nil {
 			return nil, err
@@ -215,7 +234,10 @@ func NewTools(s *Store) Tools {
 	registerAttachmentTools(t, s)
 	registerLinkTools(t, s)
 	registerReviewTools(t, s)
+	registerOwnershipTools(t, s)
 	registerIssueTools(t, s)
+	registerNotificationTools(t, s)
+	registerAgentsTools(t, s)
 	registerQualityTools(t, s)
 
 	return t
