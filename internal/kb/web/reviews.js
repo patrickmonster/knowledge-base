@@ -3,20 +3,17 @@
 const reviewKinds={brief:'기획',decision:'결정',history:'작업 이력',artifact:'산출물',reference:'참고',glossary:'용어집'};
 
 async function reviewsPage() {
-  const root=el('div'), projects=[];
+  const projects=[];
   for (let offset=0; offset<=100000; offset+=50) {
     const batch=await tool('list_projects',{limit:50,offset});
     projects.push(...batch); if(batch.length<50)break;
   }
-  const controls=card('검토 대기');
-  controls.append(el('p','AI나 팀원이 draft로 저장한 기획·결정 문서입니다. 본문을 확인한 뒤 사유와 함께 승인(active) 또는 반려(archived)합니다. 사유는 문서 버전 기록에 남습니다.','muted'));
-  controls.append(el('p','draft 문서는 기본 검색과 작업 시작 조회에 포함되지 않습니다. 승인하면 바로 검색 대상이 됩니다. 검토는 로그인한 사람만 할 수 있으며 MCP 키로는 할 수 없습니다.','small muted'));
-  root.append(controls);
-  if (!projects.length) { controls.append(el('p','먼저 프로젝트에 참여해 주세요.','empty')); return root; }
+  const root=el('div',undefined,'review-page');
+  if (!projects.length) { root.append(el('p','먼저 프로젝트에 참여해 주세요.','empty')); return root; }
   const project=projectSelect(projects);
   const summary=el('p','','small muted');summary.setAttribute('role','status');
-  const list=el('div');
-  controls.append(summary);root.append(list);
+  const list=el('div',undefined,'review-grid');
+  root.append(summary,list);
   let generation=0;
   async function refresh() {
     const ticket=++generation, current=projects.find(p=>p.id===project.value);
@@ -34,20 +31,11 @@ async function reviewsPage() {
     list.replaceChildren(...drafts.map(d=>draftCard(current,d,canReview)));
   }
   function draftCard(current,d,canReview) {
-    const c=card(d.title);
-    c.append(el('p',`${reviewKinds[d.kind]||d.kind} · 버전 ${d.revision} · 수정 ${new Date(d.updated_at).toLocaleString()}`,'small muted'));
-    if (d.tags?.length) c.append(el('p',d.tags.join(' · '),'small'));
-    const body=el('details'), summaryLine=el('summary','본문 보기'), content=el('div');
-    body.append(summaryLine,content);
-    body.addEventListener('toggle',async()=>{
-      if (!body.open||content.childElementCount) return;
-      content.append(el('p','불러오는 중…','muted'));
-      try {
-        const doc=await tool('get_document',{project_id:current.id,document_id:d.id});
-        content.replaceChildren(renderMarkdown(doc.content,'vector-content'));
-      } catch(e) { content.replaceChildren(el('p',e.message,'muted')); }
-    });
-    c.append(body);
+    const c=card(d.title);c.classList.add('review-card');
+    const meta=el('p',`${reviewKinds[d.kind]||d.kind} · 버전 ${d.revision} · 수정 ${new Date(d.updated_at).toLocaleString()}`,'small muted');
+    c.append(meta);
+    if (d.tags?.length) c.append(el('p',d.tags.join(' · '),'small review-tags'));
+    c.append(btn('본문 보기',()=>openDraftDialog(c,current,d,meta.textContent),'secondary review-open'));
     if (!canReview) return c;
     const label=el('label','검토 사유 (필수, 버전 기록에 남음)'), reason=el('textarea');
     reason.rows=2;reason.maxLength=900;reason.required=true;label.append(reason);
@@ -68,4 +56,19 @@ async function reviewsPage() {
   project.addEventListener('change',()=>refresh().catch(e=>notify(e.message,true)));
   await refresh();
   return root;
+}
+
+// Shows a draft's full Markdown body in a modal; it closes on 닫기, Esc or a backdrop click.
+function openDraftDialog(parent,project,d,metaText) {
+  const dialog=el('dialog',undefined,'review-dialog'), content=el('div',undefined,'review-dialog-body');
+  content.append(el('p','불러오는 중…','muted'));
+  const close=btn('닫기',()=>dialog.close(),'secondary');
+  dialog.append(el('h2',d.title),el('p',metaText,'small muted'),content,el('div',undefined,'actions review-dialog-actions'));
+  dialog.lastElementChild.append(close);
+  dialog.addEventListener('close',()=>dialog.remove(),{once:true});
+  dialog.addEventListener('click',e=>{if(e.target!==dialog)return;const r=dialog.getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)dialog.close();});
+  parent.append(dialog);dialog.showModal();close.focus();
+  tool('get_document',{project_id:project.id,document_id:d.id})
+    .then(doc=>content.replaceChildren(renderMarkdown(doc.content,'vector-content')))
+    .catch(e=>content.replaceChildren(el('p',e.message,'muted')));
 }
