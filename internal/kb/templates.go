@@ -54,6 +54,12 @@ func documentTemplates() []DocumentTemplate {
 			{"remaining", "남은 문제와 다음 작업", "제약·미완료·다음 할 일. 없으면 없음으로 명시"},
 			{"references", "근거와 출처", "확인된 문서·버전·브랜치·커밋·PR. 미커밋/미배포 상태 구분"},
 		}},
+		{Kind: "glossary", Name: "용어집", Sections: []TemplateSection{
+			{"definition", "정의", "이 프로젝트에서 이 용어가 뜻하는 것. 제목은 용어 자체로 쓴다"},
+			{"synonyms", "동의어", "쉼표로 구분한 동의어·별칭·영문 표기·약어. 검색할 때 이 용어와 함께 확장된다. 없으면 없음"},
+			{"usage", "사용 맥락과 예시", "쓰이는 화면·코드·문서와 혼동하기 쉬운 용어"},
+			{"references", "근거와 출처", "확인한 문서 ID·버전, 링크. 없으면 없음으로 명시"},
+		}},
 	}
 	for i := range items {
 		items[i].Version = 1
@@ -64,7 +70,7 @@ func documentTemplates() []DocumentTemplate {
 }
 
 type TemplateDraft struct {
-	Kind      string            `json:"kind" jsonschema:"brief, decision, or history"`
+	Kind      string            `json:"kind" jsonschema:"brief, decision, history, or glossary"`
 	Title     string            `json:"title"`
 	Sections  map[string]string `json:"sections" jsonschema:"Fill every required section from get_document_templates; explicitly state unknown or not applicable instead of inventing facts"`
 	Tags      []string          `json:"tags,omitempty"`
@@ -101,7 +107,7 @@ func renderTemplate(d TemplateDraft) (string, error) {
 			return b.String(), nil
 		}
 	}
-	return "", problem("INVALID_INPUT", "Choose the brief, decision, or history template.")
+	return "", problem("INVALID_INPUT", "Choose the brief, decision, history, or glossary template.")
 }
 func createTemplatedDocument(ctx context.Context, tx *sql.Tx, a Identity, in TemplateDocumentInput) (any, error) {
 	content, err := renderTemplate(in.TemplateDraft)
@@ -111,5 +117,5 @@ func createTemplatedDocument(ctx context.Context, tx *sql.Tx, a Identity, in Tem
 	if in.Status == "" {
 		in.Status = "draft"
 	}
-	return createDocument(ctx, tx, a, DocumentInput{ProjectID: in.ProjectID, Title: in.Title, Kind: in.Kind, Content: content, Tags: in.Tags, Status: in.Status, SourceURL: in.SourceURL})
+	return createDocumentChecked(ctx, tx, a, DocumentInput{ProjectID: in.ProjectID, Title: in.Title, Kind: in.Kind, Content: content, Tags: in.Tags, Status: in.Status, SourceURL: in.SourceURL})
 }

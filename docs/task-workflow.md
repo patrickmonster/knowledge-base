@@ -18,6 +18,8 @@
 
 작업을 마치기 전에:
 1. finish_task에 run.id, 실제 outcome, summary, changes, decisions, validation, remaining, references를 전달한다.
+   실제로 근거로 쓴 문서 ID는 used_sources, 찾지 못한 지식은 missing_knowledge로 함께 전달한다.
+   응답의 decision_candidates·similar_decisions는 제안이므로 사용자 확인 후에만 저장·연결한다.
 2. 추가 기획·결정 문서가 필요하면 documents에 양식별 sections를 채워 함께 저장한다. 확정된 내용만 active로 지정한다.
 3. 결과의 history 문서를 작업 이력으로 사용한다. 같은 이력을 create_document로 다시 만들지 않는다.
 4. get_document로 저장된 문서와 버전을 확인하고 get_embedding_status로 검색 준비 상태를 확인한다.

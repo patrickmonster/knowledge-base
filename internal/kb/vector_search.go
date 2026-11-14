@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -47,8 +48,19 @@ func (s *Store) searchProjects(ctx context.Context, tx *sql.Tx, projectIDs []str
 	if err != nil || len(projectIDs) == 0 {
 		return out, err
 	}
+	// Glossary synonyms widen both keyword and embedding queries. The original
+	// query was validated above; expansion only appends known terms.
+	query := in.Query
+	if !in.NoSynonyms {
+		if out.ExpandedTerms, err = glossaryExpansion(ctx, tx, scope, in.Query); err != nil {
+			return out, err
+		}
+		if len(out.ExpandedTerms) > 0 {
+			query += " " + strings.Join(out.ExpandedTerms, " ")
+		}
+	}
 	if in.Mode == "lexical" {
-		out.Hits, err = lexicalHits(ctx, tx, scope, in.Query, in.Status, limit)
+		out.Hits, err = lexicalHits(ctx, tx, scope, query, in.Status, limit)
 		return out, err
 	}
 	if s.Embedder == nil {
@@ -63,7 +75,7 @@ func (s *Store) searchProjects(ctx context.Context, tx *sql.Tx, projectIDs []str
 		out.Warning = "Some document chunks are still pending or failed embedding; semantic results are incomplete. Check get_embedding_status."
 	}
 	queryCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
-	vectors, err := s.Embedder.Embed(queryCtx, []string{in.Query})
+	vectors, err := s.Embedder.Embed(queryCtx, []string{query})
 	cancel()
 	if err == nil {
 		err = validateVectors(vectors, 1)
@@ -74,7 +86,7 @@ func (s *Store) searchProjects(ctx context.Context, tx *sql.Tx, projectIDs []str
 		}
 		out.Retrieval = "lexical-fallback"
 		out.Warning = "Local embedding failed (" + errorCode(err) + "). Results use keyword search only."
-		out.Hits, err = lexicalHits(ctx, tx, scope, in.Query, in.Status, limit)
+		out.Hits, err = lexicalHits(ctx, tx, scope, query, in.Status, limit)
 		return out, err
 	}
 	semantic, err := many[SearchHit](ctx, tx, `WITH scoped AS MATERIALIZED (
@@ -97,7 +109,7 @@ func (s *Store) searchProjects(ctx context.Context, tx *sql.Tx, projectIDs []str
 		out.Hits = semantic[:min(limit, len(semantic))]
 		return out, nil
 	}
-	lexical, err := lexicalHits(ctx, tx, scope, in.Query, in.Status, max(limit, min(50, limit*3)))
+	lexical, err := lexicalHits(ctx, tx, scope, query, in.Status, max(limit, min(50, limit*3)))
 	if err != nil {
 		return out, err
 	}
