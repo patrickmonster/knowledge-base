@@ -90,6 +90,10 @@ type SearchHit struct {
 	Score      float64 `json:"score"`
 	Citation   string  `json:"citation"`
 	Truncated  bool    `json:"truncated,omitempty"`
+
+	// Set only by search_across_projects so mixed results stay readable.
+	ProjectSlug string `json:"project_slug,omitempty"`
+	ProjectName string `json:"project_name,omitempty"`
 	// SupersededBy lists active documents that replace this hit; such hits are
 	// ranked after current knowledge.
 	SupersededBy []SupersedingDocument `json:"superseded_by,omitempty"`

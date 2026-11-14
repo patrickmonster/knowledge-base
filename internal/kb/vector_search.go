@@ -9,11 +9,17 @@ import (
 )
 
 func (s *Store) searchKnowledge(ctx context.Context, tx *sql.Tx, actor Identity, in SearchInput) (SearchResult, error) {
-	out := SearchResult{Hits: []SearchHit{}}
 	// Authorization precedes even query embedding, so unauthorized requests never invoke the model.
 	if _, err := projectAccess(ctx, tx, actor.User.ID, in.ProjectID, false); err != nil {
-		return out, err
+		return SearchResult{Hits: []SearchHit{}}, err
 	}
+	return s.searchProjects(ctx, tx, []string{in.ProjectID}, in)
+}
+
+// searchProjects searches projects the caller has already been authorized
+// for. in.ProjectID is ignored; scope comes from projectIDs only.
+func (s *Store) searchProjects(ctx context.Context, tx *sql.Tx, projectIDs []string, in SearchInput) (SearchResult, error) {
+	out := SearchResult{Hits: []SearchHit{}}
 	limit, err := pagination(in.Limit, 0)
 	if err != nil {
 		return out, err
@@ -37,15 +43,19 @@ func (s *Store) searchKnowledge(ctx context.Context, tx *sql.Tx, actor Identity,
 		return out, problem("INVALID_INPUT", "Choose hybrid, semantic, or lexical search.")
 	}
 	out.Retrieval = in.Mode
+	scope, err := projectScope(projectIDs)
+	if err != nil || len(projectIDs) == 0 {
+		return out, err
+	}
 	if in.Mode == "lexical" {
-		out.Hits, err = searchLexical(ctx, tx, actor, in)
+		out.Hits, err = lexicalHits(ctx, tx, scope, in.Query, in.Status, limit)
 		return out, err
 	}
 	if s.Embedder == nil {
 		return out, problem("EMBEDDING_DISABLED", "Configure Ollama to use semantic or hybrid search.")
 	}
-	err = tx.QueryRowContext(ctx, `SELECT count(*) FROM chunks c JOIN documents d ON d.id=c.document_id WHERE d.project_id=$1 AND d.status=$2
-	AND (c.embedding IS NULL OR c.embedding_status<>'ready' OR c.embedding_model IS DISTINCT FROM $3)`, in.ProjectID, in.Status, s.Embedder.Model()).Scan(&out.UnindexedChunks)
+	err = tx.QueryRowContext(ctx, `SELECT count(*) FROM chunks c JOIN documents d ON d.id=c.document_id WHERE d.project_id=ANY($1::text::uuid[]) AND d.status=$2
+	AND (c.embedding IS NULL OR c.embedding_status<>'ready' OR c.embedding_model IS DISTINCT FROM $3)`, scope, in.Status, s.Embedder.Model()).Scan(&out.UnindexedChunks)
 	if err != nil {
 		return out, err
 	}
@@ -64,18 +74,18 @@ func (s *Store) searchKnowledge(ctx context.Context, tx *sql.Tx, actor Identity,
 		}
 		out.Retrieval = "lexical-fallback"
 		out.Warning = "Local embedding failed (" + errorCode(err) + "). Results use keyword search only."
-		out.Hits, err = searchLexical(ctx, tx, actor, in)
+		out.Hits, err = lexicalHits(ctx, tx, scope, in.Query, in.Status, limit)
 		return out, err
 	}
 	semantic, err := many[SearchHit](ctx, tx, `WITH scoped AS MATERIALIZED (
 	SELECT d.id AS document_id,d.project_id,d.title,d.kind,d.status,d.revision,d.source_url,d.updated_by,d.updated_at,
 	c.position,c.content AS excerpt,c.embedding FROM documents d JOIN chunks c ON c.document_id=d.id
-	WHERE d.project_id=$1 AND d.status=$2 AND c.embedding_status='ready' AND c.embedding IS NOT NULL AND c.embedding_model=$3
+	WHERE d.project_id=ANY($1::text::uuid[]) AND d.status=$2 AND c.embedding_status='ready' AND c.embedding IS NOT NULL AND c.embedding_model=$3
 	), ranked AS (
 	SELECT document_id,project_id,title,kind,status,revision,source_url,updated_by,updated_at,position,excerpt,
 	1-(embedding OPERATOR(public.<=>) $4::public.vector) AS score,
 	row_number() OVER(PARTITION BY document_id ORDER BY embedding OPERATOR(public.<=>) $4::public.vector,position) AS n FROM scoped
-	) SELECT to_jsonb(ranked)-'n' FROM ranked WHERE n=1 ORDER BY score DESC,document_id LIMIT $5`, in.ProjectID, in.Status, s.Embedder.Model(), vectorLiteral(vectors[0]), min(50, limit*3))
+	) SELECT to_jsonb(ranked)-'n' FROM ranked WHERE n=1 ORDER BY score DESC,document_id LIMIT $5`, scope, in.Status, s.Embedder.Model(), vectorLiteral(vectors[0]), min(50, limit*3))
 	if err != nil {
 		return out, err
 	}
@@ -87,9 +97,7 @@ func (s *Store) searchKnowledge(ctx context.Context, tx *sql.Tx, actor Identity,
 		out.Hits = semantic[:min(limit, len(semantic))]
 		return out, nil
 	}
-	lexicalInput := in
-	lexicalInput.Limit = min(50, limit*3)
-	lexical, err := searchLexical(ctx, tx, actor, lexicalInput)
+	lexical, err := lexicalHits(ctx, tx, scope, in.Query, in.Status, min(50, limit*3))
 	if err != nil {
 		return out, err
 	}

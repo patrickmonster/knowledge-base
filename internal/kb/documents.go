@@ -253,35 +253,3 @@ type SearchInput struct {
 	Status    string `json:"status,omitempty"`
 	Mode      string `json:"mode,omitempty" jsonschema:"hybrid (default when configured), semantic, or lexical"`
 }
-
-func searchLexical(ctx context.Context, tx *sql.Tx, actor Identity, in SearchInput) ([]SearchHit, error) {
-	if _, err := projectAccess(ctx, tx, actor.User.ID, in.ProjectID, false); err != nil {
-		return nil, err
-	}
-	limit, err := pagination(in.Limit, 0)
-	if err != nil {
-		return nil, err
-	}
-	if err = bounded("query", in.Query, 1, 1000); err != nil {
-		return nil, err
-	}
-	if in.Status == "" {
-		in.Status = "active"
-	}
-	if !validStatus(in.Status) {
-		return nil, problem("INVALID_INPUT", "Unknown status.")
-	}
-	query := QueryText(in.Query)
-	if query == "" {
-		return []SearchHit{}, nil
-	}
-	hits, err := many[SearchHit](ctx, tx, `WITH matched AS (SELECT d.id AS document_id,d.project_id,d.title,d.kind,d.status,d.revision,d.source_url,d.updated_by,d.updated_at,
-	c.position,c.content AS excerpt,ts_rank_cd(c.search_vector,to_tsquery('simple',$2)) AS score,
-	row_number() OVER(PARTITION BY d.id ORDER BY ts_rank_cd(c.search_vector,to_tsquery('simple',$2)) DESC,c.position) AS n
-	FROM documents d JOIN chunks c ON c.document_id=d.id WHERE d.project_id=$1 AND d.status=$3 AND c.search_vector@@to_tsquery('simple',$2))
-	SELECT to_jsonb(matched)-'n' FROM matched WHERE n=1 ORDER BY score DESC,updated_at DESC,document_id LIMIT $4`, in.ProjectID, query, in.Status, limit)
-	for i := range hits {
-		hits[i].Citation = fmt.Sprintf("kb://%s/documents/%s?revision=%d#chunk-%d", in.ProjectID, hits[i].DocumentID, hits[i].Revision, hits[i].Position)
-	}
-	return hits, err
-}

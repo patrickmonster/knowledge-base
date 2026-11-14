@@ -120,6 +120,7 @@ Authorization: Bearer <발급받은 MCP 키>
 | `get_document_history` | 최근 50개 수정 버전의 작성자·이유 조회 |
 | `link_documents`, `unlink_documents`, `get_document_links` | 문서 간 관계(`supersedes`, `implements`, `related`) 추가·삭제·조회 |
 | `search_knowledge` | 프로젝트 내 하이브리드·의미·키워드 검색 |
+| `search_across_projects` | 참여 중인 여러 프로젝트를 한 번에 검색(`project_ids` 생략 시 전체, 최대 50개) |
 | `get_embedding_status` | 프로젝트별 임베딩 대기·처리·완료·실패 건수 조회 |
 | `reindex_project_embeddings` | 소유자 전용: 현재 본문으로 청크를 다시 만들고 벡터 재생성 예약(새 버전은 만들지 않음) |
 | `get_task_context` | 작업에 필요한 발췌문·출처·최근 결정 탐색 정보 구성 |
@@ -187,6 +188,15 @@ Authorization: Bearer <발급받은 MCP 키>
 ```
 
 `mode`는 `hybrid`, `semantic`, `lexical` 중 선택합니다. `warning`의 실제 메시지는 영어입니다. 검색 점수는 모드마다 다르며 확률이나 신뢰도 백분율이 아닙니다.
+
+### 프로젝트 횡단 검색
+
+`search_across_projects`는 `search_knowledge`와 같은 `query`, `mode`, `status`, `limit`을 받고 `project_id` 대신 선택적 `project_ids`를 받습니다. 생략하면 참여 중인 모든 프로젝트(오래된 순 최대 50개, 초과분은 `omitted_projects`와 `warning`으로 알림)를, 지정하면 그 프로젝트만 검색합니다. 질의 임베딩은 한 번만 만들고 모든 프로젝트의 결과를 하나의 순위로 합칩니다.
+
+- 응답은 `search_knowledge` 형식에 검색한 `projects`(id, slug, name, role)를 더하고, 각 결과에 `project_id`, `project_slug`, `project_name`을 붙입니다.
+- 참여하지 않은 프로젝트를 지정하면 단일 프로젝트 검색과 같이 `NOT_FOUND`로 거부하고 다른 프로젝트도 검색하지 않습니다.
+- 특정 프로젝트로 제한된 MCP 키는 그 프로젝트만 검색합니다. 다른 프로젝트를 지정하면 `FORBIDDEN`입니다.
+- 웹 **지식 검색** 화면에서 프로젝트를 골라(기본: 전체) 같은 검색을 실행하고 결과 본문을 바로 열람합니다.
 
 모델 준비 후 MCP에서 문서를 저장하고 `get_embedding_status`의 `ready` 증가를 확인한 다음, `search_knowledge`에 `mode: "semantic"`을 지정해 검사합니다. `/healthz`는 DB 연결 상태만 검사하며 모델 준비 여부를 보장하지 않습니다.
 
