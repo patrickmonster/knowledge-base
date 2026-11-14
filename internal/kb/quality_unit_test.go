@@ -37,6 +37,10 @@ func TestExpandWithGlossary(t *testing.T) {
 	if got := expandWithGlossary("upgrade CICD pipeline", groups); len(got) != 0 {
 		t.Fatalf("substring of a word matched: %v", got)
 	}
+	// "pg" inside "upgrade" is not the term PG, so PG is still added.
+	if got := expandWithGlossary("결제 upgrade", groups); !reflect.DeepEqual(got, []string{"payment", "PG"}) {
+		t.Fatalf("dedupe ignored word boundaries: %v", got)
+	}
 	if got := expandWithGlossary("배포 deploy", groups); len(got) != 0 {
 		t.Fatalf("terms already in the query were added: %v", got)
 	}

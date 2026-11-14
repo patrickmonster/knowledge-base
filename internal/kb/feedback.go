@@ -228,115 +228,68 @@ func retrievalMetrics(ctx context.Context, tx *sql.Tx, a Identity, in RetrievalM
 	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM task_runs WHERE project_id=$1 AND started_at>=now()-make_interval(days=>$2::int)`, in.ProjectID, in.Days).Scan(&out.TasksStarted); err != nil {
 		return nil, err
 	}
-	type row struct {
-		TaskID     string `json:"task_id"`
-		DocumentID string `json:"document_id"`
-		Verdict    string `json:"verdict"`
-		Offered    bool   `json:"offered"`
-		Rank       *int   `json:"rank"`
-	}
-	rows, err := many[row](ctx, tx, `SELECT jsonb_build_object('task_id',f.task_id,'document_id',f.document_id,'verdict',f.verdict,'offered',f.offered,'rank',f.rank)
-	FROM task_source_feedback f JOIN task_runs r ON r.id=f.task_id WHERE f.project_id=$1 AND r.feedback_at>=now()-make_interval(days=>$2::int) LIMIT 20000`, in.ProjectID, in.Days)
+	// Every count is aggregated in SQL over the whole window. A task with
+	// feedback but no source rows (nothing offered, nothing used) still counts
+	// in the task denominators with a hit and reciprocal rank of 0.
+	totals, err := one[metricTotals](ctx, tx, feedbackWindow+`, best AS (
+		SELECT t.id, min(f.rank) FILTER (WHERE f.verdict='used' AND f.offered) AS r FROM t LEFT JOIN f ON f.task_id=t.id GROUP BY t.id)
+	SELECT jsonb_build_object('tasks',(SELECT count(*) FROM t),
+		'offered',(SELECT count(*) FROM f WHERE offered),
+		'offered_used',(SELECT count(*) FROM f WHERE offered AND verdict='used'),
+		'used_total',(SELECT count(*) FROM f WHERE verdict='used'),
+		'used_not_offered',(SELECT count(*) FROM f WHERE NOT offered AND verdict='used'),
+		'misleading',(SELECT count(*) FROM f WHERE verdict='misleading'),
+		'hits',(SELECT count(*) FROM best WHERE r IS NOT NULL),
+		'reciprocal',(SELECT coalesce(sum(1.0/r),0) FROM best WHERE r IS NOT NULL))`, in.ProjectID, in.Days)
 	if err != nil {
 		return nil, err
 	}
-	type taskStat struct{ bestRank int }
-	tasks := map[string]*taskStat{}
-	docs := map[string]*DocumentUsage{}
-	for _, r := range rows {
-		t := tasks[r.TaskID]
-		if t == nil {
-			t = &taskStat{}
-			tasks[r.TaskID] = t
-		}
-		d := docs[r.DocumentID]
-		if d == nil {
-			d = &DocumentUsage{DocumentID: r.DocumentID}
-			docs[r.DocumentID] = d
-		}
-		if r.Offered {
-			out.Offered++
-			d.Offered++
-		}
-		switch r.Verdict {
-		case "used":
-			out.UsedTotal++
-			d.Used++
-			if r.Offered {
-				out.OfferedUsed++
-				if r.Rank != nil && (t.bestRank == 0 || *r.Rank < t.bestRank) {
-					t.bestRank = *r.Rank
-				}
-			} else {
-				out.UsedNotOffered++
-			}
-		case "misleading":
-			out.Misleading++
-			d.Misleading++
-		}
-	}
-	out.TasksWithFeedback = len(tasks)
-	hits := 0
-	reciprocal := 0.0
-	for _, t := range tasks {
-		if t.bestRank > 0 {
-			hits++
-			reciprocal += 1 / float64(t.bestRank)
-		}
-	}
+	out.TasksWithFeedback, out.Offered, out.OfferedUsed = totals.Tasks, totals.Offered, totals.OfferedUsed
+	out.UsedTotal, out.UsedNotOffered, out.Misleading = totals.UsedTotal, totals.UsedNotOffered, totals.Misleading
 	out.Precision = ratio(out.OfferedUsed, out.Offered)
 	out.Coverage = ratio(out.OfferedUsed, out.UsedTotal)
-	out.HitRate = ratio(hits, len(tasks))
-	if len(tasks) > 0 {
-		mrr := float64(int(reciprocal/float64(len(tasks))*1000+0.5)) / 1000
+	out.HitRate = ratio(totals.Hits, totals.Tasks)
+	if totals.Tasks > 0 {
+		mrr := float64(int(totals.Reciprocal/float64(totals.Tasks)*1000+0.5)) / 1000
 		out.MeanReciprocalRank = &mrr
 	}
-	if len(docs) > 0 {
-		ids := make([]string, 0, len(docs))
-		for id := range docs {
-			ids = append(ids, id)
-		}
-		type meta struct {
-			ID    string `json:"id"`
-			Title string `json:"title"`
-			Kind  string `json:"kind"`
-		}
-		metas, err := many[meta](ctx, tx, `SELECT jsonb_build_object('id',id,'title',title,'kind',kind) FROM documents WHERE project_id=$1 AND id::text=ANY($2::text[])`, in.ProjectID, ids)
-		if err != nil {
+	// Only the displayed document lists are limited, never the aggregation.
+	for _, list := range []struct {
+		target *[]DocumentUsage
+		where  string
+		order  string
+	}{
+		{&out.MostUsed, "g.used>0", "g.used DESC"},
+		{&out.OfferedNeverUsed, "g.offered>=2 AND g.used=0", "g.offered DESC"},
+		{&out.MisleadingSources, "g.misleading>0", "g.misleading DESC"},
+	} {
+		if *list.target, err = many[DocumentUsage](ctx, tx, feedbackWindow+`, g AS (
+			SELECT document_id,count(*) FILTER (WHERE offered) AS offered,count(*) FILTER (WHERE verdict='used') AS used,
+			count(*) FILTER (WHERE verdict='misleading') AS misleading FROM f GROUP BY document_id)
+		SELECT jsonb_build_object('document_id',d.id,'title',d.title,'kind',d.kind,'offered',g.offered,'used',g.used,'misleading',g.misleading)
+		FROM g JOIN documents d ON d.id=g.document_id WHERE `+list.where+` ORDER BY `+list.order+`,d.id LIMIT 10`, in.ProjectID, in.Days); err != nil {
 			return nil, err
 		}
-		for _, m := range metas {
-			docs[m.ID].Title, docs[m.ID].Kind = m.Title, m.Kind
-		}
 	}
-	list := make([]DocumentUsage, 0, len(docs))
-	for _, d := range docs {
-		list = append(list, *d)
-	}
-	pick := func(keep func(DocumentUsage) bool, less func(a, b DocumentUsage) bool) []DocumentUsage {
-		picked := []DocumentUsage{}
-		for _, d := range list {
-			if keep(d) {
-				picked = append(picked, d)
-			}
-		}
-		sort.Slice(picked, func(i, j int) bool {
-			if less(picked[i], picked[j]) != less(picked[j], picked[i]) {
-				return less(picked[i], picked[j])
-			}
-			return picked[i].DocumentID < picked[j].DocumentID
-		})
-		if len(picked) > 10 {
-			picked = picked[:10]
-		}
-		return picked
-	}
-	out.MostUsed = pick(func(d DocumentUsage) bool { return d.Used > 0 }, func(a, b DocumentUsage) bool { return a.Used > b.Used })
-	out.OfferedNeverUsed = pick(func(d DocumentUsage) bool { return d.Offered >= 2 && d.Used == 0 }, func(a, b DocumentUsage) bool { return a.Offered > b.Offered })
-	out.MisleadingSources = pick(func(d DocumentUsage) bool { return d.Misleading > 0 }, func(a, b DocumentUsage) bool { return a.Misleading > b.Misleading })
 	if out.RecentMissing, err = many[string](ctx, tx, `SELECT to_jsonb(feedback_note) FROM task_runs WHERE project_id=$1 AND feedback_note<>''
 	AND feedback_at>=now()-make_interval(days=>$2::int) ORDER BY feedback_at DESC LIMIT 10`, in.ProjectID, in.Days); err != nil {
 		return nil, err
 	}
 	return out, nil
+}
+
+// feedbackWindow selects tasks with feedback recorded in the window (t) and
+// their source rows (f). Parameters: $1 project ID, $2 days.
+const feedbackWindow = `WITH t AS (SELECT id FROM task_runs WHERE project_id=$1 AND feedback_at>=now()-make_interval(days=>$2::int)),
+	f AS (SELECT f.* FROM task_source_feedback f JOIN t ON t.id=f.task_id)`
+
+type metricTotals struct {
+	Tasks          int     `json:"tasks"`
+	Offered        int     `json:"offered"`
+	OfferedUsed    int     `json:"offered_used"`
+	UsedTotal      int     `json:"used_total"`
+	UsedNotOffered int     `json:"used_not_offered"`
+	Misleading     int     `json:"misleading"`
+	Hits           int     `json:"hits"`
+	Reciprocal     float64 `json:"reciprocal"`
 }

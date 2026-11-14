@@ -133,7 +133,9 @@ func expandWithGlossary(query string, groups [][]string) []string {
 		}
 		for _, term := range group {
 			key := normalizeTerm(term)
-			if key == "" || seen[key] || strings.Contains(q, key) {
+			// Same boundary rule as matching: "pg" inside "upgrade" is not
+			// already in the query, so PG is still added.
+			if key == "" || seen[key] || mentions(q, key) {
 				continue
 			}
 			seen[key] = true

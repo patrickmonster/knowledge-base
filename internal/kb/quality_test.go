@@ -133,6 +133,23 @@ func TestRecheckOwnersAndDigest(t *testing.T) {
 	if digest.UnassignedTotal != 1 || digest.Unassigned[0].DocumentID != stale.ID || digest.Summary == "" {
 		t.Fatalf("digest unassigned: %+v", digest)
 	}
+	// limit applies per owner: totals stay exact and every owner stays listed.
+	ref2 := mustCall(t, tools, admin, "create_document", DocumentInput{ProjectID: p.ID, Title: "배포 체크리스트", Kind: "reference", Content: "체크리스트"}).(Document)
+	mustCall(t, tools, admin, "assign_recheck_owner", RecheckOwnerInput{ProjectID: p.ID, DocumentID: ref2.ID, OwnerID: editor.User.ID, IntervalDays: 30})
+	mustCall(t, tools, admin, "assign_recheck_owner", RecheckOwnerInput{ProjectID: p.ID, DocumentID: stale.ID, OwnerID: admin.User.ID})
+	if _, err := s.DB.ExecContext(ctx, `UPDATE documents SET updated_at=now()-interval '120 days' WHERE id=$1`, ref2.ID); err != nil {
+		t.Fatal(err)
+	}
+	limited := mustCall(t, tools, viewer, "get_recheck_digest", RecheckDigestInput{ProjectID: p.ID, Limit: 1}).(RecheckDigest)
+	totals := map[string][2]int{}
+	for _, g := range limited.ByOwner {
+		totals[g.OwnerID] = [2]int{g.Total, len(g.Due)}
+	}
+	if len(limited.ByOwner) != 2 || totals[editor.User.ID] != [2]int{2, 1} || totals[admin.User.ID] != [2]int{1, 1} {
+		t.Fatalf("per-owner limit: %+v", limited.ByOwner)
+	}
+	mustCall(t, tools, admin, "assign_recheck_owner", RecheckOwnerInput{ProjectID: p.ID, DocumentID: ref2.ID, Remove: true})
+	mustCall(t, tools, admin, "assign_recheck_owner", RecheckOwnerInput{ProjectID: p.ID, DocumentID: stale.ID, Remove: true})
 	run := mustCall(t, tools, editor, "start_task", StartTaskInput{ProjectID: p.ID, RequestKey: "recheck-1", Title: "배포", Task: "배포 명령 정리"}).(StartTaskResult)
 	if run.Run.Context.Rechecks == nil || run.Run.Context.Rechecks.Total != 1 || run.Run.Context.Rechecks.DueForYou[0].DocumentID != ref.ID {
 		t.Fatalf("task context rechecks: %+v", run.Run.Context.Rechecks)
@@ -188,7 +205,7 @@ func TestContextFeedbackMetricsAndDecisionCandidates(t *testing.T) {
 
 	in := finishFixture(p.ID, start.Run.ID)
 	in.Decisions = "- 첨부는 Railway 버킷에 저장하기로 함. 이유: AWS 계정을 만들지 않기 위해\n- 환불 기한 표시는 화면 상단에 두기로 결정했다\n- 테스트를 실행했다"
-	in.UsedSources = []string{useful.ID, later.ID}
+	in.UsedSources = &[]string{useful.ID, later.ID}
 	in.MissingKnowledge = "환불 수수료 규정"
 	done := mustCall(t, tools, editor, "finish_task", in).(TaskCompletion)
 	fb := done.Feedback
@@ -227,14 +244,34 @@ func TestContextFeedbackMetricsAndDecisionCandidates(t *testing.T) {
 	dec.Title = "결정: 환불 기한 표시는 화면 상단"
 	dec.Sections["decision"] = "환불 기한 표시는 화면 상단에 두기로 결정했다."
 	in2.Documents = []TemplateDraft{dec}
-	in2.UsedSources = []string{noisy.ID}
+	in2.UsedSources = &[]string{noisy.ID}
 	done2 := mustCall(t, tools, editor, "finish_task", in2).(TaskCompletion)
 	if len(done2.DecisionCandidates) != 0 {
 		t.Fatalf("saved decision proposed again: %+v", done2.DecisionCandidates)
 	}
 
+	// An explicit empty used_sources is recorded even when start_task offered
+	// nothing, so the task still counts in the denominators.
+	start3 := mustCall(t, tools, editor, "start_task", StartTaskInput{ProjectID: p.ID, RequestKey: "feedback-3", Title: "무관", Task: "zqx 무관 xyw"}).(StartTaskResult)
+	if len(start3.Run.Context.Sources) != 0 {
+		t.Fatalf("unrelated task was offered sources: %+v", start3.Run.Context.Sources)
+	}
+	in3 := finishFixture(p.ID, start3.Run.ID)
+	in3.UsedSources = &[]string{}
+	if done3 := mustCall(t, tools, editor, "finish_task", in3).(TaskCompletion); done3.Feedback == nil || done3.Feedback.Used != 0 {
+		t.Fatalf("empty used_sources not recorded: %+v", done3.Feedback)
+	}
+	// Omitting used_sources records no feedback.
+	start4 := mustCall(t, tools, editor, "start_task", StartTaskInput{ProjectID: p.ID, RequestKey: "feedback-4", Title: "환불 4", Task: "환불 정책 정리"}).(StartTaskResult)
+	if done4 := mustCall(t, tools, editor, "finish_task", finishFixture(p.ID, start4.Run.ID)).(TaskCompletion); done4.Feedback != nil {
+		t.Fatalf("omitted used_sources recorded feedback: %+v", done4.Feedback)
+	}
+
 	metrics := mustCall(t, tools, admin, "get_retrieval_metrics", RetrievalMetricsInput{ProjectID: p.ID}).(RetrievalMetrics)
-	if metrics.TasksWithFeedback != 2 || metrics.UsedTotal != 3 || metrics.UsedNotOffered != 1 || metrics.Precision == nil || metrics.Coverage == nil || metrics.MeanReciprocalRank == nil {
+	if metrics.HitRate == nil || *metrics.HitRate != 0.667 {
+		t.Fatalf("hit rate with a source-free task: %+v", metrics.HitRate)
+	}
+	if metrics.TasksWithFeedback != 3 || metrics.UsedTotal != 3 || metrics.UsedNotOffered != 1 || metrics.Precision == nil || metrics.Coverage == nil || metrics.MeanReciprocalRank == nil {
 		t.Fatalf("metrics: %+v", metrics)
 	}
 	if len(metrics.RecentMissing) != 1 || metrics.RecentMissing[0] != "환불 수수료 규정" {

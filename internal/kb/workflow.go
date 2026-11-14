@@ -82,7 +82,7 @@ type FinishTaskInput struct {
 	Tags             []string        `json:"tags,omitempty" jsonschema:"History topic tags; at most 18, plus automatic task ID and history tags"`
 	Documents        []TemplateDraft `json:"documents,omitempty" jsonschema:"Optional brief or decision documents, at most 10; drafts by default, active only when confirmed"`
 	Implements       []string        `json:"implements,omitempty" jsonschema:"IDs of existing decision or brief documents this task carried out, at most 20; the history is linked to them with implements"`
-	UsedSources      []string        `json:"used_sources,omitempty" jsonschema:"Document IDs you actually relied on as evidence, at most 50; start_task sources you do not list count as unused. Measures retrieval quality"`
+	UsedSources      *[]string       `json:"used_sources,omitempty" jsonschema:"Document IDs you actually relied on as evidence, at most 50; start_task sources you do not list count as unused. Send an empty list when none helped (omitting it records no feedback). Measures retrieval quality"`
 	MissingKnowledge string          `json:"missing_knowledge,omitempty" jsonschema:"Knowledge you needed but could not find, up to 2000 characters"`
 }
 
@@ -249,8 +249,15 @@ func (s *Store) finishTask(ctx context.Context, tx *sql.Tx, a Identity, in Finis
 	}
 	out := TaskCompletion{TaskID: run.ID, Outcome: in.Outcome, Documents: []SavedDocument{}, Guidance: "Original documents and embedding jobs were saved atomically. Read the returned document IDs/revisions, then inspect get_embedding_status; semantic search may still be pending. Corrections use update_document with expected_revision."}
 	var feedback *ContextFeedbackResult
-	if len(in.UsedSources) > 0 || strings.TrimSpace(in.MissingKnowledge) != "" {
-		result, err := recordContextFeedback(ctx, tx, a, run, ContextFeedbackInput{ProjectID: in.ProjectID, TaskID: run.ID, UsedSources: in.UsedSources, Missing: in.MissingKnowledge})
+	// An explicit empty used_sources is feedback too ("nothing offered helped");
+	// only an omitted field records nothing. The pointer keeps the distinction
+	// in the request hash as well.
+	used := []string{}
+	if in.UsedSources != nil {
+		used = *in.UsedSources
+	}
+	if in.UsedSources != nil || strings.TrimSpace(in.MissingKnowledge) != "" {
+		result, err := recordContextFeedback(ctx, tx, a, run, ContextFeedbackInput{ProjectID: in.ProjectID, TaskID: run.ID, UsedSources: used, Missing: in.MissingKnowledge})
 		if err != nil {
 			return nil, err
 		}
@@ -277,10 +284,10 @@ func (s *Store) finishTask(ctx context.Context, tx *sql.Tx, a Identity, in Finis
 			references += "\n- " + source.Citation
 		}
 	}
-	if feedback != nil && len(in.UsedSources) > 0 {
+	if feedback != nil && len(used) > 0 {
 		references += "\n\n실제 사용한 근거:"
 		seen := map[string]bool{}
-		for _, id := range in.UsedSources {
+		for _, id := range used {
 			if !seen[id] {
 				seen[id] = true
 				references += "\n- kb://" + in.ProjectID + "/documents/" + id
