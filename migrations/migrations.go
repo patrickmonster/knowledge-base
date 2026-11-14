@@ -43,3 +43,6 @@ var ProjectRules string
 
 //go:embed 014_rule_enabled.sql
 var RuleEnabled string
+
+//go:embed 015_search_misses.sql
+var SearchMisses string

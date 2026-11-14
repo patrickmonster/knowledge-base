@@ -1,6 +1,9 @@
 package kb
 
-import "testing"
+import (
+	"context"
+	"testing"
+)
 
 func TestUsageStats(t *testing.T) {
 	s := testStore(t)
@@ -21,13 +24,17 @@ func TestUsageStats(t *testing.T) {
 	mustCall(t, tools, editor, "get_document", DocumentRef{ProjectID: p.ID, DocumentID: doc.ID})
 	mustCall(t, tools, editor, "search_knowledge", SearchInput{ProjectID: p.ID, Query: "환불", Mode: "lexical"})
 	mustCall(t, tools, admin, "start_task", StartTaskInput{ProjectID: p.ID, RequestKey: "usage-1", Title: "환불", Task: "환불 정책 화면"})
+	// Zero-result searches are grouped after whitespace and case normalization.
+	mustCall(t, tools, editor, "search_knowledge", SearchInput{ProjectID: p.ID, Query: "Railway  배포 절차", Mode: "lexical"})
+	mustCall(t, tools, admin, "search_knowledge", SearchInput{ProjectID: p.ID, Query: "railway 배포 절차", Mode: "lexical"})
+	mustCall(t, tools, admin, "search_knowledge", SearchInput{ProjectID: other.ID, Query: "zzqx 미존재 키워드", Mode: "lexical"})
 
 	stats := mustCall(t, tools, editor, "get_usage_stats", UsageStatsInput{ProjectID: p.ID, Days: 7}).(UsageStats)
 	if stats.Days != 7 || len(stats.Daily) != 7 || stats.Daily[6].Date != stats.To || stats.Daily[0].Date != stats.From {
 		t.Fatalf("window: %+v", stats)
 	}
 	tot := stats.Totals
-	if tot.DocumentWrites != 3 || tot.DocumentsNew != 2 || tot.TasksStarted != 1 || tot.DocumentReads != 2 || tot.Searches != 2 || tot.ActiveUsers != 2 {
+	if tot.DocumentWrites != 3 || tot.DocumentsNew != 2 || tot.TasksStarted != 1 || tot.DocumentReads != 2 || tot.Searches != 4 || tot.ActiveUsers != 2 || tot.SearchMisses != 2 {
 		t.Fatalf("totals: %+v", tot)
 	}
 	today := stats.Daily[6]
@@ -42,6 +49,17 @@ func TestUsageStats(t *testing.T) {
 	}
 	if len(stats.TopUsers) != 2 || stats.TopUsers[0].UserID != admin.User.ID || stats.TopUsers[0].DocumentWrites != 3 || stats.TopUsers[0].TasksStarted != 1 {
 		t.Fatalf("top users: %+v", stats.TopUsers)
+	}
+	if len(stats.SearchMisses) != 1 || stats.SearchMisses[0].Query != "railway 배포 절차" || stats.SearchMisses[0].Count != 2 {
+		t.Fatalf("search misses: %+v", stats.SearchMisses)
+	}
+	if len(stats.KindGrowth) != 2 {
+		t.Fatalf("kind growth: %+v", stats.KindGrowth)
+	}
+	for _, g := range stats.KindGrowth {
+		if g.Start != 0 || g.Added != 1 || g.Total != 1 || len(g.Cumulative) != 7 || g.Cumulative[6] != 1 {
+			t.Fatalf("kind growth %s: %+v", g.Kind, g)
+		}
 	}
 	found := false
 	for _, a := range stats.TopActions {
@@ -60,6 +78,18 @@ func TestUsageStats(t *testing.T) {
 	again := mustCall(t, tools, editor, "get_usage_stats", UsageStatsInput{ProjectID: p.ID}).(UsageStats)
 	if again.Days != 30 || len(again.Daily) != 30 || again.Totals.Calls != tot.Calls+1 {
 		t.Fatalf("second call: days %d calls %d (was %d)", again.Days, again.Totals.Calls, tot.Calls)
+	}
+
+	// Expired zero-result searches are purged; recent ones stay.
+	if _, err := s.DB.Exec(`UPDATE search_misses SET created_at=now()-interval '400 days' WHERE query='zzqx 미존재 키워드'`); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := s.PurgeSearchMisses(context.Background()); err != nil || n != 1 {
+		t.Fatalf("purge: %d %v", n, err)
+	}
+	var left int
+	if err := s.DB.QueryRow(`SELECT count(*) FROM search_misses`).Scan(&left); err != nil || left != 2 {
+		t.Fatalf("left after purge: %d %v", left, err)
 	}
 
 	_, err := call(t, tools, outsider, "get_usage_stats", UsageStatsInput{ProjectID: p.ID})
