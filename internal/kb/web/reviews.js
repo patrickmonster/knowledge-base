@@ -27,7 +27,7 @@ async function reviewsPage() {
       drafts.push(...batch); if(batch.length<50)break;
     }
     if (ticket!==generation) return;
-    const canReview=current.role==='owner'||current.role==='editor';
+    const canReview=['owner','admin','editor'].includes(current.role);
     summary.textContent=`검토 대기 ${drafts.length}건`+(canReview?'':' · 조회 권한만 있어 승인·반려할 수 없습니다.');
     if (!drafts.length) { list.replaceChildren(el('p','검토할 draft 문서가 없습니다.','empty')); return; }
     list.replaceChildren(...drafts.map(d=>draftCard(current,d,canReview)));

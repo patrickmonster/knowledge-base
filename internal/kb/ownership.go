@@ -11,9 +11,9 @@ import (
 // retypes the project slug so a wrong project cannot be transferred by mistake.
 type TransferOwnerInput struct {
 	ProjectID         string `json:"project_id"`
-	UserID            string `json:"user_id" jsonschema:"Current editor or viewer who becomes the owner"`
+	UserID            string `json:"user_id" jsonschema:"Current admin, editor, or viewer who becomes the owner"`
 	ConfirmSlug       string `json:"confirm_slug" jsonschema:"The project slug, retyped to confirm"`
-	PreviousOwnerRole string `json:"previous_owner_role,omitempty" jsonschema:"Role kept by the previous owner: editor (default) or viewer"`
+	PreviousOwnerRole string `json:"previous_owner_role,omitempty" jsonschema:"Role kept by the previous owner: admin, editor (default), or viewer"`
 }
 
 // transferProjectOwner moves ownership in one transaction: projects.owner_id
@@ -26,8 +26,8 @@ func transferProjectOwner(ctx context.Context, tx *sql.Tx, actor Identity, in Tr
 	if in.PreviousOwnerRole == "" {
 		in.PreviousOwnerRole = "editor"
 	}
-	if in.PreviousOwnerRole != "editor" && in.PreviousOwnerRole != "viewer" {
-		return nil, problem("INVALID_INPUT", "previous_owner_role must be editor or viewer.")
+	if in.PreviousOwnerRole != "admin" && in.PreviousOwnerRole != "editor" && in.PreviousOwnerRole != "viewer" {
+		return nil, problem("INVALID_INPUT", "previous_owner_role must be admin, editor, or viewer.")
 	}
 	if _, err := projectAccess(ctx, tx, actor.User.ID, in.ProjectID, true); err != nil {
 		return nil, err
@@ -54,7 +54,7 @@ func transferProjectOwner(ctx context.Context, tx *sql.Tx, actor Identity, in Tr
 	err := tx.QueryRowContext(ctx, `SELECT m.role,u.disabled FROM project_members m JOIN users u ON u.id=m.user_id
 		WHERE m.project_id=$1 AND m.user_id=$2 FOR UPDATE OF m`, in.ProjectID, in.UserID).Scan(&role, &disabled)
 	if err == sql.ErrNoRows || (err == nil && disabled) {
-		return nil, problem("NOT_FOUND", "The new owner must be an active member of this project. Add them as editor or viewer first.")
+		return nil, problem("NOT_FOUND", "The new owner must be an active member of this project. Add them as admin, editor, or viewer first.")
 	}
 	if err != nil {
 		return nil, err

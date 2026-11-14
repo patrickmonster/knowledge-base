@@ -116,6 +116,8 @@ type TaskContext struct {
 	// Issues lists open questions and shared work areas relevant to the task
 	// so the agent asks area owners before changing shared work.
 	Issues          *TaskIssues      `json:"issues,omitempty"`
+	// Rules are the project (owner/admin) and personal commit and work rules to follow.
+	Rules *RuleSet `json:"rules,omitempty"`
 }
 
 type SearchResult struct {

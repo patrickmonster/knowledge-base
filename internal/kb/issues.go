@@ -227,12 +227,12 @@ func projectEditor(ctx context.Context, q Querier, projectID, userID, field stri
 	}
 	var ok bool
 	err := q.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM project_members m JOIN users u ON u.id=m.user_id
-		WHERE m.project_id=$1 AND m.user_id=$2 AND m.role IN ('owner','editor') AND NOT u.disabled)`, projectID, userID).Scan(&ok)
+		WHERE m.project_id=$1 AND m.user_id=$2 AND m.role IN ('owner','admin','editor') AND NOT u.disabled)`, projectID, userID).Scan(&ok)
 	if err != nil {
 		return err
 	}
 	if !ok {
-		return problem("INVALID_INPUT", field+" must be an active project owner or editor.")
+		return problem("INVALID_INPUT", field+" must be an active project owner, admin, or editor.")
 	}
 	return nil
 }

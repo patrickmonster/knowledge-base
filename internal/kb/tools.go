@@ -65,11 +65,13 @@ type CreateProjectInput struct {
 	Slug        string `json:"slug"`
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
+	// Rules are the initial project (owner) rules; web console only.
+	Rules []RuleText `json:"rules,omitempty" jsonschema:"Initial project rules (commit/work); signed-in web console only, at most 50"`
 }
 type MemberInput struct {
 	ProjectID string `json:"project_id"`
 	UserID    string `json:"user_id"`
-	Role      string `json:"role" jsonschema:"editor, viewer, or remove; only the owner may change members"`
+	Role      string `json:"role" jsonschema:"admin, editor, viewer, or remove; only the owner may change members. admin = editor access plus managing project rules"`
 }
 type ContextInput struct {
 	ProjectID     string `json:"project_id"`
@@ -93,6 +95,17 @@ func NewTools(s *Store) Tools {
 		if err := bounded("description", in.Description, 0, 2000); err != nil {
 			return nil, err
 		}
+		if len(in.Rules) > 0 && a.KeyID != "" {
+			return nil, problem("FORBIDDEN", "Project rules can be set only by a signed-in user in the web console.")
+		}
+		if len(in.Rules) > maxProjectRules {
+			return nil, problem("INVALID_INPUT", "At most 50 project rules.")
+		}
+		for i := range in.Rules {
+			if err := validateRuleText(&in.Rules[i]); err != nil {
+				return nil, err
+			}
+		}
 		p, err := one[Project](ctx, tx, `WITH p AS (INSERT INTO projects(id,slug,name,description,owner_id) VALUES($1,$2,$3,$4,$5)
 		ON CONFLICT(slug) DO NOTHING RETURNING *) SELECT to_jsonb(p) FROM p`, uuid.NewString(), in.Slug, in.Name, in.Description, a.User.ID)
 		if errors.Is(err, sql.ErrNoRows) {
@@ -101,8 +114,15 @@ func NewTools(s *Store) Tools {
 		if err != nil {
 			return nil, err
 		}
-		_, err = tx.ExecContext(ctx, "INSERT INTO project_members(project_id,user_id,role) VALUES($1,$2,'owner')", p.ID, a.User.ID)
-		return p, err
+		if _, err = tx.ExecContext(ctx, "INSERT INTO project_members(project_id,user_id,role) VALUES($1,$2,'owner')", p.ID, a.User.ID); err != nil {
+			return nil, err
+		}
+		if len(in.Rules) > 0 {
+			if _, err = insertRules(ctx, tx, p.ID, "project", "", a.User.ID, in.Rules); err != nil {
+				return nil, err
+			}
+		}
+		return p, nil
 	})
 	add(t, s, "list_projects", "List projects the authenticated user can access.", false, nil, func(ctx context.Context, tx *sql.Tx, a Identity, in PageInput) (any, error) {
 		limit, err := pagination(in.Limit, in.Offset)
@@ -112,7 +132,7 @@ func NewTools(s *Store) Tools {
 		return many[Project](ctx, tx, `SELECT to_jsonb(p)||jsonb_build_object('role',m.role) FROM projects p JOIN project_members m ON m.project_id=p.id
 		WHERE m.user_id=$1 AND ($4='' OR p.id=NULLIF($4,'')::uuid) ORDER BY p.created_at DESC,p.id LIMIT $2 OFFSET $3`, a.User.ID, limit, in.Offset, a.ProjectID)
 	})
-	add(t, s, "set_project_member", "Owner only: grant editor/viewer access or remove a project member.", true, func(in MemberInput) string { return in.ProjectID }, func(ctx context.Context, tx *sql.Tx, a Identity, in MemberInput) (any, error) {
+	add(t, s, "set_project_member", "Owner only: grant admin/editor/viewer access or remove a project member. admin is editor access plus managing project rules.", true, func(in MemberInput) string { return in.ProjectID }, func(ctx context.Context, tx *sql.Tx, a Identity, in MemberInput) (any, error) {
 		p, err := projectAccess(ctx, tx, a.User.ID, in.ProjectID, true)
 		if err != nil {
 			return nil, err
@@ -126,8 +146,8 @@ func NewTools(s *Store) Tools {
 		if in.UserID == p.OwnerID {
 			return nil, problem("FORBIDDEN", "The owner cannot be changed here.")
 		}
-		if in.Role != "editor" && in.Role != "viewer" && in.Role != "remove" {
-			return nil, problem("INVALID_INPUT", "Choose editor, viewer, or remove.")
+		if in.Role != "admin" && in.Role != "editor" && in.Role != "viewer" && in.Role != "remove" {
+			return nil, problem("INVALID_INPUT", "Choose admin, editor, viewer, or remove.")
 		}
 		var exists bool
 		if err = tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM users WHERE id=$1 AND NOT disabled)", in.UserID).Scan(&exists); err != nil {
@@ -217,6 +237,7 @@ func NewTools(s *Store) Tools {
 	registerReviewTools(t, s)
 	registerOwnershipTools(t, s)
 	registerIssueTools(t, s)
+	registerRuleTools(t, s)
 
 	return t
 }

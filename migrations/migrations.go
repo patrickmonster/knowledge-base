@@ -31,3 +31,6 @@ var DocumentLinks string
 
 //go:embed 010_issues.sql
 var Issues string
+
+//go:embed 011_project_rules.sql
+var ProjectRules string
