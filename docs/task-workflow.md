@@ -76,7 +76,7 @@
 
 히스토리 제목은 `YYYY-MM-DD HH:mm — 요약`(Asia/Seoul) 형식으로 저장합니다. start_task 제목이 이미 이 형식이면 그대로 쓰고, 날짜만 있거나 날짜가 없으면 작업 시작 시각으로 앞부분을 채웁니다. 자동 태그 `작업이력`, `task:<run.id>`를 붙이며, 같은 태그를 tags에 넣어도 한 번만 저장됩니다.
 
-추가 문서는 `documents` 배열에 최대 10개까지 넣습니다. `kind`는 `brief` 또는 `decision`이며 `title`, `sections`가 필요합니다. `sections`의 모든 필수 키는 `get_document_templates`로 확인합니다. 기본 상태는 `draft`입니다. 히스토리는 자동으로 한 개 생성되므로 배열에 넣지 않습니다.
+추가 문서는 `documents` 배열에 최대 10개까지 넣습니다. `kind`는 `brief` 또는 `decision`이며 `title`, `sections`가 필요합니다. `sections`의 모든 필수 키는 `get_document_templates`로 확인합니다. 기본 상태는 `draft`입니다. draft는 사람이 웹 **검토 대기** 화면에서 승인(active)하거나 반려(archived)합니다. 히스토리는 자동으로 한 개 생성되므로 배열에 넣지 않습니다.
 
 완료 시 문서·문서 버전·임베딩 대기열·작업 상태·감사 로그가 같은 트랜잭션에 저장됩니다. 한 문서의 검증이나 저장이 실패하면 모두 롤백합니다. 같은 완료 입력을 다시 보내면 기존 문서 ID와 최초 저장 버전을 반환하며 문서를 복제하지 않습니다. 다른 입력으로 이미 종료한 작업을 재완료하면 `CONFLICT`입니다. 보완은 기존 문서를 읽고 `update_document(expected_revision, reason)`로 처리합니다. 완료 응답은 최초 저장 영수증이므로 나중의 문서 수정이 응답을 바꾸지는 않습니다.
 

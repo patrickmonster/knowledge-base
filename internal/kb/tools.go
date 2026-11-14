@@ -197,6 +197,7 @@ func NewTools(s *Store) Tools {
 	})
 	registerWorkflowTools(t, s)
 	registerAttachmentTools(t, s)
+	registerReviewTools(t, s)
 
 	return t
 }
