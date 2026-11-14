@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestMaskTarget(t *testing.T) {
@@ -297,5 +298,95 @@ func TestIssueNotifications(t *testing.T) {
 	mustCall(t, tools, admin, "comment_issue", CommentIssueInput{ProjectID: p.ID, IssueID: issue.ID, Body: "제외 후 댓글"})
 	if err := s.DB.QueryRow(`SELECT count(*) FROM notification_outbox WHERE channel_id=$1`, comments.ID).Scan(&queued); err != nil || queued != 1 {
 		t.Fatalf("notification queued for a removed member: %d %v", queued, err)
+	}
+}
+
+func TestSendMailTimeout(t *testing.T) {
+	// A server that accepts the connection but never greets must not hang the worker.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			defer conn.Close()
+		}
+	}()
+	previous := smtpTimeout
+	smtpTimeout = 300 * time.Millisecond
+	defer func() { smtpTimeout = previous }()
+	started := time.Now()
+	err = sendMailTimeout(ln.Addr().String(), nil, "kb@example.com", []string{"owner@example.com"}, []byte("Subject: x\r\n\r\nbody\r\n"))
+	if err == nil {
+		t.Fatal("stalled SMTP server did not fail")
+	}
+	if elapsed := time.Since(started); elapsed > 5*time.Second {
+		t.Fatalf("stalled SMTP server blocked for %s", elapsed)
+	}
+}
+
+func TestDisabledChannelDoesNotSend(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	tools := NewTools(s)
+	admin := loginAs(t, s, "admin@example.com")
+	editor := inviteAs(t, s, admin, "paused-editor@example.com")
+	p := mustCall(t, tools, admin, "create_project", CreateProjectInput{Slug: "paused", Name: "일시중지"}).(Project)
+	mustCall(t, tools, admin, "set_project_member", MemberInput{ProjectID: p.ID, UserID: editor.User.ID, Role: "editor"})
+	var mu sync.Mutex
+	hits := 0
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		hits++
+		mu.Unlock()
+	}))
+	defer srv.Close()
+	s.Notifier = &Notifier{HTTP: srv.Client()}
+	hook := mustCall(t, tools, admin, "set_notification_channel", NotificationChannelInput{ProjectID: p.ID, Kind: "webhook", Name: "hook", Target: srv.URL}).(NotificationChannel)
+	statusOf := func(issueID string) (string, string) {
+		var status, code string
+		if err := s.DB.QueryRow(`SELECT status,coalesce(last_error,'') FROM notification_outbox WHERE issue_id=$1`, issueID).Scan(&status, &code); err != nil {
+			t.Fatal(err)
+		}
+		return status, code
+	}
+	drain := func() {
+		for {
+			n, err := s.ProcessNotificationBatch(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if n == 0 {
+				return
+			}
+		}
+	}
+
+	// Turning a channel off drops what it had waiting.
+	first := mustCall(t, tools, admin, "create_issue", CreateIssueInput{ProjectID: p.ID, Title: "대기 중 끄기", Body: "본문", AssigneeID: editor.User.ID}).(Issue)
+	off, on := false, true
+	mustCall(t, tools, admin, "set_notification_channel", NotificationChannelInput{ProjectID: p.ID, ChannelID: hook.ID, Enabled: &off})
+	if status, code := statusOf(first.ID); status != "failed" || code != "CHANNEL_DISABLED" {
+		t.Fatalf("disabling kept a pending row: %s %s", status, code)
+	}
+	// A row claimed while the channel is switched off underneath is not sent either.
+	mustCall(t, tools, admin, "set_notification_channel", NotificationChannelInput{ProjectID: p.ID, ChannelID: hook.ID, Enabled: &on})
+	second := mustCall(t, tools, admin, "create_issue", CreateIssueInput{ProjectID: p.ID, Title: "발송 직전 끄기", Body: "본문", AssigneeID: editor.User.ID}).(Issue)
+	if _, err := s.DB.Exec(`UPDATE notification_channels SET enabled=false WHERE id=$1`, hook.ID); err != nil {
+		t.Fatal(err)
+	}
+	drain()
+	if status, code := statusOf(second.ID); status != "failed" || code != "CHANNEL_DISABLED" {
+		t.Fatalf("disabled channel row: %s %s", status, code)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if hits != 0 {
+		t.Fatalf("disabled channel delivered %d requests", hits)
 	}
 }

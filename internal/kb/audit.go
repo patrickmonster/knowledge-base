@@ -32,7 +32,7 @@ func auditInput(ctx context.Context, input any) context.Context {
 	var fields map[string]any
 	_ = json.Unmarshal(raw, &fields)
 	safe := map[string]any{}
-	for _, key := range []string{"attachment_id", "document_id", "task_id", "user_id", "id", "reset_user_id", "role", "global_role", "disabled", "access", "expected_revision", "decision", "source_id", "target_id", "relation", "issue_id", "area_id", "status", "move_to_area_id", "channel_id", "kind", "enabled", "remove", "format"} {
+	for _, key := range []string{"attachment_id", "document_id", "task_id", "user_id", "id", "reset_user_id", "role", "global_role", "disabled", "access", "expected_revision", "decision", "source_id", "target_id", "relation", "issue_id", "area_id", "status", "move_to_area_id", "channel_id", "kind", "enabled", "remove", "format", "previous_owner_role"} {
 		if value, ok := fields[key]; ok {
 			if text, ok := value.(string); ok && len(text) > 100 {
 				continue

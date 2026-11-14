@@ -12,7 +12,8 @@ function lineDiff(a,b) {
   while (endA>start&&endB>start&&a[endA-1]===b[endB-1]) { endA--; endB--; }
   const out=[];
   for (let i=0;i<start;i++) out.push({op:' ',text:a[i]});
-  out.push(...myersDiff(a.slice(start,endA),b.slice(start,endB)));
+  // A loop, not push(...array): spreading a huge array exceeds the engine's argument limit.
+  for (const op of myersDiff(a.slice(start,endA),b.slice(start,endB))) out.push(op);
   for (let i=endA;i<a.length;i++) out.push({op:' ',text:a[i]});
   return out;
 }

@@ -51,3 +51,10 @@ test('very different large inputs fall back without hanging',()=>{
   const ops=lineDiff(a,b);
   assert.deepStrictEqual(sides(ops),{before:a,after:b});
 });
+
+test('large edit scripts do not overflow call arguments',()=>{
+  const b=Array.from({length:200000},(_,i)=>'n'+i);
+  const ops=lineDiff([],b);
+  assert.strictEqual(ops.length,200000);
+  assert.deepStrictEqual(diffStats(ops),{added:200000,removed:0});
+});

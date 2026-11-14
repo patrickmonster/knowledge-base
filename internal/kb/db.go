@@ -20,6 +20,14 @@ type Store struct {
 	Notifier *Notifier
 	// PublicURL is the server origin used to build absolute upload links.
 	PublicURL string
+	// Retention purges old audit events and revisions; zero keeps them forever.
+	Retention RetentionPolicy
+	// AttachmentQuotaBytes caps a project's stored and reserved files; 0 is unlimited.
+	AttachmentQuotaBytes int64
+	// Scanner, when set, must report a file clean before it is stored (fail closed).
+	Scanner MalwareScanner
+	// AllowExecutables disables the built-in executable file block.
+	AllowExecutables bool
 }
 type Querier interface {
 	ExecContext(context.Context, string, ...any) (sql.Result, error)
@@ -70,8 +78,20 @@ func (s *Store) Migrate(ctx context.Context) error {
 		return nil
 	})
 }
+// snapshotKey marks a context whose transaction must read one consistent
+// snapshot across several queries (REPEATABLE READ), e.g. a project export.
+type snapshotKey struct{}
+
+func withSnapshot(ctx context.Context) context.Context {
+	return context.WithValue(ctx, snapshotKey{}, true)
+}
+
 func transaction(ctx context.Context, db *sql.DB, fn func(*sql.Tx) error) error {
-	tx, err := db.BeginTx(ctx, nil)
+	var opts *sql.TxOptions
+	if snapshot, _ := ctx.Value(snapshotKey{}).(bool); snapshot {
+		opts = &sql.TxOptions{Isolation: sql.LevelRepeatableRead}
+	}
+	tx, err := db.BeginTx(ctx, opts)
 	if err != nil {
 		return err
 	}

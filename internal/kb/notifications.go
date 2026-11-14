@@ -3,6 +3,7 @@ package kb
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
@@ -276,6 +277,12 @@ func setNotificationChannel(ctx context.Context, tx *sql.Tx, a Identity, in Noti
 	} else {
 		_, err = tx.ExecContext(ctx, `UPDATE notification_channels SET name=$2,target=$3,events=$4,enabled=$5,updated_at=clock_timestamp() WHERE id=$1`,
 			id, in.Name, in.Target, events, *in.Enabled)
+		if err == nil && !*in.Enabled {
+			// Turning a channel off also drops what it had waiting; rows already
+			// being sent are stopped by the worker's lease renewal check.
+			_, err = tx.ExecContext(ctx, `UPDATE notification_outbox SET status='failed',last_error='CHANNEL_DISABLED',next_attempt_at=now()
+				WHERE channel_id=$1 AND status='pending'`, id)
+		}
 	}
 	if err != nil {
 		return nil, err
@@ -395,7 +402,65 @@ type Notifier struct {
 }
 
 func NewNotifier(smtpConfig *SMTPConfig) *Notifier {
-	return &Notifier{HTTP: safeHTTPClient(), SMTP: smtpConfig, sendMail: smtp.SendMail}
+	return &Notifier{HTTP: safeHTTPClient(), SMTP: smtpConfig, sendMail: sendMailTimeout}
+}
+
+// smtpTimeout bounds one whole SMTP conversation; tests shorten it.
+var smtpTimeout = 30 * time.Second
+
+// sendMailTimeout is smtp.SendMail with a dial timeout and a deadline on the
+// whole conversation, so a stalled SMTP server cannot block the worker or
+// shutdown. STARTTLS is used when offered, like smtp.SendMail.
+func sendMailTimeout(addr string, auth smtp.Auth, from string, to []string, msg []byte) error {
+	conn, err := net.DialTimeout("tcp", addr, 10*time.Second)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	if err := conn.SetDeadline(time.Now().Add(smtpTimeout)); err != nil {
+		return err
+	}
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return err
+	}
+	c, err := smtp.NewClient(conn, host)
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+	if ok, _ := c.Extension("STARTTLS"); ok {
+		if err := c.StartTLS(&tls.Config{ServerName: host, MinVersion: tls.VersionTLS12}); err != nil {
+			return err
+		}
+	}
+	if auth != nil {
+		if ok, _ := c.Extension("AUTH"); !ok {
+			return errors.New("smtp: server does not support AUTH")
+		}
+		if err := c.Auth(auth); err != nil {
+			return err
+		}
+	}
+	if err := c.Mail(from); err != nil {
+		return err
+	}
+	for _, rcpt := range to {
+		if err := c.Rcpt(rcpt); err != nil {
+			return err
+		}
+	}
+	w, err := c.Data()
+	if err != nil {
+		return err
+	}
+	if _, err := w.Write(msg); err != nil {
+		return err
+	}
+	if err := w.Close(); err != nil {
+		return err
+	}
+	return c.Quit()
 }
 
 var errBlockedAddress = errors.New("blocked address")
@@ -439,6 +504,7 @@ type outboxJob struct {
 	Attempts       int                 `json:"attempts"`
 	Kind           string              `json:"kind"`
 	Target         string              `json:"target"`
+	Enabled        bool                `json:"enabled"`
 	RecipientEmail string              `json:"recipient_email"`
 	Payload        notificationPayload `json:"payload"`
 }
@@ -452,35 +518,62 @@ type deliveryError struct {
 
 func (e *deliveryError) Error() string { return e.Code }
 
-// ProcessNotificationBatch claims due outbox rows, delivers them outside the
-// transaction and records the result. It returns how many rows it handled.
+// notificationLease is how long a claimed row stays with one worker. Each
+// send renews it first and is bounded well below it (HTTP 15s, SMTP 30s), so
+// a slow batch never lets another worker take and resend the same row.
+const notificationLease = "2 minutes"
+
+// ProcessNotificationBatch claims due outbox rows, delivers them one by one
+// outside the claim transaction and records each result. It returns how many
+// rows it claimed.
 func (s *Store) ProcessNotificationBatch(ctx context.Context) (int, error) {
 	if s.Notifier == nil {
 		return 0, nil
 	}
-	lease := uuid.NewString()
+	lease := "lease:" + uuid.NewString()
 	var jobs []outboxJob
 	err := transaction(ctx, s.DB, func(tx *sql.Tx) error {
 		var err error
 		jobs, err = many[outboxJob](ctx, tx, `WITH candidates AS (
 			SELECT id FROM notification_outbox WHERE (status='pending' OR (status='processing' AND lease_until<now())) AND next_attempt_at<=now()
-			ORDER BY next_attempt_at,id LIMIT 10 FOR UPDATE SKIP LOCKED
+			ORDER BY next_attempt_at,created_at,id LIMIT 10 FOR UPDATE SKIP LOCKED
 		), claimed AS (
-			UPDATE notification_outbox o SET status='processing',attempts=o.attempts+1,lease_until=now()+interval '2 minutes',last_error=$1
+			UPDATE notification_outbox o SET status='processing',attempts=o.attempts+1,lease_until=now()+$2::interval,last_error=$1
 			FROM candidates WHERE o.id=candidates.id RETURNING o.*
-		) SELECT jsonb_build_object('id',o.id,'event',o.event,'attempts',o.attempts,'kind',c.kind,'target',c.target,
+		) SELECT jsonb_build_object('id',o.id,'event',o.event,'attempts',o.attempts,'kind',c.kind,'target',c.target,'enabled',c.enabled,
 			'recipient_email',coalesce(u.email,''),'payload',o.payload)
 		FROM claimed o JOIN notification_channels c ON c.id=o.channel_id
 		LEFT JOIN users u ON u.id=o.recipient_id AND NOT u.disabled
-			AND EXISTS(SELECT 1 FROM project_members m WHERE m.project_id=o.project_id AND m.user_id=u.id)`, "lease:"+lease)
+			AND EXISTS(SELECT 1 FROM project_members m WHERE m.project_id=o.project_id AND m.user_id=u.id)
+		ORDER BY o.next_attempt_at,o.created_at,o.id`, lease, notificationLease)
 		return err
 	})
 	if err != nil || len(jobs) == 0 {
 		return 0, err
 	}
 	for _, job := range jobs {
-		job.Payload.URL = s.PublicURL + "/#issues"
-		sendErr := s.Notifier.deliver(ctx, job)
+		if ctx.Err() != nil {
+			// Unsent rows keep their lease and are retried after it expires.
+			return len(jobs), ctx.Err()
+		}
+		// Renew the lease just before sending and re-read the channel switch.
+		// No row means another worker took it over after our lease expired.
+		var enabled bool
+		err := s.DB.QueryRowContext(ctx, `UPDATE notification_outbox o SET lease_until=now()+$3::interval FROM notification_channels c
+			WHERE o.id=$1 AND o.status='processing' AND o.last_error=$2 AND c.id=o.channel_id RETURNING c.enabled`, job.ID, lease, notificationLease).Scan(&enabled)
+		if errors.Is(err, sql.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return len(jobs), err
+		}
+		var sendErr error
+		if !enabled {
+			sendErr = &deliveryError{Code: "CHANNEL_DISABLED", Permanent: true}
+		} else {
+			job.Payload.URL = s.PublicURL + "/#issues"
+			sendErr = s.Notifier.deliver(ctx, job)
+		}
 		status, code, next := "sent", "", time.Duration(0)
 		if sendErr != nil {
 			var de *deliveryError
@@ -495,9 +588,13 @@ func (s *Store) ProcessNotificationBatch(ctx context.Context) (int, error) {
 				status = "failed"
 			}
 		}
-		_, err := s.DB.ExecContext(ctx, `UPDATE notification_outbox SET status=$2,last_error=NULLIF($3,''),lease_until=NULL,
+		// Record the outcome even if the batch was cancelled mid-send, so a
+		// delivered message is not sent again.
+		saveCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		_, err = s.DB.ExecContext(saveCtx, `UPDATE notification_outbox SET status=$2,last_error=NULLIF($3,''),lease_until=NULL,
 			next_attempt_at=now()+make_interval(secs=>$4),sent_at=CASE WHEN $2='sent' THEN now() ELSE sent_at END
-			WHERE id=$1 AND last_error=$5`, job.ID, status, code, next.Seconds(), "lease:"+lease)
+			WHERE id=$1 AND last_error=$5`, job.ID, status, code, next.Seconds(), lease)
+		cancel()
 		if err != nil {
 			return len(jobs), err
 		}
@@ -511,7 +608,7 @@ func (s *Store) RunNotificationWorker(ctx context.Context) {
 	var cleaned time.Time
 	for {
 		for {
-			batchCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+			batchCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 			n, err := s.ProcessNotificationBatch(batchCtx)
 			cancel()
 			if err != nil {
@@ -626,7 +723,7 @@ func (n *Notifier) sendEmail(job outboxJob) error {
 	}
 	send := n.sendMail
 	if send == nil {
-		send = smtp.SendMail
+		send = sendMailTimeout
 	}
 	if err := send(net.JoinHostPort(n.SMTP.Host, strconv.Itoa(n.SMTP.Port)), auth, n.SMTP.From, []string{job.RecipientEmail}, msg.Bytes()); err != nil {
 		return &deliveryError{Code: "SMTP_FAILED"}

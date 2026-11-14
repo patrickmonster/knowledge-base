@@ -234,6 +234,7 @@ func NewTools(s *Store) Tools {
 	registerAttachmentTools(t, s)
 	registerLinkTools(t, s)
 	registerReviewTools(t, s)
+	registerOwnershipTools(t, s)
 	registerIssueTools(t, s)
 	registerNotificationTools(t, s)
 	registerAgentsTools(t, s)

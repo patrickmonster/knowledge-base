@@ -105,7 +105,9 @@ type ImportResult struct {
 }
 
 func (s *Store) ExportProject(ctx context.Context, id Identity, projectID string, revisions bool) (ProjectExport, error) {
-	ctx = auditInput(ctx, map[string]any{"format": "export"})
+	// Documents, revisions, links and issues are read by separate queries;
+	// REPEATABLE READ makes them one consistent point-in-time view.
+	ctx = withSnapshot(auditInput(ctx, map[string]any{"format": "export"}))
 	out, err := s.Perform(ctx, id, "export_project", projectID, false, false, func(tx *sql.Tx) (any, error) {
 		return loadProjectExport(ctx, tx, id, projectID, revisions)
 	})
