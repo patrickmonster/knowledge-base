@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -44,6 +45,29 @@ func run() error {
 		store.Objects, err = kb.NewRailwayBucket(kb.BucketConfig{Endpoint: os.Getenv("BUCKET_ENDPOINT"), Bucket: os.Getenv("BUCKET_NAME"), Region: os.Getenv("BUCKET_REGION"), AccessKeyID: os.Getenv("BUCKET_ACCESS_KEY_ID"), SecretAccessKey: os.Getenv("BUCKET_SECRET_ACCESS_KEY"), ForcePathStyle: style == "true"})
 		if err != nil {
 			return err
+		}
+		if store.AttachmentQuotaBytes, err = kb.ParseAttachmentQuota(os.Getenv("ATTACHMENT_PROJECT_QUOTA_MB")); err != nil {
+			return err
+		}
+		allowExec := os.Getenv("ATTACHMENT_ALLOW_EXECUTABLES")
+		if allowExec != "" && allowExec != "true" && allowExec != "false" {
+			return errors.New("ATTACHMENT_ALLOW_EXECUTABLES must be true or false")
+		}
+		store.AllowExecutables = allowExec == "true"
+		if address := os.Getenv("CLAMAV_ADDRESS"); address != "" {
+			if _, _, err := net.SplitHostPort(address); err != nil {
+				return errors.New("CLAMAV_ADDRESS must be host:port")
+			}
+			store.Scanner = kb.ClamAV{Address: address}
+		}
+		if store.Retention, err = kb.ParseRetention(os.Getenv("AUDIT_RETENTION_DAYS"), os.Getenv("REVISION_RETENTION_DAYS"), os.Getenv("REVISION_KEEP_LATEST")); err != nil {
+			return err
+		}
+		{
+			workerCtx, stopWorker := context.WithCancel(ctx)
+			workerDone := make(chan struct{})
+			go func() { defer close(workerDone); store.RunRetention(workerCtx) }()
+			defer func() { stopWorker(); <-workerDone }()
 		}
 		if store.Objects != nil {
 			workerCtx, stopWorker := context.WithCancel(ctx)

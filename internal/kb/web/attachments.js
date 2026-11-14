@@ -61,10 +61,11 @@ async function attachmentsPage() {
     upload.hidden=currentProject().role==='viewer';
     list.replaceChildren(el('h2','첨부 목록'),el('p','불러오는 중…','muted'));
     try {
-      const items=await tool('list_attachments',{project_id:projectID,limit:25,offset});
+      const [items,usage]=await Promise.all([tool('list_attachments',{project_id:projectID,limit:25,offset}),tool('get_attachment_usage',{project_id:projectID}).catch(()=>null)]);
       if(ticket!==generation)return;
       const labels={ready:'저장 완료',pending:'업로드 대기',uploading:'전송 중 또는 중단됨'};
       list.replaceChildren(el('h2','첨부 목록'));
+      if(usage){const mb=n=>(n/1048576).toFixed(1)+' MB';list.append(el('p',`사용량 ${mb(usage.used_bytes)} / ${usage.quota_bytes?mb(usage.quota_bytes):'제한 없음'} · 악성 파일 검사 ${usage.malware_scanner==='none'?'없음':usage.malware_scanner}${usage.executables_blocked?' · 실행 파일 차단':''}`,'small muted'));}
       if(!items.length)list.append(el('p',offset===0?'이 프로젝트에 등록된 첨부 파일이 없습니다. 파일을 업로드하면 여기에 표시됩니다.':'마지막 페이지입니다. 이전 페이지로 돌아가 주세요.','empty'));
       if(items.length)
       list.append(table(['파일','크기 / 상태','연결 문서','관리'],items.map(f=>{

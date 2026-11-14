@@ -68,6 +68,12 @@ func registerAttachmentTools(t Tools, s *Store) {
 		if in.Filename != strings.TrimSpace(in.Filename) || in.Filename == "." || in.Filename == ".." || strings.ContainsAny(in.Filename, "/\\") || strings.IndexFunc(in.Filename, unicode.IsControl) >= 0 || in.SizeBytes < 1 || in.SizeBytes > MaxAttachmentBytes {
 			return nil, problem("INVALID_INPUT", "Use a plain filename and a file between 1 byte and 25 MiB.")
 		}
+		if !s.AllowExecutables && blockedFilename(in.Filename) {
+			return nil, problem("BLOCKED_FILE", "Executable and script files cannot be attached. Compress or rename only if the file is safe documentation.")
+		}
+		if err := s.reserveQuota(ctx, tx, in.ProjectID, in.SizeBytes); err != nil {
+			return nil, err
+		}
 		var revision *int
 		if in.DocumentID != "" {
 			if err := validID(in.DocumentID); err != nil {
@@ -96,6 +102,12 @@ func registerAttachmentTools(t Tools, s *Store) {
 			out["upload_url_note"] = "One-time link for this file only, valid for 1 hour, no Authorization header needed. Do not save it in knowledge documents."
 		}
 		return out, err
+	})
+	add(t, s, "get_attachment_usage", "Show the project's stored and reserved file bytes, its quota, and whether uploads are malware-scanned.", false, func(in ProjectInput) string { return in.ProjectID }, func(ctx context.Context, tx *sql.Tx, a Identity, in ProjectInput) (any, error) {
+		if _, err := projectAccess(ctx, tx, a.User.ID, in.ProjectID, false); err != nil {
+			return nil, err
+		}
+		return s.attachmentUsage(ctx, tx, in.ProjectID)
 	})
 	add(t, s, "list_attachments", "List project files and upload status. Optional document_id filters files linked to that document.", false, func(in ListAttachmentsInput) string { return in.ProjectID }, func(ctx context.Context, tx *sql.Tx, a Identity, in ListAttachmentsInput) (any, error) {
 		if _, err := projectAccess(ctx, tx, a.User.ID, in.ProjectID, false); err != nil {
@@ -206,6 +218,9 @@ func (s *Store) UploadAttachment(ctx context.Context, a Identity, in AttachmentI
 		return nil, problem("INVALID_INPUT", "Upload length does not match the reserved file size.")
 	}
 	if _, err = file.Seek(0, io.SeekStart); err != nil {
+		return nil, err
+	}
+	if err = s.screenUpload(ctx, a, in, f, file); err != nil {
 		return nil, err
 	}
 	if err = s.Objects.Put(ctx, attachmentKey(in.ProjectID, f.ID), f.Filename, file, n); err != nil {

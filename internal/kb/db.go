@@ -17,6 +17,14 @@ type Store struct {
 	Objects  ObjectStorage
 	// PublicURL is the server origin used to build absolute upload links.
 	PublicURL string
+	// Retention purges old audit events and revisions; zero keeps them forever.
+	Retention RetentionPolicy
+	// AttachmentQuotaBytes caps a project's stored and reserved files; 0 is unlimited.
+	AttachmentQuotaBytes int64
+	// Scanner, when set, must report a file clean before it is stored (fail closed).
+	Scanner MalwareScanner
+	// AllowExecutables disables the built-in executable file block.
+	AllowExecutables bool
 }
 type Querier interface {
 	ExecContext(context.Context, string, ...any) (sql.Result, error)
