@@ -15,6 +15,9 @@ type Store struct {
 	DB       *sql.DB
 	Embedder Embedder
 	Objects  ObjectStorage
+	// Notifier delivers queued issue notifications; nil disables delivery
+	// (events are still queued).
+	Notifier *Notifier
 	// PublicURL is the server origin used to build absolute upload links.
 	PublicURL string
 	// Retention purges old audit events and revisions; zero keeps them forever.
@@ -47,7 +50,7 @@ func Open(ctx context.Context, dsn string) (*Store, error) {
 	return &Store{DB: db}, nil
 }
 // migrationScripts are applied in order; version N is migrationScripts[N-1].
-var migrationScripts = []string{migrations.Initial, migrations.Auth, migrations.Embeddings, migrations.PermanentKeys, migrations.TaskWorkflow, migrations.Attachments, migrations.AttachmentUploadTokens, migrations.NormalizeTags, migrations.DocumentLinks, migrations.Issues}
+var migrationScripts = []string{migrations.Initial, migrations.Auth, migrations.Embeddings, migrations.PermanentKeys, migrations.TaskWorkflow, migrations.Attachments, migrations.AttachmentUploadTokens, migrations.NormalizeTags, migrations.DocumentLinks, migrations.Issues, migrations.TeamRollout}
 
 func (s *Store) Migrate(ctx context.Context) error {
 	return transaction(ctx, s.DB, func(tx *sql.Tx) error {
@@ -75,8 +78,20 @@ func (s *Store) Migrate(ctx context.Context) error {
 		return nil
 	})
 }
+// snapshotKey marks a context whose transaction must read one consistent
+// snapshot across several queries (REPEATABLE READ), e.g. a project export.
+type snapshotKey struct{}
+
+func withSnapshot(ctx context.Context) context.Context {
+	return context.WithValue(ctx, snapshotKey{}, true)
+}
+
 func transaction(ctx context.Context, db *sql.DB, fn func(*sql.Tx) error) error {
-	tx, err := db.BeginTx(ctx, nil)
+	var opts *sql.TxOptions
+	if snapshot, _ := ctx.Value(snapshotKey{}).(bool); snapshot {
+		opts = &sql.TxOptions{Isolation: sql.LevelRepeatableRead}
+	}
+	tx, err := db.BeginTx(ctx, opts)
 	if err != nil {
 		return err
 	}

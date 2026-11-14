@@ -95,7 +95,15 @@ async function documentsPage() {
       content.append(el('p','불러오는 중…','muted'));
       try {
         const doc=await tool('get_document',{project_id:d.project_id,document_id:d.id});
-        content.replaceChildren(el('code',d.id),renderMarkdown(doc.content,'vector-content'));
+        const role=projects.find(p=>p.id===d.project_id)?.role, canEdit=role==='owner'||role==='editor';
+        const parts=[el('code',d.id),renderMarkdown(doc.content,'vector-content'),linksPanel(d,canEdit)];
+        if (d.revision>1) {
+          const versions=el('details',undefined,'version-details');
+          versions.append(el('summary',`버전 비교 (현재 버전 ${d.revision})`));
+          versions.addEventListener('toggle',()=>{if(versions.open&&versions.childElementCount===1)versions.append(versionCompare(d,person));});
+          parts.push(versions);
+        }
+        content.replaceChildren(...parts);
       } catch(e) { content.replaceChildren(el('p',e.message,'muted')); }
     });
     return item;

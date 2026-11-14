@@ -33,3 +33,4 @@ jobs:
       - run: npm ci --prefix .railway
       - run: npm --prefix .railway run check
       - run: npm --prefix .railway test
+      - run: node --test scripts/web-diff.test.js

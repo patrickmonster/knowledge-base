@@ -75,6 +75,10 @@ func run() error {
 			go func() { defer close(workerDone); store.RunAttachmentCleanup(workerCtx) }()
 			defer func() { stopWorker(); <-workerDone }()
 		}
+		notifier, err := notifierConfig()
+		if err != nil {
+			return err
+		}
 		embeddingEnabled := os.Getenv("EMBEDDING_ENABLED")
 		if embeddingEnabled != "" && embeddingEnabled != "true" && embeddingEnabled != "false" {
 			return errors.New("EMBEDDING_ENABLED must be true or false")
@@ -109,6 +113,15 @@ func run() error {
 		app, err := kb.NewApp(store, config)
 		if err != nil {
 			return err
+		}
+		// NewApp sets store.PublicURL, which notification links use, so the
+		// notification worker starts only after it.
+		if notifier != nil {
+			store.Notifier = notifier
+			workerCtx, stopWorker := context.WithCancel(ctx)
+			workerDone := make(chan struct{})
+			go func() { defer close(workerDone); store.RunNotificationWorker(workerCtx) }()
+			defer func() { stopWorker(); <-workerDone }()
 		}
 		server := &http.Server{Addr: ":" + port, Handler: app.Handler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 120 * time.Second, WriteTimeout: 130 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 32 << 10}
 		go func() {
