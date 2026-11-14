@@ -51,6 +51,17 @@ func run() error {
 			go func() { defer close(workerDone); store.RunAttachmentCleanup(workerCtx) }()
 			defer func() { stopWorker(); <-workerDone }()
 		}
+		notifier, err := notifierConfig()
+		if err != nil {
+			return err
+		}
+		if notifier != nil {
+			store.Notifier = notifier
+			workerCtx, stopWorker := context.WithCancel(ctx)
+			workerDone := make(chan struct{})
+			go func() { defer close(workerDone); store.RunNotificationWorker(workerCtx) }()
+			defer func() { stopWorker(); <-workerDone }()
+		}
 		embeddingEnabled := os.Getenv("EMBEDDING_ENABLED")
 		if embeddingEnabled != "" && embeddingEnabled != "true" && embeddingEnabled != "false" {
 			return errors.New("EMBEDDING_ENABLED must be true or false")

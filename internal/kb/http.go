@@ -49,6 +49,9 @@ func (a *App) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("PUT /api/attachments/{id}/content", a.attachmentUpload)
 	a.sessionRoute(mux, "GET /api/attachments/storage", a.attachmentStorage)
+	mux.HandleFunc("GET /api/projects/{id}/export", a.projectExport)
+	mux.HandleFunc("POST /api/projects/{id}/import", a.projectImport)
+	mux.HandleFunc("GET /api/projects/{id}/agents.md", a.agentsDownload)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 		defer cancel()
@@ -226,6 +229,14 @@ func (a *App) Handler() http.Handler {
 		limit, timeout := int64(1<<20), 30*time.Second
 		if r.Method == "PUT" && strings.HasPrefix(r.URL.Path, "/api/attachments/") && strings.HasSuffix(r.URL.Path, "/content") {
 			limit, timeout = MaxAttachmentBytes+1, 120*time.Second
+		}
+		if strings.HasPrefix(r.URL.Path, "/api/projects/") {
+			switch {
+			case r.Method == "POST" && strings.HasSuffix(r.URL.Path, "/import"):
+				limit, timeout = MaxImportBytes, 120*time.Second
+			case r.Method == "GET" && strings.HasSuffix(r.URL.Path, "/export"):
+				timeout = 60 * time.Second
+			}
 		}
 		r.Body = http.MaxBytesReader(w, r.Body, limit)
 		ctx, cancel := context.WithTimeout(r.Context(), timeout)

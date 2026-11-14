@@ -21,8 +21,8 @@ async function issuesPage() {
   const query=selectQuery(filters);
   controls.append(filters);
   const summary=el('p','','small muted');summary.setAttribute('role','status');controls.append(summary);
-  const createCard=card('새 질의 · 이슈'), areaCard=card('공통 작업 영역과 담당자'), list=el('div');
-  root.append(list,createCard,areaCard);
+  const createCard=card('새 질의 · 이슈'), areaCard=card('공통 작업 영역과 담당자'), notifyCard=el('div'), list=el('div');
+  root.append(list,createCard,areaCard,notifyCard);
   let generation=0, members=[], areas=[];
   const current=()=>projects.find(p=>p.id===project.value);
   const canWrite=()=>['owner','editor'].includes(current().role);
@@ -32,6 +32,8 @@ async function issuesPage() {
     [members,areas]=await Promise.all([tool('list_project_members',{project_id:p.id}),tool('list_work_areas',{project_id:p.id})]);
     if (ticket!==generation) return;
     renderCreate(); renderAreas(); await refresh();
+    const notifications=await notificationCard(p);
+    if (ticket===generation||current().id===p.id) notifyCard.replaceChildren(notifications);
   }
   async function refresh() {
     const ticket=++generation, p=current();
@@ -127,9 +129,13 @@ async function issuesPage() {
   function renderAreas() {
     areaCard.replaceChildren(el('h2','공통 작업 영역과 담당자'));
     areaCard.append(el('p','작업 내용에 영역 이름이 포함되면 작업 시작 시 담당자가 표시됩니다. 담당자가 아닌 사람(또는 AI)은 결정 전에 질의를 남깁니다.','small muted'));
-    areaCard.append(table(['영역','설명','담당자','진행 중'],areas.map(a=>[a.name,a.description||'—',a.owner_name,a.open_issues])));
+    const p=current();
+    const areaOwnerCell=a=>{if(a.owner_active)return a.owner_name;const n=el('div');n.append(el('div',a.owner_name),el('span','담당자 확인 필요','pill stale'));n.title='담당자가 프로젝트를 떠났거나 조회자로 바뀌었거나 비활성화되었습니다. 담당자를 바꾸거나 영역을 정리하세요.';return n;};
+    const inactive=areas.filter(a=>!a.owner_active).length;
+    if (inactive) areaCard.append(el('p',`담당자 확인이 필요한 영역 ${inactive}개: 담당자를 바꾸거나 더 쓰지 않는 영역은 삭제하세요.`,'vector-warning'));
+    areaCard.append(table(['영역','설명','담당자','진행 중',''],areas.map(a=>[a.name,a.description||'—',areaOwnerCell(a),a.open_issues,canDeleteArea(a)?areaDelete(a):''])));
     if (!canWrite()) return;
-    const f=el('form'), p=current();
+    const f=el('form');
     const pick=selectField(f,'편집할 영역','area_id',[['','새 영역 추가'],...areas.map(a=>[a.id,a.name])]);
     const name=field(f,'영역 이름','name');name.maxLength=100;
     const desc=field(f,'설명 (선택)','description');desc.required=false;desc.maxLength=2000;
@@ -141,6 +147,20 @@ async function issuesPage() {
       await tool('set_work_area',input);notify('영역을 저장했습니다.');await loadProject();
     });
     areaCard.append(f);
+  }
+  function canDeleteArea(a) { return canWrite()&&(current().role==='owner'||a.owner_id===me.id); }
+  function areaDelete(a) {
+    const box=el('div',undefined,'actions'), others=areas.filter(x=>x.id!==a.id);
+    const move=el('select');move.setAttribute('aria-label',a.name+' 질의를 옮길 영역');
+    move.append(new Option('질의는 영역 없이 두기',''),...others.map(x=>new Option('→ '+x.name,x.id)));
+    box.append(move,btn('삭제',async()=>{
+      const target=others.find(x=>x.id===move.value);
+      if (!confirm(`영역 "${a.name}"을 삭제할까요?
+이 영역의 질의·이슈는 삭제되지 않고 ${target?`"${target.name}" 영역으로 옮겨집니다`:'영역 없이 남습니다'} (담당자는 그대로).`)) return;
+      const r=await tool('delete_work_area',{project_id:current().id,area_id:a.id,...(target?{move_to_area_id:target.id}:{})});
+      notify(`영역을 삭제했습니다. 옮긴 질의 ${r.moved_issues}건, 영역 없이 남은 질의 ${r.detached_issues}건.`);await loadProject();
+    },'danger'));
+    return box;
   }
   function selectQuery(form) {
     const l=el('label','검색어'),i=el('input');i.type='search';i.placeholder='제목·내용·답변';i.maxLength=500;l.append(i);form.append(l);

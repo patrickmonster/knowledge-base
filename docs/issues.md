@@ -28,6 +28,7 @@ open / answered ──update_issue──▶ closed(닫힘: 취소·불필요)
 | 도구 | 역할 | 권한 |
 | --- | --- | --- |
 | `list_work_areas` | 영역·담당자·진행 중 질의 수 | 프로젝트 참여자 |
+| `delete_work_area` | 영역 삭제. `move_to_area_id`를 주면 질의·이슈를 그 영역으로 옮기고, 생략하면 영역 없이 남김(담당자 유지) | 프로젝트 소유자 또는 해당 영역 담당자 |
 | `set_work_area` | 영역 추가(`area_id` 생략) 또는 수정 | 추가: 편집자 이상. 수정: 프로젝트 소유자 또는 해당 영역 담당자 |
 | `create_issue` | 질의·이슈 등록. `area_id`만 주면 영역 담당자가 자동 배정. `request_key`로 재시도 시 중복 방지 | 편집자 이상 |
 | `list_issues` | 기본 `status: active`(대기+답변됨). `open`·`answered`·`resolved`·`closed`·`all`, `kind`, `area_id`, `assignee_id`, `created_by`, `query`(모든 단어 포함) 필터 | 프로젝트 참여자 |
@@ -71,6 +72,6 @@ open / answered ──update_issue──▶ closed(닫힘: 취소·불필요)
 
 ## 현재 제약
 
-- 담당자에게 알림(메일·메신저)을 보내지 않습니다. 담당자는 작업 시작 맥락이나 웹 화면에서 확인합니다.
+- 담당자 알림은 프로젝트별 알림 채널(웹훅·Slack·이메일)로 보냅니다([안내](team-rollout.md#이슈-담당자-알림)). 채널이 없으면 작업 시작 맥락이나 웹 화면에서 확인합니다.
 - 질의·이슈 본문 자체는 임베딩하지 않습니다. 의미 검색에 포함하려면 `publish_answer`로 문서화합니다.
-- 영역 삭제 도구는 없습니다(이름·담당자 변경만 가능).
+- 영역은 `delete_work_area`로 삭제합니다. 질의·이슈는 지우지 않고 다른 영역으로 옮기거나 영역 없이 남깁니다. 담당자가 프로젝트를 떠났거나 조회자·비활성이 된 영역은 `owner_active: false`로 표시됩니다.
