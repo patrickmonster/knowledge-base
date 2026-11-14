@@ -25,3 +25,6 @@ var AttachmentUploadTokens string
 
 //go:embed 008_normalize_tags.sql
 var NormalizeTags string
+
+//go:embed 009_document_links.sql
+var DocumentLinks string

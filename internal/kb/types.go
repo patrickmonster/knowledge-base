@@ -54,6 +54,9 @@ type Document struct {
 	UpdatedBy string   `json:"updated_by"`
 	CreatedAt string   `json:"created_at"`
 	UpdatedAt string   `json:"updated_at"`
+	// Links is attached by get_document for the current revision only; it is
+	// link metadata, never part of a revision snapshot.
+	Links *DocumentLinks `json:"links,omitempty"`
 }
 type DocumentInput struct {
 	ProjectID string   `json:"project_id"`
@@ -87,6 +90,9 @@ type SearchHit struct {
 	Score      float64 `json:"score"`
 	Citation   string  `json:"citation"`
 	Truncated  bool    `json:"truncated,omitempty"`
+	// SupersededBy lists active documents that replace this hit; such hits are
+	// ranked after current knowledge.
+	SupersededBy []SupersedingDocument `json:"superseded_by,omitempty"`
 }
 type TaskContext struct {
 	Project         Project          `json:"project"`

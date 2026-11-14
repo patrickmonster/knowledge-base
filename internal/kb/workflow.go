@@ -69,6 +69,7 @@ type FinishTaskInput struct {
 	References string          `json:"references" jsonschema:"Verified source IDs, revisions, links or commits; distinguish uncommitted and undeployed work"`
 	Tags       []string        `json:"tags,omitempty" jsonschema:"History topic tags; at most 18, plus automatic task ID and history tags"`
 	Documents  []TemplateDraft `json:"documents,omitempty" jsonschema:"Optional brief or decision documents, at most 10; drafts by default, active only when confirmed"`
+	Implements []string        `json:"implements,omitempty" jsonschema:"IDs of existing decision or brief documents this task carried out, at most 20; the history is linked to them with implements"`
 }
 
 func registerWorkflowTools(t Tools, s *Store) {
@@ -215,6 +216,10 @@ func (s *Store) finishTask(ctx context.Context, tx *sql.Tx, a Identity, in Finis
 		}
 		return *run.Completion, nil
 	}
+	implemented, err := implementedDocuments(ctx, tx, in.ProjectID, in.Implements)
+	if err != nil {
+		return nil, err
+	}
 	out := TaskCompletion{TaskID: run.ID, Outcome: in.Outcome, Documents: []SavedDocument{}, Guidance: "Original documents and embedding jobs were saved atomically. Read the returned document IDs/revisions, then inspect get_embedding_status; semantic search may still be pending. Corrections use update_document with expected_revision."}
 	links := ""
 	for _, draft := range in.Documents {
@@ -249,9 +254,21 @@ func (s *Store) finishTask(ctx context.Context, tx *sql.Tx, a Identity, in Finis
 	if links != "" {
 		content += "\n## 함께 저장한 기획·결정\n" + links + "\n"
 	}
+	if len(implemented) > 0 {
+		content += "\n## 실행한 기획·결정\n"
+		for _, d := range implemented {
+			content += fmt.Sprintf("\n- %s (%s, %s): kb://%s/documents/%s?revision=%d", d.Title, d.Kind, d.Status, d.ProjectID, d.ID, d.Revision)
+		}
+		content += "\n"
+	}
 	doc, err := createDocument(ctx, tx, a, DocumentInput{ProjectID: in.ProjectID, Title: history.Title, Kind: "history", Status: "active", Tags: history.Tags, Content: content})
 	if err != nil {
 		return nil, err
+	}
+	for _, d := range implemented {
+		if _, err := linkDocuments(ctx, tx, a, LinkInput{ProjectID: in.ProjectID, SourceID: doc.(Document).ID, TargetID: d.ID, Relation: relationImplements}); err != nil {
+			return nil, err
+		}
 	}
 	out.Documents = append([]SavedDocument{savedDocument(doc.(Document))}, out.Documents...)
 	raw, err = json.Marshal(out)

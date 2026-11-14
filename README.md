@@ -118,6 +118,7 @@ Authorization: Bearer <발급받은 MCP 키>
 | `create_document`, `update_document` | 지식 추가·버전 기반 수정 |
 | `get_document`, `list_documents` | 본문 조회, 종류·상태·태그·기간·작성자 필터 목록과 재확인 필요 표시 |
 | `get_document_history` | 최근 50개 수정 버전의 작성자·이유 조회 |
+| `link_documents`, `unlink_documents`, `get_document_links` | 문서 간 관계(`supersedes`, `implements`, `related`) 추가·삭제·조회 |
 | `search_knowledge` | 프로젝트 내 하이브리드·의미·키워드 검색 |
 | `get_embedding_status` | 프로젝트별 임베딩 대기·처리·완료·실패 건수 조회 |
 | `reindex_project_embeddings` | 소유자 전용: 현재 본문으로 청크를 다시 만들고 벡터 재생성 예약(새 버전은 만들지 않음) |
@@ -136,6 +137,16 @@ Authorization: Bearer <발급받은 MCP 키>
 - `stale_only`, `stale_days`: 재확인 필요 문서만 보기, 기준 일수(기본 90, 1~3650)
 
 목록의 각 문서에는 `needs_recheck`, `days_since_update`, `stale_after_days`가 붙습니다. `needs_recheck`는 **active 상태의 `reference`·`brief` 문서**가 기준 일수 넘게 갱신되지 않았을 때만 `true`입니다. `decision`·`history`는 특정 시점의 기록이라 표시하지 않고, draft·archived 문서도 제외합니다. AI는 이 표시가 있는 문서를 근거로 쓰기 전에 현재 상태를 확인하고, 여전히 맞으면 `update_document`로 갱신해 표시를 해제합니다. 웹 **지식 문서** 화면에서 같은 필터로 문서를 찾고 본문을 열어 볼 수 있으며 재확인 필요 문서에는 배지가 표시됩니다. 마이그레이션은 필요 없습니다.
+
+문서 간 관계는 `link_documents`로 같은 프로젝트의 두 문서를 잇습니다. 관계는 현재 상태 메타데이터라 새 버전을 만들지 않고 청크·벡터도 바꾸지 않습니다. 같은 요청을 반복해도 한 번만 저장됩니다(`009_document_links` 마이그레이션 필요).
+
+| 관계 | source → target | 효과 |
+| --- | --- | --- |
+| `supersedes` | 새 문서 → 대체된 옛 문서(같은 종류, history 제외) | source가 **active**인 동안 target은 `search_knowledge`·작업 맥락에서 현재 문서들 뒤로 밀리고 `superseded_by`가 붙습니다. 작업 맥락의 최근 결정 목록에서도 빠집니다. draft 대체안은 승인 전까지 순위에 영향을 주지 않습니다. 순환 연결은 `CONFLICT`입니다. |
+| `implements` | history → 실행한 decision·brief | 결정 문서의 `implemented_by`로 "이 결정이 어떤 작업으로 실행됐나"를 거꾸로 찾습니다. `finish_task`의 `implements`에 문서 ID를 넣으면 히스토리 저장과 함께 연결되고 본문에 `## 실행한 기획·결정` 목록이 붙습니다. |
+| `related` | 방향 없음 | 양쪽 어느 방향으로 요청해도 한 건으로 저장·삭제됩니다. |
+
+`get_document`(현재 버전)와 `get_document_links`는 `supersedes`, `superseded_by`, `implements`, `implemented_by`, `related`로 묶어 돌려줍니다. 과거 버전 조회에는 관계를 붙이지 않습니다. 검색에서는 결과 목록 안에서만 순서를 바꾸며 대체된 문서를 숨기지 않습니다.
 
 웹 **검토 대기** 화면은 프로젝트의 draft 문서를 모아 보여 줍니다. 소유자·편집자가 본문을 확인하고 사유와 함께 승인(`active`) 또는 반려(`archived`)하면 사유가 `검토 승인: …` / `검토 반려: …` 형식으로 버전 기록에 남고 감사 로그에 결정이 기록됩니다(사유 본문은 감사 로그에 복사하지 않음). 이 동작(`review_document`)은 로그인한 사람만 할 수 있으며 MCP 도구 목록에 노출되지 않고 MCP 키 호출은 거부됩니다. AI가 만든 미확정 지식을 같은 AI가 승격하지 않도록 하기 위한 제한입니다. 단, `update_document`로 상태를 바꾸는 기존 경로는 그대로 남아 있습니다.
 
