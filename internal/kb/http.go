@@ -92,11 +92,48 @@ func (a *App) Handler() http.Handler {
 		if !readJSON(w, r, &in) {
 			return
 		}
-		raw, err := a.Store.Login(r.Context(), in.Email, in.Password)
+		result, err := a.Store.BeginLogin(r.Context(), in.Email, in.Password)
 		if err != nil {
 			a.fail(w, err)
 			return
 		}
+		if result.MFAToken != "" {
+			http.SetCookie(w, a.mfaCookie(result.MFAToken, int(mfaChallengeTTL.Seconds())))
+			a.json(w, map[string]any{"ok": false, "mfa_required": true})
+			return
+		}
+		http.SetCookie(w, a.cookie(result.Session, 12*3600))
+		a.json(w, map[string]any{"ok": true})
+	})
+	mux.HandleFunc("POST /api/login/mfa", func(w http.ResponseWriter, r *http.Request) {
+		if !a.origin(w, r) {
+			return
+		}
+		if err := a.Store.RateLimit(r.Context(), "mfa-ip:"+a.clientIP(r), 50, 900); err != nil {
+			a.fail(w, err)
+			return
+		}
+		var in struct {
+			Code string `json:"code"`
+		}
+		if !readJSON(w, r, &in) {
+			return
+		}
+		cookie, err := r.Cookie("kb_mfa")
+		if err != nil {
+			a.fail(w, problem("UNAUTHORIZED", "Sign-in expired. Enter your email and password again."))
+			return
+		}
+		raw, err := a.Store.CompleteMFALogin(r.Context(), cookie.Value, in.Code)
+		if err != nil {
+			// Keep the challenge for another try; otherwise the password step starts over.
+			if code := errorCode(err); code != "RATE_LIMITED" && code != "MFA_INVALID_CODE" {
+				http.SetCookie(w, a.mfaCookie("", -1))
+			}
+			a.fail(w, err)
+			return
+		}
+		http.SetCookie(w, a.mfaCookie("", -1))
 		http.SetCookie(w, a.cookie(raw, 12*3600))
 		a.json(w, map[string]any{"ok": true})
 	})
@@ -122,7 +159,55 @@ func (a *App) Handler() http.Handler {
 		a.json(w, map[string]any{"ok": true})
 	})
 	a.sessionRoute(mux, "GET /api/me", func(r *http.Request, id Identity) (any, error) {
-		return map[string]any{"user": id.User, "csrf_token": id.CSRF, "mcp_url": a.Config.PublicURL + "/mcp"}, nil
+		mfa, err := a.Store.mfaEnabled(r.Context(), a.Store.DB, id.User.ID)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"user": id.User, "csrf_token": id.CSRF, "mcp_url": a.Config.PublicURL + "/mcp", "mfa_enabled": mfa}, nil
+	})
+	a.sessionRoute(mux, "GET /api/mfa", func(r *http.Request, id Identity) (any, error) { return a.Store.GetMFAStatus(r.Context(), id) })
+	a.sessionRoute(mux, "POST /api/mfa/setup", func(r *http.Request, id Identity) (any, error) {
+		var in struct{}
+		if err := decode(r, &in); err != nil {
+			return nil, err
+		}
+		return a.Store.SetupMFA(r.Context(), id)
+	})
+	a.sessionRoute(mux, "POST /api/mfa/enable", func(r *http.Request, id Identity) (any, error) {
+		var in struct {
+			Password string `json:"password"`
+			Code     string `json:"code"`
+		}
+		if err := decode(r, &in); err != nil {
+			return nil, err
+		}
+		return a.Store.EnableMFA(r.Context(), id, in.Password, in.Code)
+	})
+	a.sessionRoute(mux, "POST /api/mfa/disable", func(r *http.Request, id Identity) (any, error) {
+		var in struct {
+			Password string `json:"password"`
+			Code     string `json:"code"`
+		}
+		if err := decode(r, &in); err != nil {
+			return nil, err
+		}
+		return a.Store.DisableMFA(r.Context(), id, in.Password, in.Code)
+	})
+	a.sessionRoute(mux, "POST /api/mfa/recovery-codes", func(r *http.Request, id Identity) (any, error) {
+		var in struct {
+			Code string `json:"code"`
+		}
+		if err := decode(r, &in); err != nil {
+			return nil, err
+		}
+		return a.Store.RegenerateRecoveryCodes(r.Context(), id, in.Code)
+	})
+	a.sessionRoute(mux, "POST /api/admin/users/mfa-reset", func(r *http.Request, id Identity) (any, error) {
+		var in MFAResetInput
+		if err := decode(r, &in); err != nil {
+			return nil, err
+		}
+		return a.Store.ResetMFA(r.Context(), id, in)
 	})
 	a.sessionRoute(mux, "POST /api/logout", func(r *http.Request, id Identity) (any, error) {
 		return a.Store.Perform(r.Context(), id, "logout", "", true, false, func(tx *sql.Tx) (any, error) {
@@ -248,6 +333,11 @@ func (a *App) Handler() http.Handler {
 func (a *App) cookie(raw string, maxAge int) *http.Cookie {
 	return &http.Cookie{Name: "kb_session", Value: raw, Path: "/", HttpOnly: true, Secure: a.secure, SameSite: http.SameSiteStrictMode, MaxAge: maxAge}
 }
+
+// mfaCookie carries the pending second-factor challenge, only to /api/login/mfa.
+func (a *App) mfaCookie(raw string, maxAge int) *http.Cookie {
+	return &http.Cookie{Name: "kb_mfa", Value: raw, Path: "/api/login/mfa", HttpOnly: true, Secure: a.secure, SameSite: http.SameSiteStrictMode, MaxAge: maxAge}
+}
 func (a *App) origin(w http.ResponseWriter, r *http.Request) bool {
 	if r.Header.Get("Origin") != a.Config.PublicURL {
 		a.fail(w, problem("FORBIDDEN", "Untrusted request origin."))
@@ -360,7 +450,7 @@ func (a *App) fail(w http.ResponseWriter, err error) {
 	code := errorCode(err)
 	status := http.StatusInternalServerError
 	switch code {
-	case "UNAUTHORIZED":
+	case "UNAUTHORIZED", "MFA_INVALID_CODE", "MFA_REQUIRED":
 		status = 401
 	case "FORBIDDEN":
 		status = 403
@@ -373,7 +463,7 @@ func (a *App) fail(w http.ResponseWriter, err error) {
 	case "RATE_LIMITED":
 		status = 429
 		w.Header().Set("Retry-After", "900")
-	case "STORAGE_UNAVAILABLE", "SCAN_UNAVAILABLE":
+	case "STORAGE_UNAVAILABLE", "SCAN_UNAVAILABLE", "MFA_UNAVAILABLE":
 		status = 503
 	case "QUOTA_EXCEEDED":
 		status = 413

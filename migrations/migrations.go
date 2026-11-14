@@ -46,3 +46,6 @@ var RuleEnabled string
 
 //go:embed 015_search_misses.sql
 var SearchMisses string
+
+//go:embed 016_mfa.sql
+var MFA string

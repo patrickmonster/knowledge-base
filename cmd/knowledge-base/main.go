@@ -60,6 +60,9 @@ func run() error {
 			}
 			store.Scanner = kb.ClamAV{Address: address}
 		}
+		if store.MFAKey, err = kb.ParseMFAKey(os.Getenv("MFA_ENCRYPTION_KEY")); err != nil {
+			return err
+		}
 		if store.Retention, err = kb.ParseRetention(os.Getenv("AUDIT_RETENTION_DAYS"), os.Getenv("REVISION_RETENTION_DAYS"), os.Getenv("REVISION_KEEP_LATEST")); err != nil {
 			return err
 		}

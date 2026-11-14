@@ -125,13 +125,33 @@ func (s *Store) RateLimit(ctx context.Context, bucket string, limit int, windowS
 	}
 	return nil
 }
+
+// LoginResult holds either a session token, or, when the user enabled MFA, a
+// challenge token for CompleteMFALogin.
+type LoginResult struct {
+	Session  string
+	MFAToken string
+}
+
+// Login signs in a user without MFA. Users with MFA must use BeginLogin.
 func (s *Store) Login(ctx context.Context, email, password string) (string, error) {
+	r, err := s.BeginLogin(ctx, email, password)
+	if err != nil {
+		return "", err
+	}
+	if r.MFAToken != "" {
+		return "", problem("MFA_REQUIRED", "Enter the code from your authenticator app.")
+	}
+	return r.Session, nil
+}
+
+func (s *Store) BeginLogin(ctx context.Context, email, password string) (LoginResult, error) {
 	email, err := emailAddress(email)
 	if err != nil {
-		return "", problem("UNAUTHORIZED", "Email or password is incorrect.")
+		return LoginResult{}, problem("UNAUTHORIZED", "Email or password is incorrect.")
 	}
 	if err = s.RateLimit(ctx, "login:"+email, 10, 900); err != nil {
-		return "", err
+		return LoginResult{}, err
 	}
 	type credential struct {
 		User
@@ -139,16 +159,17 @@ func (s *Store) Login(ctx context.Context, email, password string) (string, erro
 	}
 	u, err := one[credential](ctx, s.DB, "SELECT to_jsonb(u) FROM users u WHERE email=$1", email)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return "", err
+		return LoginResult{}, err
 	}
 	matched := VerifyPassword(ctx, u.PasswordHash, password)
 	if !matched || u.Disabled || u.ID == "" {
 		if err := audit(ctx, s.DB, Event{TargetID: u.ID, Action: "login", Outcome: "denied", ErrorCode: "UNAUTHORIZED", RequestID: uuid.NewString()}); err != nil {
-			return "", err
+			return LoginResult{}, err
 		}
-		return "", problem("UNAUTHORIZED", "Email or password is incorrect.")
+		return LoginResult{}, problem("UNAUTHORIZED", "Email or password is incorrect.")
 	}
 	raw := token()
+	var out LoginResult
 	err = transaction(ctx, s.DB, func(tx *sql.Tx) error {
 		// Re-check under a lock: password reset or suspension must invalidate this login.
 		var current string
@@ -159,12 +180,32 @@ func (s *Store) Login(ctx context.Context, email, password string) (string, erro
 		if disabled || current != u.PasswordHash {
 			return problem("UNAUTHORIZED", "Please sign in again.")
 		}
+		mfa, err := s.mfaEnabled(ctx, tx, u.ID)
+		if err != nil {
+			return err
+		}
+		if mfa {
+			// Password verified; the session waits for the second factor.
+			if len(s.MFAKey) != 32 {
+				return problem("MFA_UNAVAILABLE", "Two-step verification is not configured on this server. Ask an administrator.")
+			}
+			if _, err := tx.ExecContext(ctx, `INSERT INTO mfa_challenges(token_hash,user_id,credential_digest,expires_at)
+				VALUES($1,$2,$3,now()+make_interval(secs=>$4))`, digest(raw), u.ID, digest(current), mfaChallengeTTL.Seconds()); err != nil {
+				return err
+			}
+			out.MFAToken = raw
+			return audit(ctx, tx, Event{ActorID: u.ID, Action: "login_password", Outcome: "success", RequestID: uuid.NewString(), Details: map[string]any{"mfa": "required"}})
+		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO sessions(token_hash,user_id,csrf_token,expires_at) VALUES($1,$2,$3,now()+interval '12 hours')`, digest(raw), u.ID, token()); err != nil {
 			return err
 		}
+		out.Session = raw
 		return audit(ctx, tx, Event{ActorID: u.ID, Action: "login", Outcome: "success", RequestID: uuid.NewString()})
 	})
-	return raw, err
+	if err != nil {
+		return LoginResult{}, err
+	}
+	return out, nil
 }
 func (s *Store) Session(ctx context.Context, raw string) (Identity, error) {
 	if len(raw) != 43 {
@@ -247,6 +288,8 @@ func revokeCredentials(ctx context.Context, tx *sql.Tx, userID string) error {
 func (s *Store) Cleanup(ctx context.Context) error {
 	_, err := s.DB.ExecContext(ctx, `DELETE FROM sessions WHERE expires_at<now();
 		DELETE FROM rate_limits WHERE window_start<now()-interval '1 day';
-		DELETE FROM invitations WHERE expires_at<now()-interval '7 days'`)
+		DELETE FROM invitations WHERE expires_at<now()-interval '7 days';
+		DELETE FROM mfa_challenges WHERE expires_at<now();
+		DELETE FROM user_mfa WHERE enabled_at IS NULL AND created_at<now()-interval '1 day'`)
 	return err
 }
