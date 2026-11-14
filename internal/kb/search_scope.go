@@ -17,6 +17,7 @@ type CrossSearchInput struct {
 	Limit      int      `json:"limit,omitempty"`
 	Status     string   `json:"status,omitempty"`
 	Mode       string   `json:"mode,omitempty" jsonschema:"hybrid (default when configured), semantic, or lexical"`
+	NoSynonyms bool     `json:"no_synonyms,omitempty" jsonschema:"Set true to disable glossary synonym expansion"`
 }
 
 type SearchedProject struct {
@@ -29,6 +30,7 @@ type SearchedProject struct {
 type CrossSearchResult struct {
 	Hits            []SearchHit       `json:"hits"`
 	Retrieval       string            `json:"retrieval"`
+	ExpandedTerms   []string          `json:"expanded_terms,omitempty"`
 	Warning         string            `json:"warning,omitempty"`
 	UnindexedChunks int               `json:"unindexed_chunks"`
 	Projects        []SearchedProject `json:"projects"`
@@ -109,7 +111,7 @@ func (s *Store) searchAcrossProjects(ctx context.Context, tx *sql.Tx, actor Iden
 		ids[i] = p.ID
 		byID[p.ID] = p
 	}
-	result, err := s.searchProjects(ctx, tx, ids, SearchInput{Query: in.Query, Limit: in.Limit, Status: in.Status, Mode: in.Mode})
+	result, err := s.searchProjects(ctx, tx, ids, SearchInput{Query: in.Query, Limit: in.Limit, Status: in.Status, Mode: in.Mode, NoSynonyms: in.NoSynonyms})
 	if err != nil {
 		return out, err
 	}
@@ -122,7 +124,7 @@ func (s *Store) searchAcrossProjects(ctx context.Context, tx *sql.Tx, actor Iden
 		p := byID[result.Hits[i].ProjectID]
 		result.Hits[i].ProjectSlug, result.Hits[i].ProjectName = p.Slug, p.Name
 	}
-	out.Hits, out.Retrieval, out.Warning, out.UnindexedChunks = result.Hits, result.Retrieval, result.Warning, result.UnindexedChunks
+	out.Hits, out.Retrieval, out.Warning, out.UnindexedChunks, out.ExpandedTerms = result.Hits, result.Retrieval, result.Warning, result.UnindexedChunks, result.ExpandedTerms
 	if out.Omitted > 0 {
 		note := fmt.Sprintf("Only the %d oldest accessible projects were searched; pass project_ids to choose others.", maxSearchProjects)
 		if out.Warning != "" {

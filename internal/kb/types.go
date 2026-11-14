@@ -59,11 +59,14 @@ type Document struct {
 	Links *DocumentLinks `json:"links,omitempty"`
 	// Recheck is attached by get_document for a stale current revision only.
 	Recheck *Recheck `json:"recheck,omitempty"`
+	// SimilarDecisions is attached when a decision is created: existing
+	// decisions that may duplicate or conflict with it. Never stored.
+	SimilarDecisions []SimilarDocument `json:"similar_decisions,omitempty"`
 }
 type DocumentInput struct {
 	ProjectID string   `json:"project_id"`
 	Title     string   `json:"title"`
-	Kind      string   `json:"kind" jsonschema:"brief, decision, history, artifact, or reference"`
+	Kind      string   `json:"kind" jsonschema:"brief, decision, history, artifact, reference, or glossary (a term with its synonyms; search expands queries with them)"`
 	Content   string   `json:"content" jsonschema:"Markdown text; maximum 100000 characters"`
 	Tags      []string `json:"tags,omitempty"`
 	Status    string   `json:"status,omitempty" jsonschema:"draft, active (default), or archived"`
@@ -116,6 +119,8 @@ type TaskContext struct {
 	// Issues lists open questions and shared work areas relevant to the task
 	// so the agent asks area owners before changing shared work.
 	Issues          *TaskIssues      `json:"issues,omitempty"`
+	// Rechecks lists documents the caller owns for re-checking that are due.
+	Rechecks        *TaskRechecks    `json:"rechecks,omitempty"`
 	// Rules are the project (owner/admin) and personal commit and work rules to follow.
 	Rules *RuleSet `json:"rules,omitempty"`
 }
@@ -123,6 +128,8 @@ type TaskContext struct {
 type SearchResult struct {
 	Hits            []SearchHit `json:"hits"`
 	Retrieval       string      `json:"retrieval"`
+	// ExpandedTerms are glossary synonyms added to the query.
+	ExpandedTerms   []string    `json:"expanded_terms,omitempty"`
 	Warning         string      `json:"warning,omitempty"`
 	UnindexedChunks int         `json:"unindexed_chunks"`
 }
@@ -144,7 +151,7 @@ func bounded(label, s string, min, max int) error {
 }
 func validKind(s string) bool {
 	switch s {
-	case "brief", "decision", "history", "artifact", "reference":
+	case "brief", "decision", "history", "artifact", "reference", "glossary":
 		return true
 	}
 	return false
