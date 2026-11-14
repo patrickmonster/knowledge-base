@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 )
@@ -142,11 +144,45 @@ func updateDocument(ctx context.Context, tx *sql.Tx, actor Identity, in UpdateIn
 }
 
 type ListInput struct {
-	ProjectID string `json:"project_id"`
-	Limit     int    `json:"limit,omitempty"`
-	Offset    int    `json:"offset,omitempty"`
-	Status    string `json:"status,omitempty"`
-	Kind      string `json:"kind,omitempty"`
+	ProjectID     string   `json:"project_id"`
+	Limit         int      `json:"limit,omitempty"`
+	Offset        int      `json:"offset,omitempty"`
+	Status        string   `json:"status,omitempty"`
+	Kind          string   `json:"kind,omitempty"`
+	Tags          []string `json:"tags,omitempty" jsonschema:"Documents must have every tag (case-insensitive); at most 10"`
+	UpdatedAfter  string   `json:"updated_after,omitempty" jsonschema:"Last updated at or after: YYYY-MM-DD (Asia/Seoul start of day) or RFC3339"`
+	UpdatedBefore string   `json:"updated_before,omitempty" jsonschema:"Last updated on or before: YYYY-MM-DD (Asia/Seoul, inclusive) or RFC3339 (exclusive)"`
+	Author        string   `json:"author,omitempty" jsonschema:"User ID that created or last updated the document"`
+	StaleOnly     bool     `json:"stale_only,omitempty" jsonschema:"Only active reference/brief documents that need re-checking"`
+	StaleDays     int      `json:"stale_days,omitempty" jsonschema:"Days without updates before active reference/brief documents need re-checking; default 90, 1–3650"`
+}
+
+// DefaultStaleDays is how long an active reference or brief may go without an
+// update before list_documents marks it needs_recheck.
+const DefaultStaleDays = 90
+
+// staleKinds hold facts that drift (references, project briefs). Decisions and
+// histories record a point in time and are never marked stale.
+var staleKinds = []string{"brief", "reference"}
+
+// parseListTime accepts a date (Asia/Seoul) or an RFC3339 timestamp. Dates used
+// as an upper bound include the whole day.
+func parseListTime(label, value string, upper bool) (*time.Time, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil, nil
+	}
+	if t, err := time.Parse(time.RFC3339, value); err == nil {
+		return &t, nil
+	}
+	t, err := time.ParseInLocation("2006-01-02", value, seoul)
+	if err != nil {
+		return nil, problem("INVALID_INPUT", label+" must be YYYY-MM-DD or an RFC3339 timestamp.")
+	}
+	if upper {
+		t = t.AddDate(0, 0, 1)
+	}
+	return &t, nil
 }
 
 func listDocuments(ctx context.Context, tx *sql.Tx, actor Identity, in ListInput) ([]map[string]any, error) {
@@ -163,8 +199,51 @@ func listDocuments(ctx context.Context, tx *sql.Tx, actor Identity, in ListInput
 	if in.Kind != "" && !validKind(in.Kind) {
 		return nil, problem("INVALID_INPUT", "Unknown kind.")
 	}
-	return many[map[string]any](ctx, tx, `SELECT to_jsonb(d)-'content' FROM documents d WHERE project_id=$1
-	AND ($4='' OR status=$4) AND ($5='' OR kind=$5) ORDER BY updated_at DESC,id LIMIT $2 OFFSET $3`, in.ProjectID, limit, in.Offset, in.Status, in.Kind)
+	tags := normalizeTags(in.Tags)
+	if len(tags) > 10 {
+		return nil, problem("INVALID_INPUT", "Filter by at most 10 tags.")
+	}
+	for i, tag := range tags {
+		if utf8.RuneCountInString(tag) > 50 {
+			return nil, problem("INVALID_INPUT", "Each tag filter must have at most 50 characters.")
+		}
+		tags[i] = strings.ToLower(tag)
+	}
+	if in.Author != "" {
+		if err := validID(in.Author); err != nil {
+			return nil, problem("INVALID_INPUT", "author must be a user ID (canonical lowercase UUID).")
+		}
+	}
+	after, err := parseListTime("updated_after", in.UpdatedAfter, false)
+	if err != nil {
+		return nil, err
+	}
+	before, err := parseListTime("updated_before", in.UpdatedBefore, true)
+	if err != nil {
+		return nil, err
+	}
+	if after != nil && before != nil && !after.Before(*before) {
+		return nil, problem("INVALID_INPUT", "updated_after must be earlier than updated_before.")
+	}
+	staleDays := in.StaleDays
+	if staleDays == 0 {
+		staleDays = DefaultStaleDays
+	}
+	if staleDays < 1 || staleDays > 3650 {
+		return nil, problem("INVALID_INPUT", "stale_days must be 1–3650.")
+	}
+	return many[map[string]any](ctx, tx, `WITH listed AS (
+		SELECT d.*, d.kind=ANY($11::text[]) AND d.status='active' AND d.updated_at < now()-make_interval(days=>$10::int) AS needs_recheck
+		FROM documents d WHERE d.project_id=$1
+		AND ($4='' OR d.status=$4) AND ($5='' OR d.kind=$5)
+		AND NOT EXISTS (SELECT 1 FROM unnest($6::text[]) want WHERE NOT EXISTS (SELECT 1 FROM unnest(d.tags) have WHERE lower(have)=want))
+		AND ($7::timestamptz IS NULL OR d.updated_at >= $7::timestamptz)
+		AND ($8::timestamptz IS NULL OR d.updated_at < $8::timestamptz)
+		AND ($9='' OR d.created_by::text=$9 OR d.updated_by::text=$9))
+	SELECT (to_jsonb(l)-'content')||jsonb_build_object('days_since_update',floor(extract(epoch FROM now()-l.updated_at)/86400)::int,'stale_after_days',$10::int)
+	FROM listed l WHERE NOT $12::bool OR l.needs_recheck
+	ORDER BY l.updated_at DESC,l.id LIMIT $2 OFFSET $3`,
+		in.ProjectID, limit, in.Offset, in.Status, in.Kind, tags, after, before, in.Author, staleDays, staleKinds, in.StaleOnly)
 }
 
 type SearchInput struct {

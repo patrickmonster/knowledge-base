@@ -152,7 +152,7 @@ func NewTools(s *Store) Tools {
 	add(t, s, "get_document", "Read a document, optionally at a specific revision.", false, func(in DocumentRef) string { return in.ProjectID }, func(ctx context.Context, tx *sql.Tx, a Identity, in DocumentRef) (any, error) {
 		return getDocument(ctx, tx, a, in)
 	})
-	add(t, s, "list_documents", "Browse document metadata; use get_document to read the body.", false, func(in ListInput) string { return in.ProjectID }, func(ctx context.Context, tx *sql.Tx, a Identity, in ListInput) (any, error) {
+	add(t, s, "list_documents", "Browse document metadata; use get_document to read the body. Filter by kind, status, tags (all must match), updated_after/updated_before, and author (creator or last editor user ID). Active reference/brief documents not updated for stale_days (default 90) have needs_recheck=true; stale_only lists only those. Re-verify needs_recheck documents before relying on them.", false, func(in ListInput) string { return in.ProjectID }, func(ctx context.Context, tx *sql.Tx, a Identity, in ListInput) (any, error) {
 		return listDocuments(ctx, tx, a, in)
 	})
 	add(t, s, "get_document_history", "Read up to 50 recent revisions, authors and reasons. Use get_document with revision for old content.", false, func(in DocumentRef) string { return in.ProjectID }, func(ctx context.Context, tx *sql.Tx, a Identity, in DocumentRef) (any, error) {

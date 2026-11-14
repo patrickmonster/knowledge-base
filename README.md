@@ -116,7 +116,7 @@ Authorization: Bearer <발급받은 MCP 키>
 | `create_project`, `list_projects` | 프로젝트 생성·조회 |
 | `set_project_member`, `list_project_members` | 참여자 권한 관리 |
 | `create_document`, `update_document` | 지식 추가·버전 기반 수정 |
-| `get_document`, `list_documents` | 본문·목록 조회 |
+| `get_document`, `list_documents` | 본문 조회, 종류·상태·태그·기간·작성자 필터 목록과 재확인 필요 표시 |
 | `get_document_history` | 최근 50개 수정 버전의 작성자·이유 조회 |
 | `search_knowledge` | 프로젝트 내 하이브리드·의미·키워드 검색 |
 | `get_embedding_status` | 프로젝트별 임베딩 대기·처리·완료·실패 건수 조회 |
@@ -127,6 +127,15 @@ Authorization: Bearer <발급받은 MCP 키>
 | `get_document_templates`, `create_templated_document` | 기획·결정·히스토리 양식 조회·필수 항목 검증 후 저장 |
 
 문서 종류는 `brief`, `decision`, `history`, `artifact`, `reference`입니다. 상태는 `draft`, `active`, `archived`이고 기본 검색에는 활성 문서의 최신 버전만 포함됩니다. `update_document`는 `expected_revision`과 수정 이유 `reason`이 필요합니다. 충돌하면 최신 내용을 읽고 변경을 병합해야 합니다.
+
+`list_documents`는 `kind`, `status` 외에 다음 필터를 받습니다. 모든 필터는 함께 적용(AND)됩니다.
+
+- `tags`: 나열한 태그를 **모두** 가진 문서(대소문자 무시, 최대 10개)
+- `updated_after`, `updated_before`: 최종 수정 시각 범위. `YYYY-MM-DD`는 한국 시간(UTC+9) 기준이며 끝 날짜는 그날 전체를 포함합니다. RFC3339 시각은 그대로 쓰고 `updated_before`는 그 시각을 포함하지 않습니다.
+- `author`: 사용자 ID. 문서를 만든 사람 또는 마지막으로 수정한 사람이 일치하면 포함합니다.
+- `stale_only`, `stale_days`: 재확인 필요 문서만 보기, 기준 일수(기본 90, 1~3650)
+
+목록의 각 문서에는 `needs_recheck`, `days_since_update`, `stale_after_days`가 붙습니다. `needs_recheck`는 **active 상태의 `reference`·`brief` 문서**가 기준 일수 넘게 갱신되지 않았을 때만 `true`입니다. `decision`·`history`는 특정 시점의 기록이라 표시하지 않고, draft·archived 문서도 제외합니다. AI는 이 표시가 있는 문서를 근거로 쓰기 전에 현재 상태를 확인하고, 여전히 맞으면 `update_document`로 갱신해 표시를 해제합니다. 웹 **지식 문서** 화면에서 같은 필터로 문서를 찾고 본문을 열어 볼 수 있으며 재확인 필요 문서에는 배지가 표시됩니다. 마이그레이션은 필요 없습니다.
 
 웹 **검토 대기** 화면은 프로젝트의 draft 문서를 모아 보여 줍니다. 소유자·편집자가 본문을 확인하고 사유와 함께 승인(`active`) 또는 반려(`archived`)하면 사유가 `검토 승인: …` / `검토 반려: …` 형식으로 버전 기록에 남고 감사 로그에 결정이 기록됩니다(사유 본문은 감사 로그에 복사하지 않음). 이 동작(`review_document`)은 로그인한 사람만 할 수 있으며 MCP 도구 목록에 노출되지 않고 MCP 키 호출은 거부됩니다. AI가 만든 미확정 지식을 같은 AI가 승격하지 않도록 하기 위한 제한입니다. 단, `update_document`로 상태를 바꾸는 기존 경로는 그대로 남아 있습니다.
 
