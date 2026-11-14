@@ -227,11 +227,73 @@ func TestAttachmentHTTPAndConcurrentSingleUse(t *testing.T) {
 	if w := put(f, readonly, ""); w.Code != 403 {
 		t.Fatal(w.Code)
 	}
+
+	// One-time upload links for MCP clients that cannot read their own Bearer key.
+	putLink := func(u, auth, origin string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest("PUT", u, strings.NewReader("abc"))
+		r.Header.Set("Content-Type", "application/octet-stream")
+		if auth != "" {
+			r.Header.Set("Authorization", auth)
+		}
+		if origin != "" {
+			r.Header.Set("Origin", origin)
+		}
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		return w
+	}
+	prepareLink := func() string {
+		out := mustCall(t, tools, keyID, "prepare_attachment_upload", PrepareAttachmentInput{ProjectID: p.ID, Filename: "summary.xlsx", SizeBytes: 3}).(map[string]any)
+		link, _ := out["upload_url"].(string)
+		if !strings.HasPrefix(link, "http://localhost:8080/api/attachments/") || !strings.Contains(link, "&upload_token=kbu_") {
+			t.Fatalf("missing upload link: %v", out)
+		}
+		return link
+	}
+	if _, ok := mustCall(t, tools, owner, "prepare_attachment_upload", PrepareAttachmentInput{ProjectID: p.ID, Filename: "web.txt", SizeBytes: 3}).(map[string]any)["upload_url"]; ok {
+		t.Fatal("web session callers must not receive upload links")
+	}
+	link, other := prepareLink(), prepareLink()
+	tampered := link[:len(link)-1] + map[bool]string{true: "A", false: "B"}[link[len(link)-1] != 'A']
+	if w := putLink(tampered, "", ""); w.Code != 401 {
+		t.Fatal("tampered link", w.Code)
+	}
+	otherToken := other[strings.Index(other, "&upload_token="):]
+	if w := putLink(link[:strings.Index(link, "&upload_token=")]+otherToken, "", ""); w.Code != 401 {
+		t.Fatal("token reused for another file", w.Code)
+	}
+	if w := putLink(link, "Bearer "+key, ""); w.Code != 400 {
+		t.Fatal("mixed credentials", w.Code)
+	}
+	if w := putLink(link, "", "https://evil.example"); w.Code != 403 {
+		t.Fatal("foreign origin", w.Code)
+	}
+	if w := putLink(link, "", ""); w.Code != 200 {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	if w := putLink(link, "", ""); w.Code != 401 {
+		t.Fatal("link reused", w.Code)
+	}
+	expired := prepareLink()
+	if _, err = s.DB.Exec("UPDATE attachments SET created_at=now()-interval '61 minutes' WHERE upload_token_hash IS NOT NULL AND id::text=split_part(split_part($1,'/api/attachments/',2),'/',1)", expired); err != nil {
+		t.Fatal(err)
+	}
+	if w := putLink(expired, "", ""); w.Code != 401 {
+		t.Fatal("expired link", w.Code)
+	}
+	revokedLink := prepareLink()
 	if _, err = s.RevokeKey(ctx, owner, keyID.KeyID); err != nil {
 		t.Fatal(err)
 	}
 	if w := put(f, key, ""); w.Code != 401 {
 		t.Fatal(w.Code)
+	}
+	if w := putLink(revokedLink, "", ""); w.Code != 401 {
+		t.Fatal("revoked key link", w.Code)
+	}
+	var leaked bool
+	if err = s.DB.QueryRow("SELECT EXISTS(SELECT 1 FROM audit_events WHERE details::text LIKE '%kbu\\_%')").Scan(&leaked); err != nil || leaked {
+		t.Fatalf("upload token leaked into audit log: %v", err)
 	}
 }
 

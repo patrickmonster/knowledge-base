@@ -19,3 +19,6 @@ var TaskWorkflow string
 
 //go:embed 006_attachments.sql
 var Attachments string
+
+//go:embed 007_attachment_upload_tokens.sql
+var AttachmentUploadTokens string

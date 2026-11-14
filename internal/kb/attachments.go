@@ -55,7 +55,7 @@ func (s *Store) requireBucket() error {
 }
 func attachmentKey(projectID, id string) string { return "attachments/" + projectID + "/" + id }
 func registerAttachmentTools(t Tools, s *Store) {
-	add(t, s, "prepare_attachment_upload", "Reserve a private file (max 25 MiB). PUT raw file bytes to upload_path on this server using the same Bearer key; do not send the file through MCP. The PUT response confirms storage. File text is not automatically indexed.", true, func(in PrepareAttachmentInput) string { return in.ProjectID }, func(ctx context.Context, tx *sql.Tx, a Identity, in PrepareAttachmentInput) (any, error) {
+	add(t, s, "prepare_attachment_upload", "Reserve a private file (max 25 MiB) for a file the user attached or that you produced (for example an .xlsx summary). Then PUT the raw bytes with Content-Type application/octet-stream to upload_url (one-time, 1 hour, no Authorization header; e.g. curl --fail-with-body -T <file> -H 'Content-Type: application/octet-stream' '<upload_url>'), or to upload_path with the same Bearer key. Do not send file bytes through MCP. Confirm status ready with the PUT response or list_attachments. File text is not indexed: also save a knowledge document summarizing the file and pass its document_id.", true, func(in PrepareAttachmentInput) string { return in.ProjectID }, func(ctx context.Context, tx *sql.Tx, a Identity, in PrepareAttachmentInput) (any, error) {
 		if _, err := projectAccess(ctx, tx, a.User.ID, in.ProjectID, true); err != nil {
 			return nil, err
 		}
@@ -80,8 +80,22 @@ func registerAttachmentTools(t Tools, s *Store) {
 			revision = &n
 		}
 		id := uuid.NewString()
-		f, err := one[Attachment](ctx, tx, `WITH a AS (INSERT INTO attachments(id,project_id,document_id,document_revision,filename,size_bytes,object_key,created_by) VALUES($1,$2,NULLIF($3,'')::uuid,$4,$5,$6,$7,$8) RETURNING *) SELECT to_jsonb(a)-'object_key' FROM a`, id, in.ProjectID, in.DocumentID, revision, in.Filename, in.SizeBytes, attachmentKey(in.ProjectID, id), a.User.ID)
-		return map[string]any{"id": id, "attachment": f, "upload_path": "/api/attachments/" + id + "/content?project_id=" + in.ProjectID, "method": "PUT", "content_type": "application/octet-stream", "expires_in_seconds": 3600}, err
+		// MCP callers get a one-time upload link so clients that cannot read their own
+		// Bearer key (hosted connectors, sandboxes) can still PUT the file. Web sessions
+		// keep using cookie + CSRF and never receive a link.
+		var uploadToken, tokenHash, keyID any
+		if a.KeyID != "" {
+			raw := "kbu_" + token()
+			uploadToken, tokenHash, keyID = raw, digest(raw), a.KeyID
+		}
+		f, err := one[Attachment](ctx, tx, `WITH a AS (INSERT INTO attachments(id,project_id,document_id,document_revision,filename,size_bytes,object_key,created_by,upload_token_hash,upload_key_id) VALUES($1,$2,NULLIF($3,'')::uuid,$4,$5,$6,$7,$8,$9,$10::uuid) RETURNING *) SELECT to_jsonb(a)-'object_key'-'upload_token_hash'-'upload_key_id' FROM a`, id, in.ProjectID, in.DocumentID, revision, in.Filename, in.SizeBytes, attachmentKey(in.ProjectID, id), a.User.ID, tokenHash, keyID)
+		path := "/api/attachments/" + id + "/content?project_id=" + in.ProjectID
+		out := map[string]any{"id": id, "attachment": f, "upload_path": path, "method": "PUT", "content_type": "application/octet-stream", "expires_in_seconds": 3600}
+		if uploadToken != nil {
+			out["upload_url"] = s.PublicURL + path + "&upload_token=" + uploadToken.(string)
+			out["upload_url_note"] = "One-time link for this file only, valid for 1 hour, no Authorization header needed. Do not save it in knowledge documents."
+		}
+		return out, err
 	})
 	add(t, s, "list_attachments", "List project files and upload status. Optional document_id filters files linked to that document.", false, func(in ListAttachmentsInput) string { return in.ProjectID }, func(ctx context.Context, tx *sql.Tx, a Identity, in ListAttachmentsInput) (any, error) {
 		if _, err := projectAccess(ctx, tx, a.User.ID, in.ProjectID, false); err != nil {
@@ -161,7 +175,7 @@ func (s *Store) UploadAttachment(ctx context.Context, a Identity, in AttachmentI
 		if f.Status != "pending" || time.Since(f.CreatedAt) > time.Hour {
 			return nil, problem("CONFLICT", "Upload is used or expired. Prepare a new upload.")
 		}
-		_, err = tx.ExecContext(ctx, "UPDATE attachments SET status='uploading',updated_at=now() WHERE id=$1", f.ID)
+		_, err = tx.ExecContext(ctx, "UPDATE attachments SET status='uploading',upload_token_hash=NULL,updated_at=now() WHERE id=$1", f.ID)
 		return f, err
 	})
 	if err != nil {
@@ -208,6 +222,32 @@ func (s *Store) UploadAttachment(ctx context.Context, a Identity, in AttachmentI
 		}
 		return one[Attachment](ctx, tx, `WITH a AS (UPDATE attachments SET status='ready',sha256=$2,updated_at=now() WHERE id=$1 RETURNING *) SELECT to_jsonb(a)-'object_key' FROM a`, f.ID, digest)
 	})
+}
+
+// UploadTokenIdentity resolves a one-time upload link to the API key that reserved
+// the file. The key must still be active, so revoking it also disables its links.
+// Permissions and the uploader check are then enforced again by UploadAttachment.
+func (s *Store) UploadTokenIdentity(ctx context.Context, attachmentID, projectID, raw string) (Identity, error) {
+	invalid := problem("UNAUTHORIZED", "Invalid, used, or expired upload link. Prepare a new upload.")
+	if !strings.HasPrefix(raw, "kbu_") || len(raw) != 47 || validID(attachmentID) != nil || validID(projectID) != nil {
+		return Identity{}, invalid
+	}
+	var userJSON []byte
+	var id, access string
+	var project sql.NullString
+	err := s.DB.QueryRowContext(ctx, `SELECT to_jsonb(u)-'password_hash',k.id::text,k.access,k.project_id::text
+		FROM attachments f JOIN api_keys k ON k.id=f.upload_key_id JOIN users u ON u.id=k.user_id
+		WHERE f.id=$1 AND f.project_id=$2 AND f.upload_token_hash=$3 AND f.status='pending' AND f.created_at>now()-interval '1 hour'
+		AND k.user_id=f.created_by AND k.revoked_at IS NULL AND (k.expires_at IS NULL OR k.expires_at>now()) AND NOT u.disabled`,
+		attachmentID, projectID, digest(raw)).Scan(&userJSON, &id, &access, &project)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Identity{}, invalid
+	}
+	if err != nil {
+		return Identity{}, err
+	}
+	u, err := decodeUser(userJSON)
+	return Identity{User: u, KeyID: id, Access: access, ProjectID: project.String}, err
 }
 
 // No bucket lifecycle rule is needed. The database journals all object keys before PUT.

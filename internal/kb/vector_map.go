@@ -23,6 +23,7 @@ type VectorPoint struct {
 	Excerpt    string  `json:"excerpt"`
 	X          float64 `json:"x"`
 	Y          float64 `json:"y"`
+	Z          float64 `json:"z"`
 }
 type VectorMap struct {
 	Points            []VectorPoint `json:"points"`
@@ -30,6 +31,9 @@ type VectorMap struct {
 	Eligible          int           `json:"eligible"`
 	Limit             int           `json:"limit"`
 	ExplainedVariance float64       `json:"explained_variance"`
+	// Per-axis share of total variance, in x, y, z order. A 2D view uses the
+	// first two entries; explained_variance is their sum over all three.
+	ComponentVariance [3]float64    `json:"component_variance"`
 	EmbeddingStatus   any           `json:"embedding_status"`
 }
 
@@ -81,15 +85,17 @@ func (s *Store) VectorMap(ctx context.Context, actor Identity, in VectorMapInput
 		if err != nil {
 			return nil, err
 		}
-		coords, variance, err := projectVectors(ctx, vectors)
+		coords, shares, err := projectVectors(ctx, vectors)
 		if err != nil {
 			return nil, err
 		}
 		for i := range out.Points {
 			out.Points[i].X = coords[i][0]
 			out.Points[i].Y = coords[i][1]
+			out.Points[i].Z = coords[i][2]
 		}
-		out.ExplainedVariance = variance
+		out.ComponentVariance = shares
+		out.ExplainedVariance = math.Min(1, shares[0]+shares[1]+shares[2])
 		return out, nil
 	})
 }
@@ -134,34 +140,36 @@ func (s *Store) VectorNeighbors(ctx context.Context, actor Identity, in VectorNe
 	})
 }
 
-// Matrix-free two-component PCA of normalized embeddings. Normalization makes
+// Matrix-free three-component PCA of normalized embeddings. Normalization makes
 // the geometry consistent with cosine retrieval. No random layout or jitter is
 // added: identical vectors legitimately overlap. Projection is sample-relative.
-func projectVectors(ctx context.Context, vectors [][]float64) ([][2]float64, float64, error) {
+// It returns coordinates and each component's share of the total variance.
+func projectVectors(ctx context.Context, vectors [][]float64) ([][3]float64, [3]float64, error) {
+	var shares [3]float64
 	n := len(vectors)
-	coords := make([][2]float64, n)
+	coords := make([][3]float64, n)
 	if n == 0 {
-		return coords, 0, nil
+		return coords, shares, nil
 	}
 	d := len(vectors[0])
 	if d == 0 {
-		return nil, 0, problem("INVALID_VECTOR", "Empty vector.")
+		return nil, shares, problem("INVALID_VECTOR", "Empty vector.")
 	}
 	mean := make([]float64, d)
 	data := make([][]float64, n)
 	for i, v := range vectors {
 		if len(v) != d {
-			return nil, 0, problem("INVALID_VECTOR", "Inconsistent dimensions.")
+			return nil, shares, problem("INVALID_VECTOR", "Inconsistent dimensions.")
 		}
 		var norm float64
 		for _, x := range v {
 			if math.IsNaN(x) || math.IsInf(x, 0) {
-				return nil, 0, problem("INVALID_VECTOR", "Non-finite vector.")
+				return nil, shares, problem("INVALID_VECTOR", "Non-finite vector.")
 			}
 			norm += x * x
 		}
 		if norm <= 0 {
-			return nil, 0, problem("INVALID_VECTOR", "Zero vector.")
+			return nil, shares, problem("INVALID_VECTOR", "Zero vector.")
 		}
 		norm = math.Sqrt(norm)
 		data[i] = make([]float64, d)
@@ -180,11 +188,10 @@ func projectVectors(ctx context.Context, vectors [][]float64) ([][2]float64, flo
 		}
 	}
 	if total < 1e-12 {
-		return coords, 0, nil
+		return coords, shares, nil
 	}
 	var axes [][]float64
-	var captured float64
-	for component := 0; component < 2; component++ {
+	for component := 0; component < len(shares); component++ {
 		seed := 0
 		for j := range diag {
 			if diag[j] > diag[seed] {
@@ -214,7 +221,7 @@ func projectVectors(ctx context.Context, vectors [][]float64) ([][2]float64, flo
 		orthogonalize(axis)
 		for iteration := 0; iteration < 64; iteration++ {
 			if err := ctx.Err(); err != nil {
-				return nil, 0, err
+				return nil, shares, err
 			}
 			next := make([]float64, d)
 			for _, v := range data {
@@ -266,8 +273,8 @@ func projectVectors(ctx context.Context, vectors [][]float64) ([][2]float64, flo
 		for j := range diag {
 			diag[j] = math.Max(0, diag[j]-energy*axis[j]*axis[j])
 		}
-		captured += energy
+		shares[component] = math.Min(1, energy/total)
 		axes = append(axes, axis)
 	}
-	return coords, math.Min(1, captured/total), nil
+	return coords, shares, nil
 }

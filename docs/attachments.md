@@ -20,9 +20,19 @@
 {"project_id":"PROJECT_UUID","document_id":"OPTIONAL_DOCUMENT_UUID","filename":"기획서.pdf","size_bytes":12345}
 ```
 
-응답의 `attachment.id`와 `upload_path`를 보관합니다. `document_id`는 생략할 수 있습니다. 예약은 1시간 유효합니다. 파일 내용이나 비밀키를 MCP JSON에 넣지 않습니다.
+응답의 `attachment.id`, `upload_url`, `upload_path`를 보관합니다. `document_id`는 생략할 수 있지만, 파일 본문은 검색되지 않으므로 내용을 요약한 지식 문서에 연결하는 것을 권장합니다. 예약은 1시간 유효합니다. 파일 내용이나 비밀키를 MCP JSON에 넣지 않습니다.
 
-2. 같은 서버의 `upload_path`로 원본 바이트를 PUT 합니다. `Content-Type: application/octet-stream`, `Authorization: Bearer <동일한 사용자 MCP 키>`가 필요합니다. 웹에서는 로그인 쿠키와 CSRF 토큰을 사용합니다. URL은 원본 서버의 상대 경로이며 버킷 자격 증명을 반환하지 않습니다. HTTP 전송이 가능한 클라이언트가 필요합니다.
+2. 원본 바이트를 PUT 합니다. 방법은 두 가지입니다.
+   - **1회용 업로드 링크 (MCP 키로 예약한 경우):** 응답의 `upload_url`은 `PUBLIC_URL` 기준 절대 주소이며 이 파일 하나에만, 1시간 동안, 한 번만 쓸 수 있습니다. `Authorization` 헤더가 필요 없어서 키 원문을 읽을 수 없는 클라이언트(호스팅 커넥터, 샌드박스)도 올릴 수 있습니다.
+
+     ```sh
+     curl --fail-with-body -T 정리표.xlsx -H "Content-Type: application/octet-stream" "<upload_url>"
+     ```
+
+     서버에는 링크 토큰의 SHA-256만 저장하며 업로드가 시작되면 지웁니다. 예약한 키가 폐기·만료되거나 계정이 비활성화되면 링크도 무효입니다. 권한·업로더·크기 검사는 Bearer 업로드와 동일합니다. 링크는 응답·로그·지식 문서·커밋에 남기지 마세요. `Authorization` 헤더와 함께 보내면 거절합니다.
+   - **Bearer 키:** `upload_path`(상대 경로)에 `Authorization: Bearer <예약에 사용한 사용자의 MCP 키>`로 보냅니다.
+
+   두 방법 모두 `Content-Type: application/octet-stream`이 필요합니다. 웹 화면은 로그인 쿠키와 CSRF 토큰을 사용하며 업로드 링크를 받지 않습니다. 버킷 자격 증명은 반환하지 않습니다.
 3. PUT 응답의 `status: ready`와 SHA-256을 확인합니다. 응답이 끊겼다면 `list_attachments`로 상태부터 확인하세요. 예약은 한 번만 사용되며 같은 ID에 다시 PUT해서 파일을 덮어쓸 수 없습니다. 실패한 경우 새 예약을 생성합니다. `prepare_attachment_upload` 자체는 멱등 호출이 아니므로 응답이 불확실할 때 목록부터 확인하세요.
 4. `list_attachments`로 조회합니다. `project_id`, 선택적 `document_id`, `limit`(최대 50), `offset`을 지원합니다.
 5. `get_attachment_download`에 `project_id`, `attachment_id`를 전달하면 5분 유효 다운로드 링크를 받습니다.

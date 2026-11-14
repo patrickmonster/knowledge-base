@@ -13,9 +13,9 @@ import (
 
 func TestVectorProjection(t *testing.T) {
 	ctx := context.Background()
-	points, variance, err := projectVectors(ctx, [][]float64{{1, 0, 0}, {0, 1, 0}, {-1, 0, 0}, {0, -1, 0}})
-	if err != nil || math.Abs(variance-1) > 1e-8 {
-		t.Fatalf("planar variance lost: %v %v", variance, err)
+	points, shares, err := projectVectors(ctx, [][]float64{{1, 0, 0}, {0, 1, 0}, {-1, 0, 0}, {0, -1, 0}})
+	if err != nil || math.Abs(shares[0]+shares[1]-1) > 1e-8 || shares[2] > 1e-8 {
+		t.Fatalf("planar variance lost: %v %v", shares, err)
 	}
 	for i := range points {
 		for j := range points {
@@ -34,14 +34,38 @@ func TestVectorProjection(t *testing.T) {
 	}
 	for _, vectors := range [][][]float64{nil, {{1, 2}}, {{1, 2}, {2, 4}, {1, 2}}} {
 		p, v, err := projectVectors(ctx, vectors)
-		if err != nil || v != 0 {
+		if err != nil || v != [3]float64{} {
 			t.Fatalf("degenerate projection: %v %v", v, err)
 		}
 		for _, xy := range p {
-			if math.Abs(xy[0])+math.Abs(xy[1]) > 1e-10 {
+			if math.Abs(xy[0])+math.Abs(xy[1])+math.Abs(xy[2]) > 1e-10 {
 				t.Fatal("identical vectors should overlap")
 			}
 		}
+	}
+	// Three orthogonal spreads with distinct variance (repeated points weight the
+	// axes 3:2:1 because inputs are normalized). The third axis must keep what a
+	// planar projection would lose, and components come out ordered by variance.
+	solid := [][]float64{}
+	for axis, repeat := range []int{3, 2, 1} {
+		for r := 0; r < repeat; r++ {
+			for _, sign := range []float64{1, -1} {
+				v := make([]float64, 4)
+				v[axis] = sign
+				solid = append(solid, v)
+			}
+		}
+	}
+	points, shares, err = projectVectors(ctx, solid)
+	want := [3]float64{.5, 1.0 / 3, 1.0 / 6}
+	for i := range want {
+		if err != nil || math.Abs(shares[i]-want[i]) > 1e-6 {
+			t.Fatalf("solid variance: %v %v", shares, err)
+		}
+	}
+	last := len(solid) - 1
+	if math.Abs(math.Abs(points[last][2]-points[last-1][2])-2) > 1e-6 {
+		t.Fatal("third component collapsed")
 	}
 	_, _, err = projectVectors(ctx, [][]float64{{0, 0}})
 	denied(t, err, "INVALID_VECTOR")

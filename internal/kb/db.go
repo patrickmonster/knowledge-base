@@ -15,6 +15,8 @@ type Store struct {
 	DB       *sql.DB
 	Embedder Embedder
 	Objects  ObjectStorage
+	// PublicURL is the server origin used to build absolute upload links.
+	PublicURL string
 }
 type Querier interface {
 	ExecContext(context.Context, string, ...any) (sql.Result, error)
@@ -44,7 +46,7 @@ func (s *Store) Migrate(ctx context.Context) error {
 		if _, err := tx.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations(version integer PRIMARY KEY)`); err != nil {
 			return err
 		}
-		for i, script := range []string{migrations.Initial, migrations.Auth, migrations.Embeddings, migrations.PermanentKeys, migrations.TaskWorkflow, migrations.Attachments} {
+		for i, script := range []string{migrations.Initial, migrations.Auth, migrations.Embeddings, migrations.PermanentKeys, migrations.TaskWorkflow, migrations.Attachments, migrations.AttachmentUploadTokens} {
 			var exists bool
 			if err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version=$1)", i+1).Scan(&exists); err != nil {
 				return err

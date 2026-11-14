@@ -42,6 +42,7 @@ func NewApp(s *Store, c Config) (*App, error) {
 		return nil, problem("INVALID_INPUT", "Public deployments require HTTPS.")
 	}
 	c.PublicURL = strings.TrimSuffix(c.PublicURL, "/")
+	s.PublicURL = c.PublicURL
 	return &App{Store: s, Tools: NewTools(s), Config: c, secure: u.Scheme == "https"}, nil
 }
 func (a *App) Handler() http.Handler {

@@ -38,7 +38,18 @@ func (a *App) attachmentUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	var id Identity
 	var err error
-	if auth := r.Header.Get("Authorization"); auth != "" {
+	if raw := r.URL.Query().Get("upload_token"); raw != "" {
+		// One-time link from prepare_attachment_upload. Never combined with other credentials.
+		if r.Header.Get("Authorization") != "" {
+			a.fail(w, problem("INVALID_INPUT", "Use either an upload link or a Bearer key, not both."))
+			return
+		}
+		if origin := r.Header.Get("Origin"); origin != "" && origin != a.Config.PublicURL {
+			a.fail(w, problem("FORBIDDEN", "Untrusted request origin."))
+			return
+		}
+		id, err = a.Store.UploadTokenIdentity(r.Context(), r.PathValue("id"), r.URL.Query().Get("project_id"), raw)
+	} else if auth := r.Header.Get("Authorization"); auth != "" {
 		if origin := r.Header.Get("Origin"); origin != "" && origin != a.Config.PublicURL {
 			a.fail(w, problem("FORBIDDEN", "Untrusted request origin."))
 			return
