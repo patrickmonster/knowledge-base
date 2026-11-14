@@ -1,0 +1,212 @@
+package kb
+
+import (
+	"context"
+	"database/sql"
+	"time"
+)
+
+// Usage statistics (사용 통계 대시보드).
+//
+// One read-only call aggregates how a project is being used over a look-back
+// window: tool calls from the audit log, document writes from revisions, task
+// runs, searches and reads, and the current size of the knowledge. Days are
+// bucketed in Asia/Seoul so the daily series matches how the team reads dates.
+// Audit-based numbers only cover what AUDIT_RETENTION_DAYS keeps.
+
+const usageTimezone = "Asia/Seoul"
+
+// Audit actions counted as searches and document reads.
+var (
+	usageSearchActions = []string{"search_knowledge", "get_task_context", "start_task"}
+	usageReadActions   = []string{"get_document"}
+)
+
+type UsageStatsInput struct {
+	ProjectID string `json:"project_id"`
+	Days      int    `json:"days,omitempty" jsonschema:"Look-back window in days, 1–365; default 30"`
+}
+
+type UsageCount struct {
+	Key   string `json:"key"`
+	Count int    `json:"count"`
+}
+
+type UsageDay struct {
+	Date           string `json:"date" jsonschema:"YYYY-MM-DD in Asia/Seoul"`
+	Calls          int    `json:"calls"`
+	Searches       int    `json:"searches"`
+	DocumentWrites int    `json:"document_writes"`
+	TasksStarted   int    `json:"tasks_started"`
+	ActiveUsers    int    `json:"active_users"`
+}
+
+type UsageUser struct {
+	UserID         string     `json:"user_id"`
+	Name           string     `json:"name"`
+	Calls          int        `json:"calls"`
+	DocumentWrites int        `json:"document_writes"`
+	TasksStarted   int        `json:"tasks_started"`
+	LastActiveAt   *time.Time `json:"last_active_at"`
+}
+
+type UsageDocument struct {
+	DocumentID string `json:"document_id"`
+	Title      string `json:"title"`
+	Kind       string `json:"kind"`
+	Status     string `json:"status"`
+	Reads      int    `json:"reads"`
+}
+
+type UsageTotals struct {
+	Calls          int `json:"calls" jsonschema:"Successful tool calls in the window"`
+	Denied         int `json:"denied"`
+	Errors         int `json:"errors"`
+	ActiveUsers    int `json:"active_users" jsonschema:"Distinct users with a successful call in the window"`
+	Searches       int `json:"searches" jsonschema:"search_knowledge, get_task_context and start_task calls"`
+	DocumentReads  int `json:"document_reads"`
+	DocumentWrites int `json:"document_writes" jsonschema:"New document revisions (creates and edits)"`
+	DocumentsNew   int `json:"documents_new"`
+	TasksStarted   int `json:"tasks_started"`
+	TasksCompleted int `json:"tasks_completed"`
+	TasksAbandoned int `json:"tasks_abandoned"`
+	IssuesOpened   int `json:"issues_opened"`
+}
+
+type UsageInventory struct {
+	Documents        int          `json:"documents"`
+	ByKind           []UsageCount `json:"by_kind"`
+	ByStatus         []UsageCount `json:"by_status"`
+	OpenTasks        int          `json:"open_tasks"`
+	OpenIssues       int          `json:"open_issues"`
+	Attachments      int          `json:"attachments"`
+	AttachmentBytes  int64        `json:"attachment_bytes"`
+	Members          int          `json:"members"`
+	EmbeddingsReady  int          `json:"embeddings_ready"`
+	EmbeddingsTotal  int          `json:"embeddings_total"`
+	EmbeddingsFailed int          `json:"embeddings_failed"`
+}
+
+type UsageStats struct {
+	ProjectID    string          `json:"project_id"`
+	Days         int             `json:"days"`
+	Timezone     string          `json:"timezone"`
+	From         string          `json:"from" jsonschema:"First day of the window, YYYY-MM-DD"`
+	To           string          `json:"to" jsonschema:"Last day of the window (today), YYYY-MM-DD"`
+	Totals       UsageTotals     `json:"totals"`
+	Inventory    UsageInventory  `json:"inventory"`
+	Daily        []UsageDay      `json:"daily" jsonschema:"One entry per day of the window, oldest first, zero-filled"`
+	TopActions   []UsageCount    `json:"top_actions"`
+	TopUsers     []UsageUser     `json:"top_users"`
+	TopDocuments []UsageDocument `json:"top_documents" jsonschema:"Most read documents (get_document) in the window"`
+	Guidance     string          `json:"guidance"`
+}
+
+// usageWindow defines the window as whole Asia/Seoul days ending today.
+// Parameters: $1 project ID, $2 days, $3 time zone. Exposes w(start_at, from_day, to_day)
+// and a (successful audit events of the project in the window).
+const usageWindow = `WITH w AS (
+		SELECT ((now() AT TIME ZONE $3)::date-($2::int-1)) AS from_day, (now() AT TIME ZONE $3)::date AS to_day),
+	ws AS (SELECT from_day, to_day, (from_day::timestamp AT TIME ZONE $3) AS start_at FROM w),
+	a AS (SELECT e.* FROM audit_events e, ws WHERE e.project_id=$1 AND e.created_at>=ws.start_at)`
+
+func usageStats(ctx context.Context, tx *sql.Tx, a Identity, in UsageStatsInput) (any, error) {
+	if _, err := projectAccess(ctx, tx, a.User.ID, in.ProjectID, false); err != nil {
+		return nil, err
+	}
+	if in.Days == 0 {
+		in.Days = 30
+	}
+	if in.Days < 1 || in.Days > 365 {
+		return nil, problem("INVALID_INPUT", "days must be 1–365.")
+	}
+	args := []any{in.ProjectID, in.Days, usageTimezone, usageSearchActions, usageReadActions}
+	out := UsageStats{ProjectID: in.ProjectID, Days: in.Days, Timezone: usageTimezone,
+		Guidance: "Calls, searches, reads and active users come from the audit log and only cover what AUDIT_RETENTION_DAYS keeps; document writes come from revisions. Searches include start_task and get_task_context. The call that reads these statistics is not counted."}
+
+	type header struct {
+		From   string      `json:"from"`
+		To     string      `json:"to"`
+		Totals UsageTotals `json:"totals"`
+	}
+	h, err := one[header](ctx, tx, usageWindow+`,
+	r AS (SELECT v.* FROM revisions v JOIN documents d ON d.id=v.document_id, ws WHERE d.project_id=$1 AND v.created_at>=ws.start_at),
+	t AS (SELECT tr.* FROM task_runs tr, ws WHERE tr.project_id=$1 AND tr.started_at>=ws.start_at)
+	SELECT jsonb_build_object('from',to_char(ws.from_day,'YYYY-MM-DD'),'to',to_char(ws.to_day,'YYYY-MM-DD'),'totals',jsonb_build_object(
+		'calls',(SELECT count(*) FROM a WHERE outcome='success'),
+		'denied',(SELECT count(*) FROM a WHERE outcome='denied'),
+		'errors',(SELECT count(*) FROM a WHERE outcome='error'),
+		'active_users',(SELECT count(DISTINCT actor_id) FROM a WHERE outcome='success'),
+		'searches',(SELECT count(*) FROM a WHERE outcome='success' AND action=ANY($4::text[])),
+		'document_reads',(SELECT count(*) FROM a WHERE outcome='success' AND action=ANY($5::text[])),
+		'document_writes',(SELECT count(*) FROM r),
+		'documents_new',(SELECT count(*) FROM documents d WHERE d.project_id=$1 AND d.created_at>=ws.start_at),
+		'tasks_started',(SELECT count(*) FROM t),
+		'tasks_completed',(SELECT count(*) FROM task_runs x WHERE x.project_id=$1 AND x.status='completed' AND x.completed_at>=ws.start_at),
+		'tasks_abandoned',(SELECT count(*) FROM t WHERE status='abandoned'),
+		'issues_opened',(SELECT count(*) FROM issues i WHERE i.project_id=$1 AND i.created_at>=ws.start_at)))
+	FROM ws`, args...)
+	if err != nil {
+		return nil, err
+	}
+	out.From, out.To, out.Totals = h.From, h.To, h.Totals
+
+	if out.Inventory, err = one[UsageInventory](ctx, tx, `SELECT jsonb_build_object(
+		'documents',(SELECT count(*) FROM documents WHERE project_id=$1),
+		'by_kind',(SELECT coalesce(jsonb_agg(jsonb_build_object('key',kind,'count',n) ORDER BY n DESC,kind),'[]') FROM (SELECT kind,count(*) n FROM documents WHERE project_id=$1 GROUP BY kind) k),
+		'by_status',(SELECT coalesce(jsonb_agg(jsonb_build_object('key',status,'count',n) ORDER BY n DESC,status),'[]') FROM (SELECT status,count(*) n FROM documents WHERE project_id=$1 GROUP BY status) s),
+		'open_tasks',(SELECT count(*) FROM task_runs WHERE project_id=$1 AND status='open'),
+		'open_issues',(SELECT count(*) FROM issues WHERE project_id=$1 AND status IN ('open','answered')),
+		'attachments',(SELECT count(*) FROM attachments WHERE project_id=$1 AND status='ready'),
+		'attachment_bytes',(SELECT coalesce(sum(size_bytes),0) FROM attachments WHERE project_id=$1 AND status='ready'),
+		'members',(SELECT count(*) FROM project_members WHERE project_id=$1),
+		'embeddings_total',(SELECT count(*) FROM chunks c JOIN documents d ON d.id=c.document_id WHERE d.project_id=$1),
+		'embeddings_ready',(SELECT count(*) FROM chunks c JOIN documents d ON d.id=c.document_id WHERE d.project_id=$1 AND c.embedding_status='ready'),
+		'embeddings_failed',(SELECT count(*) FROM chunks c JOIN documents d ON d.id=c.document_id WHERE d.project_id=$1 AND c.embedding_status='failed'))`, in.ProjectID); err != nil {
+		return nil, err
+	}
+
+	if out.Daily, err = many[UsageDay](ctx, tx, usageWindow+`,
+	days AS (SELECT generate_series(ws.from_day,ws.to_day,interval '1 day')::date AS day FROM ws),
+	ad AS (SELECT (created_at AT TIME ZONE $3)::date AS day,count(*) AS calls,
+		count(*) FILTER (WHERE action=ANY($4::text[])) AS searches,count(DISTINCT actor_id) AS users
+		FROM a WHERE outcome='success' GROUP BY 1),
+	rd AS (SELECT (v.created_at AT TIME ZONE $3)::date AS day,count(*) AS n FROM revisions v JOIN documents d ON d.id=v.document_id, ws
+		WHERE d.project_id=$1 AND v.created_at>=ws.start_at GROUP BY 1),
+	td AS (SELECT (tr.started_at AT TIME ZONE $3)::date AS day,count(*) AS n FROM task_runs tr, ws
+		WHERE tr.project_id=$1 AND tr.started_at>=ws.start_at GROUP BY 1)
+	SELECT jsonb_build_object('date',to_char(days.day,'YYYY-MM-DD'),'calls',coalesce(ad.calls,0),'searches',coalesce(ad.searches,0),
+		'active_users',coalesce(ad.users,0),'document_writes',coalesce(rd.n,0),'tasks_started',coalesce(td.n,0))
+	FROM days LEFT JOIN ad USING(day) LEFT JOIN rd USING(day) LEFT JOIN td USING(day) ORDER BY days.day`, args[:4]...); err != nil {
+		return nil, err
+	}
+
+	if out.TopActions, err = many[UsageCount](ctx, tx, usageWindow+`
+	SELECT jsonb_build_object('key',action,'count',count(*)) FROM a WHERE outcome='success'
+	GROUP BY action ORDER BY count(*) DESC,action LIMIT 15`, args[:3]...); err != nil {
+		return nil, err
+	}
+
+	// Members and anyone who acted in the window (a former member keeps their history).
+	if out.TopUsers, err = many[UsageUser](ctx, tx, usageWindow+`,
+	ac AS (SELECT actor_id AS id,count(*) AS calls,max(created_at) AS last FROM a WHERE outcome='success' AND actor_id IS NOT NULL GROUP BY actor_id),
+	rw AS (SELECT v.actor_id AS id,count(*) AS n FROM revisions v JOIN documents d ON d.id=v.document_id, ws
+		WHERE d.project_id=$1 AND v.created_at>=ws.start_at GROUP BY v.actor_id),
+	tk AS (SELECT tr.created_by AS id,count(*) AS n FROM task_runs tr, ws WHERE tr.project_id=$1 AND tr.started_at>=ws.start_at GROUP BY tr.created_by),
+	ids AS (SELECT id FROM ac UNION SELECT id FROM rw UNION SELECT id FROM tk)
+	SELECT jsonb_build_object('user_id',u.id,'name',u.name,'calls',coalesce(ac.calls,0),'document_writes',coalesce(rw.n,0),
+		'tasks_started',coalesce(tk.n,0),'last_active_at',ac.last)
+	FROM ids JOIN users u ON u.id=ids.id LEFT JOIN ac ON ac.id=ids.id LEFT JOIN rw ON rw.id=ids.id LEFT JOIN tk ON tk.id=ids.id
+	ORDER BY coalesce(ac.calls,0)+coalesce(rw.n,0) DESC,u.name,u.id LIMIT 10`, args[:3]...); err != nil {
+		return nil, err
+	}
+
+	if out.TopDocuments, err = many[UsageDocument](ctx, tx, usageWindow+`,
+	g AS (SELECT target_id,count(*) AS n FROM a WHERE outcome='success' AND action=ANY($4::text[]) AND target_id<>'' GROUP BY target_id)
+	SELECT jsonb_build_object('document_id',d.id,'title',d.title,'kind',d.kind,'status',d.status,'reads',g.n)
+	FROM g JOIN documents d ON d.id::text=g.target_id AND d.project_id=$1 ORDER BY g.n DESC,d.title,d.id LIMIT 10`,
+		in.ProjectID, in.Days, usageTimezone, usageReadActions); err != nil {
+		return nil, err
+	}
+	return out, nil
+}

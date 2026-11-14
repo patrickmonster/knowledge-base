@@ -56,6 +56,15 @@ MCP 도구와 기존 작업 흐름(`start_task`·`finish_task`)에 붙는 품질
 - 한글 용어는 조사가 붙어도 일치합니다(결제를 → 결제). 영문·약어는 단어 단위로만 일치합니다(`PG`는 `upgrade`에 일치하지 않음).
 - 확장 어휘는 키워드 검색과 질의 임베딩 모두에 사용합니다. 용어집 본문은 앞 8,000자만 읽으며 프로젝트당 최근 500개 항목을 사용합니다.
 
+## 7. 사용 통계 대시보드
+
+- `get_usage_stats(project_id, days=30)`: 프로젝트 참여자(조회자 포함) 누구나 호출할 수 있는 읽기 도구입니다. `days`는 1~365이며 오늘을 포함한 한국 시간(Asia/Seoul) 일 단위로 집계합니다.
+- `totals`: 성공한 도구 호출·거부·오류, 활성 사용자, 검색(`search_knowledge`·`get_task_context`·`start_task`), 문서 열람(`get_document`), 문서 작성·수정(새 버전 수), 새 문서, 작업 시작·완료·중단, 새 이슈.
+- `daily`: 기간의 모든 날짜를 0으로 채운 일별 호출·활성 사용자·검색·작성·작업 시작. `top_actions`(최대 15), `top_users`(최대 10), `top_documents`(열람 상위 10).
+- `inventory`: 현재 문서 수(종류·상태별), 열린 작업·이슈, 준비된 첨부 수·용량, 참여자, 임베딩 준비·실패 청크 수.
+- 호출·검색·열람·활성 사용자는 감사 로그 기준이라 `AUDIT_RETENTION_DAYS`가 남긴 기록만 집계됩니다. 작성·수정은 문서 버전(revisions) 기준이며 `REVISION_RETENTION_DAYS`로 정리된 버전은 빠집니다. 통계를 조회한 그 요청은 집계에 들어가지 않습니다.
+- 웹 '사용 통계' 화면은 이 도구와 `get_retrieval_metrics`를 함께 보여 줍니다. 기간은 7·30·90일·1년이며 90일을 넘으면 차트를 주 단위로 묶습니다(활성 사용자는 주 중 일 최대값). 일별 추이 카드의 '표로 보기'로 일별 값을 확인할 수 있습니다.
+
 ## 마이그레이션
 
 `012_knowledge_quality.sql`은 documents의 kind 제약에 glossary를 추가하고, `recheck_assignments`·`task_source_feedback` 테이블과 task_runs의 피드백·닫힘 열과 `abandoned` 상태를 추가합니다. `migrationScripts`에서 011(`011_team_rollout.sql`) 다음, 스키마 버전 12로 적용됩니다.
