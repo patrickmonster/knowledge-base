@@ -14,9 +14,15 @@ async function searchPage() {
   root.append(controls);
   if (!projects.length) { controls.append(el('p','먼저 프로젝트에 참여해 주세요.','empty')); return root; }
   const form=el('form');
-  const query=field(form,'검색어','query');query.maxLength=1000;query.placeholder='예: 첨부 업로드 권한';
-  const mode=selectField(form,'검색 방식','mode',[['','기본 (의미+키워드)'],['lexical','키워드'],['semantic','의미']]);
-  const status=selectField(form,'상태','status',[['active','active (확정)'],['draft','draft (검토 전)'],['archived','archived (보관)']]);
+  // One row: 검색 방식 | 상태 | 검색어 | 검색 버튼.
+  const row=el('div',undefined,'search-row');form.append(row);
+  const mode=selectField(row,'검색 방식','mode',[['','기본 (의미+키워드)'],['lexical','키워드'],['semantic','의미']]);
+  mode.parentElement.classList.add('search-mode');
+  const status=selectField(row,'상태','status',[['active','active (확정)'],['draft','draft (검토 전)'],['archived','archived (보관)']]);
+  status.parentElement.classList.add('search-status');
+  const query=field(row,'검색어','query');query.maxLength=1000;query.placeholder='예: 첨부 업로드 권한';
+  query.parentElement.classList.add('search-query');
+  const submit=el('button','검색','search-submit');row.append(submit);
   const scope=el('fieldset',undefined,'search-scope'), legend=el('legend','검색할 프로젝트');scope.append(legend);
   const boxes=projects.map(p=>{
     const l=el('label',undefined,'check'), c=el('input');c.type='checkbox';c.value=p.id;c.checked=true;
@@ -25,7 +31,6 @@ async function searchPage() {
   const toggles=el('div',undefined,'actions');
   toggles.append(btn('모두 선택',()=>boxes.forEach(b=>b.checked=true)),btn('모두 해제',()=>boxes.forEach(b=>b.checked=false)));
   scope.append(toggles);form.append(scope);
-  const submit=el('button','검색');form.append(submit);
   const summary=el('p','','small muted');summary.setAttribute('role','status');
   controls.append(form,summary);
   const list=el('div');root.append(list);
@@ -50,23 +55,33 @@ async function searchPage() {
     nodes.push(...result.hits.map(hitCard));
     list.replaceChildren(...nodes);
   }
+  // Each hit is a clickable card; clicking (or Enter/Space) opens the full body in a modal.
   function hitCard(h) {
-    const c=card(h.title);
-    c.append(el('p',`${h.project_name||h.project_id} · ${searchKinds[h.kind]||h.kind} · ${h.status} · 버전 ${h.revision} · 점수 ${Number(h.score).toFixed(4)}`,'small muted'));
+    const c=card(h.title), meta=`${h.project_name||h.project_id} · ${searchKinds[h.kind]||h.kind} · ${h.status} · 버전 ${h.revision} · 점수 ${Number(h.score).toFixed(4)}`;
+    c.classList.add('search-hit');c.tabIndex=0;c.setAttribute('role','button');c.setAttribute('aria-haspopup','dialog');
+    c.append(el('p',meta,'small muted'));
     c.append(el('p',h.excerpt.length>400?h.excerpt.slice(0,400)+'…':h.excerpt,'small'));
-    const body=el('details'), content=el('div');
-    body.append(el('summary','본문 보기'),content);
-    body.addEventListener('toggle',async()=>{
-      if (!body.open||content.childElementCount) return;
-      content.append(el('p','불러오는 중…','muted'));
-      try {
-        const doc=await tool('get_document',{project_id:h.project_id,document_id:h.document_id,revision:h.revision});
-        content.replaceChildren(renderMarkdown(doc.content,'vector-content'));
-      } catch(e) { content.replaceChildren(el('p',e.message,'muted')); }
-    });
-    c.append(body,el('code',h.citation));
+    c.append(el('code',h.citation));
+    const open=()=>openHitDialog(root,h,meta);
+    c.addEventListener('click',e=>{if(!getSelection().toString())open();});
+    c.addEventListener('keydown',e=>{if(e.target===c&&(e.key==='Enter'||e.key===' ')){e.preventDefault();open();}});
     return c;
   }
   form.addEventListener('submit',e=>{e.preventDefault();submit.disabled=true;run().catch(err=>notify(err.message,true)).finally(()=>submit.disabled=false);});
   return root;
+}
+
+// Shows a search hit's full Markdown body in a modal; it closes on 닫기, Esc or a backdrop click.
+function openHitDialog(parent,h,metaText) {
+  const dialog=el('dialog',undefined,'search-dialog'), content=el('div');
+  content.append(el('p','불러오는 중…','muted'));
+  const close=btn('닫기',()=>dialog.close(),'secondary'), actions=el('div',undefined,'actions search-dialog-actions');
+  actions.append(close);
+  dialog.append(el('h2',h.title),el('p',metaText,'small muted'),content,el('code',h.citation),actions);
+  dialog.addEventListener('close',()=>dialog.remove(),{once:true});
+  dialog.addEventListener('click',e=>{if(e.target!==dialog)return;const r=dialog.getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)dialog.close();});
+  parent.append(dialog);dialog.showModal();close.focus();
+  tool('get_document',{project_id:h.project_id,document_id:h.document_id,revision:h.revision})
+    .then(doc=>content.replaceChildren(renderMarkdown(doc.content,'vector-content')))
+    .catch(e=>content.replaceChildren(el('p',e.message,'muted')));
 }

@@ -41,7 +41,7 @@ async function rulesPage(){
     for(const [k,b] of Object.entries(buttons)){const on=k===scope;b.classList.toggle('active',on);b.setAttribute('aria-selected',String(on));b.tabIndex=on?0:-1;}
     panel.replaceChildren(el('p',t.description,'small muted'));
     if(!t.rules.length)panel.append(el('p','등록된 규칙이 없습니다.','empty'));
-    for(const r of t.rules)panel.append(ruleRow(project,scope,r,t.canEdit,c,reload));
+    else panel.append(ruleTable(project,scope,t.rules,t.canEdit,c,reload));
     addSlot.replaceChildren();
     if(t.canEdit)addSlot.append(btn('규칙 추가',()=>openRuleDialog(c,t.label+' 추가','추가',{category:'work',title:'',body:''},async d=>{
       await tool('save_rule',{project_id:project.id,scope,...d});notify('규칙을 추가했습니다.');await reload();
@@ -58,18 +58,32 @@ async function rulesPage(){
   return root;
 }
 
+// Lists rules as a table; 수정·삭제 sit in the rightmost column when the caller can edit.
+function ruleTable(project,scope,rules,canEdit,parent,reload){
+  const wrap=el('div',undefined,'table-wrap rule-table'),tbl=el('table'),thead=el('thead'),head=el('tr'),body=el('tbody');
+  for(const h of ['종류','규칙','버전 · 수정일'])head.append(el('th',h));
+  if(canEdit){const th=el('th','관리','rule-actions-col');head.append(th);}
+  thead.append(head);
+  for(const r of rules)body.append(ruleRow(project,scope,r,canEdit,parent,reload));
+  tbl.append(thead,body);wrap.append(tbl);
+  return wrap;
+}
+
 function ruleRow(project,scope,r,canEdit,parent,reload){
-  const row=el('div',undefined,'rule-row'),head=el('div',undefined,'rule-head');
-  head.append(el('span',ruleCategoryLabels[r.category]||r.category,'pill'),el('strong',r.title));
-  row.append(head,el('p',r.body,'rule-body'),el('p','버전 '+r.revision+' · 수정 '+new Date(r.updated_at).toLocaleString(),'small muted'));
+  const row=el('tr'),main=el('td',undefined,'rule-main');
+  main.append(el('strong',r.title,'rule-title'),el('p',r.body,'rule-body'));
+  const kind=el('td');kind.append(el('span',ruleCategoryLabels[r.category]||r.category,'pill'));
+  const meta=el('td',undefined,'small muted rule-meta');
+  meta.append(el('div','버전 '+r.revision),el('div',new Date(r.updated_at).toLocaleString()));
+  row.append(kind,main,meta);
   if(canEdit){
-    const acts=el('div',undefined,'actions');
+    const acts=el('td',undefined,'rule-actions');
     acts.append(btn('수정',()=>openRuleDialog(parent,'규칙 수정','저장',r,async d=>{
       await tool('save_rule',{project_id:project.id,scope,rule_id:r.id,expected_revision:r.revision,...d});notify('규칙을 저장했습니다.');await reload();
     })),btn('삭제',async()=>{
       if(!confirm('“'+r.title+'” 규칙을 삭제할까요?'))return;
       await tool('delete_rule',{project_id:project.id,rule_id:r.id});notify('규칙을 삭제했습니다.');await reload();
-    }));
+    },'danger-strong'));
     row.append(acts);
   }
   return row;
