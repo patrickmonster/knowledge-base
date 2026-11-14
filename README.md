@@ -137,7 +137,7 @@ Authorization: Bearer <발급받은 MCP 키>
 - `author`: 사용자 ID. 문서를 만든 사람 또는 마지막으로 수정한 사람이 일치하면 포함합니다.
 - `stale_only`, `stale_days`: 재확인 필요 문서만 보기, 기준 일수(기본 90, 1~3650)
 
-목록의 각 문서에는 `needs_recheck`, `days_since_update`, `stale_after_days`가 붙습니다. `needs_recheck`는 **active 상태의 `reference`·`brief` 문서**가 기준 일수 넘게 갱신되지 않았을 때만 `true`입니다. `decision`·`history`는 특정 시점의 기록이라 표시하지 않고, draft·archived 문서도 제외합니다. AI는 이 표시가 있는 문서를 근거로 쓰기 전에 현재 상태를 확인하고, 여전히 맞으면 `update_document`로 갱신해 표시를 해제합니다. 웹 **지식 문서** 화면에서 같은 필터로 문서를 찾고 본문을 열어 볼 수 있으며 재확인 필요 문서에는 배지가 표시됩니다. 마이그레이션은 필요 없습니다.
+목록의 각 문서에는 `needs_recheck`, `days_since_update`, `stale_after_days`가 붙습니다. `needs_recheck`는 **active 상태의 `reference`·`brief` 문서**가 기준 일수 넘게 갱신되지 않았을 때만 `true`입니다. `decision`·`history`는 특정 시점의 기록이라 표시하지 않고, draft·archived 문서도 제외합니다. AI는 이 표시가 있는 문서를 근거로 쓰기 전에 현재 상태를 확인하고, 여전히 맞으면 `update_document`로 갱신해 표시를 해제합니다. 같은 판정(기본 90일)은 `get_document`(현재 버전만), `search_knowledge`, `search_across_projects`, `start_task`·`get_task_context`의 출처 발췌에도 `recheck` 객체(`needs_recheck`, `days_since_update`, `stale_after_days`, `message`)로 붙습니다. 검색 순위는 바꾸지 않고 경고만 붙입니다. 웹 **지식 문서** 화면에서 같은 필터로 문서를 찾고 본문을 열어 볼 수 있으며 재확인 필요 문서에는 배지가 표시됩니다. 마이그레이션은 필요 없습니다.
 
 문서 간 관계는 `link_documents`로 같은 프로젝트의 두 문서를 잇습니다. 관계는 현재 상태 메타데이터라 새 버전을 만들지 않고 청크·벡터도 바꾸지 않습니다. 같은 요청을 반복해도 한 번만 저장됩니다(`009_document_links` 마이그레이션 필요).
 

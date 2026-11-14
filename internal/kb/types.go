@@ -57,6 +57,8 @@ type Document struct {
 	// Links is attached by get_document for the current revision only; it is
 	// link metadata, never part of a revision snapshot.
 	Links *DocumentLinks `json:"links,omitempty"`
+	// Recheck is attached by get_document for a stale current revision only.
+	Recheck *Recheck `json:"recheck,omitempty"`
 }
 type DocumentInput struct {
 	ProjectID string   `json:"project_id"`
@@ -97,6 +99,9 @@ type SearchHit struct {
 	// SupersededBy lists active documents that replace this hit; such hits are
 	// ranked after current knowledge.
 	SupersededBy []SupersedingDocument `json:"superseded_by,omitempty"`
+	// Recheck is set when the hit is an active reference/brief not updated for
+	// DefaultStaleDays.
+	Recheck *Recheck `json:"recheck,omitempty"`
 }
 type TaskContext struct {
 	Project         Project          `json:"project"`

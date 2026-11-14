@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 )
 
 // Document link relations. Links are current-state metadata: they never create
@@ -260,6 +261,7 @@ func (s *Store) searchCurrentKnowledge(ctx context.Context, tx *sql.Tx, a Identi
 		return out, err
 	}
 	out.Hits, err = demoteSuperseded(ctx, tx, out.Hits)
+	markRecheck(out.Hits, time.Now())
 	return out, err
 }
 
