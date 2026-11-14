@@ -105,28 +105,61 @@ async function documentsPage() {
     const dialog=el('dialog',undefined,'document-dialog'), close=btn('닫기',()=>dialog.close(),'secondary');
     const head=el('div',undefined,'document-dialog-head');
     head.append(titleCell(d),close);
-    const meta=el('p',`${documentKinds[d.kind]||d.kind} · ${d.status} · 버전 ${d.revision} · ${byline(d)} · 수정 ${new Date(d.updated_at).toLocaleString()} (${d.days_since_update}일 전)`,'small muted');
-    const content=el('div');content.append(el('p','불러오는 중…','muted'));
-    dialog.append(head,meta);
-    if (d.tags?.length) dialog.append(el('p',d.tags.map(t=>'#'+t).join(' '),'small document-tags'));
-    dialog.append(content);
+    const meta=el('p',`${documentKinds[d.kind]||d.kind} · ${d.status} · 버전 ${d.revision} · ${byline(d)} · 수정 ${new Date(d.updated_at).toLocaleString()} (${d.days_since_update}일 전)`,'small muted document-meta');
+    const top=el('div',undefined,'document-dialog-top');
+    top.append(head,meta);
+    if (d.tags?.length) top.append(el('p',d.tags.map(t=>'#'+t).join(' '),'small document-tags'));
+    // Version bar: pick which revision the left column shows; compare opens the diff view.
+    const versionBar=el('div',undefined,'document-version-bar');
+    const versionLabel=el('label',undefined,'document-version-select'), version=el('select');
+    version.name='revision';version.append(new Option(`버전 ${d.revision} (현재)`,String(d.revision)));
+    versionLabel.append(document.createTextNode('문서 버전'),version);
+    const compareBtn=btn('버전 비교',()=>toggleCompare(),'secondary');
+    compareBtn.hidden=d.revision<2;compareBtn.setAttribute('aria-pressed','false');
+    versionBar.append(versionLabel,compareBtn);
+    top.append(versionBar);
+    const docCol=el('section',undefined,'document-dialog-main'), sideCol=el('div',undefined,'document-dialog-side');
+    const docBody=el('div');docBody.append(el('p','불러오는 중…','muted'));
+    const compareBox=el('div',undefined,'document-compare');compareBox.hidden=true;
+    docCol.append(el('code',d.id),docBody,compareBox);
+    const body=el('div',undefined,'document-dialog-body');
+    body.append(docCol,sideCol);
+    dialog.append(top,body);
     dialog.addEventListener('close',()=>dialog.remove(),{once:true});
     dialog.addEventListener('click',e=>{if(e.target!==dialog)return;const r=dialog.getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)dialog.close();});
     root.append(dialog);dialog.showModal();close.focus();
-    (async()=>{
-      try {
-        const doc=await tool('get_document',{project_id:d.project_id,document_id:d.id});
-        const role=projects.find(p=>p.id===d.project_id)?.role, canEdit=['owner','admin','editor'].includes(role);
-        const parts=[el('code',d.id),renderMarkdown(doc.content,'vector-content'),linksPanel(d,canEdit)];
-        if (d.revision>1) {
-          const versions=el('details',undefined,'version-details');
-          versions.append(el('summary',`버전 비교 (현재 버전 ${d.revision})`));
-          versions.addEventListener('toggle',()=>{if(versions.open&&versions.childElementCount===1)versions.append(versionCompare(d,person));});
-          parts.push(versions);
-        }
-        content.replaceChildren(...parts);
-      } catch(e) { content.replaceChildren(el('p',e.message,'muted')); }
-    })();
+
+    let loadTicket=0;
+    function toggleCompare() {
+      const open=compareBox.hidden;
+      compareBox.hidden=!open;docBody.hidden=open;
+      compareBtn.setAttribute('aria-pressed',String(open));
+      compareBtn.textContent=open?'본문 보기':'버전 비교';
+      if (open&&!compareBox.childElementCount) compareBox.append(versionCompare(d,person));
+    }
+    async function showRevision(revision) {
+      const ticket=++loadTicket;
+      docBody.replaceChildren(el('p','불러오는 중…','muted'));
+      const doc=await tool('get_document',{project_id:d.project_id,document_id:d.id,...(revision===d.revision?{}:{revision})});
+      if (ticket!==loadTicket) return;
+      const parts=[];
+      if (revision!==d.revision) parts.push(el('p',`이전 버전 ${revision}을 보고 있습니다. 제목: ${doc.title}`,'small document-old-revision'));
+      parts.push(renderMarkdown(doc.content,'vector-content'));
+      docBody.replaceChildren(...parts);
+    }
+    version.addEventListener('change',()=>{
+      if (!compareBox.hidden) toggleCompare();
+      showRevision(Number(version.value)).catch(e=>docBody.replaceChildren(el('p',e.message,'muted')));
+    });
+    const role=projects.find(p=>p.id===d.project_id)?.role, canEdit=['owner','admin','editor'].includes(role);
+    sideCol.append(linksPanel(d,canEdit));
+    showRevision(d.revision).catch(e=>docBody.replaceChildren(el('p',e.message,'muted')));
+    if (d.revision>1) tool('get_document_history',{project_id:d.project_id,document_id:d.id}).then(history=>{
+      if (!history.length) return;
+      const current=version.value;
+      version.replaceChildren(...history.map(h=>new Option(`버전 ${h.revision}${h.revision===d.revision?' (현재)':''} · ${person(h.actor_id)} · ${new Date(h.created_at).toLocaleString()}`,String(h.revision))));
+      version.value=current;if(!version.value)version.value=String(d.revision);
+    }).catch(()=>{});
   }
   form.addEventListener('submit',e=>{e.preventDefault();search.disabled=true;load(true).catch(err=>notify(err.message,true)).finally(()=>search.disabled=false);});
   project.addEventListener('change',async()=>{author.value='';await loadMembers();load(true).catch(e=>notify(e.message,true));});
