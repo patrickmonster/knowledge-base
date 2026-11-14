@@ -13,3 +13,6 @@ var Embeddings string
 
 //go:embed 004_permanent_keys.sql
 var PermanentKeys string
+
+//go:embed 005_task_workflow.sql
+var TaskWorkflow string

@@ -120,6 +120,9 @@ Authorization: Bearer <발급받은 MCP 키>
 | `get_embedding_status` | 프로젝트별 임베딩 대기·처리·완료·실패 건수 조회 |
 | `reindex_project_embeddings` | 소유자 전용: 벡터 초기화 후 재생성 예약 |
 | `get_task_context` | 작업에 필요한 발췌문·출처·최근 결정 탐색 정보 구성 |
+| `start_task`, `finish_task` | 작업 시작 맥락 저장·종료 결과와 문서 일괄 저장 |
+| `get_task_run`, `list_task_runs` | 작업 상태·출처·완료 문서 조회 및 중단된 작업 ID 복구 |
+| `get_document_templates`, `create_templated_document` | 기획·결정·히스토리 양식 조회·필수 항목 검증 후 저장 |
 
 문서 종류는 `brief`, `decision`, `history`, `artifact`, `reference`입니다. 상태는 `draft`, `active`, `archived`이고 기본 검색에는 활성 문서의 최신 버전만 포함됩니다. `update_document`는 `expected_revision`과 수정 이유 `reason`이 필요합니다. 충돌하면 최신 내용을 읽고 변경을 병합해야 합니다.
 
@@ -235,3 +238,9 @@ TEST_DATABASE_URL='<test-only PostgreSQL URL>' TEST_OLLAMA_URL=http://localhost:
 조회는 웹 로그인 세션과 CSRF 검사를 거치며, 관리자도 참여하지 않은 프로젝트의 벡터와 본문을 읽을 수 없습니다. 지도·유사 조각 조회 및 권한 거부는 감사 로그에 기록합니다. 모델 서버를 호출하지 않고 이미 저장된 벡터를 읽습니다. 자동 갱신은 없으며 **새로고침**으로 최신 상태를 확인합니다.
 
 관련 코드: `internal/kb/vector_map.go`(권한·조회·투영), `internal/kb/web/vectors.js`(시각화), `internal/kb/vector_map_test.go`(기하·권한·응답 상한·웹 인증 검증).
+
+## 작업 전후 지식 활용
+
+`start_task`로 관련 자료와 시작 시점의 문서 버전을 모으고, 작업 후 `finish_task`로 히스토리와 추가 기획·결정을 함께 저장합니다. 같은 입력 재시도는 중복 기록을 만들지 않습니다. 기획·결정은 기본 초안이고, 원문 저장과 의미 검색 준비는 구분됩니다.
+
+[호출 예시·작성 양식·AI 클라이언트 적용 규칙](docs/task-workflow.md)을 참고하세요. 이 저장소의 `AGENTS.md`에도 시작 조회·완료 저장 규칙을 반영했습니다. 다른 프로젝트에는 해당 클라이언트 지침에 규칙을 추가해야 하며 MCP 서버가 작업 시작·종료를 자동으로 감지하지는 않습니다. 새 도구는 새 버전과 마이그레이션을 배포한 후 제공됩니다.

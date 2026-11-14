@@ -32,7 +32,7 @@ func auditInput(ctx context.Context, input any) context.Context {
 	var fields map[string]any
 	_ = json.Unmarshal(raw, &fields)
 	safe := map[string]any{}
-	for _, key := range []string{"document_id", "user_id", "id", "reset_user_id", "role", "global_role", "disabled", "access", "expected_revision"} {
+	for _, key := range []string{"document_id", "task_id", "user_id", "id", "reset_user_id", "role", "global_role", "disabled", "access", "expected_revision"} {
 		if value, ok := fields[key]; ok {
 			if text, ok := value.(string); ok && len(text) > 100 {
 				continue
@@ -70,7 +70,7 @@ func (s *Store) Perform(ctx context.Context, identity Identity, action, projectI
 	e := Event{ActorID: identity.User.ID, Action: action, ProjectID: projectID, RequestID: uuid.NewString(), Outcome: "success"}
 	if details, ok := ctx.Value(auditInputKey{}).(map[string]any); ok {
 		e.Details = details
-		for _, key := range []string{"document_id", "user_id", "id", "reset_user_id"} {
+		for _, key := range []string{"document_id", "task_id", "user_id", "id", "reset_user_id"} {
 			if id, ok := details[key].(string); ok && id != "" {
 				e.TargetID = id
 				break
@@ -127,6 +127,8 @@ func (s *Store) Perform(ctx context.Context, identity Identity, action, projectI
 		}
 		if e.TargetID == "" {
 			switch out := result.(type) {
+			case StartTaskResult:
+				e.TargetID = out.Run.ID
 			case Document:
 				e.TargetID = out.ID
 			case Project:
