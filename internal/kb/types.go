@@ -9,6 +9,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/google/uuid"
+	"golang.org/x/text/unicode/norm"
 )
 
 type Error struct{ Code, Message string }
@@ -148,9 +149,7 @@ func validateDocument(in *DocumentInput) error {
 	if !validStatus(in.Status) {
 		return problem("INVALID_INPUT", "Unknown document status.")
 	}
-	if in.Tags == nil {
-		in.Tags = []string{}
-	}
+	in.Tags = normalizeTags(in.Tags)
 	if len(in.Tags) > 20 {
 		return problem("INVALID_INPUT", "At most 20 tags are allowed.")
 	}
@@ -175,4 +174,22 @@ func pagination(limit, offset int) (int, error) {
 		return 0, problem("INVALID_INPUT", "Invalid pagination: limit 1–50; offset 0–100000.")
 	}
 	return limit, nil
+}
+
+// normalizeTags trims and NFC-normalizes tags, drops empty ones and removes
+// duplicates case-insensitively, keeping the first spelling and order.
+// Callers such as finish_task may add a tag the client also sent.
+func normalizeTags(tags []string) []string {
+	out := []string{}
+	seen := map[string]bool{}
+	for _, tag := range tags {
+		tag = strings.TrimSpace(norm.NFC.String(tag))
+		key := strings.ToLower(tag)
+		if tag == "" || seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, tag)
+	}
+	return out
 }

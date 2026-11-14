@@ -7,7 +7,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -235,7 +237,7 @@ func (s *Store) finishTask(ctx context.Context, tx *sql.Tx, a Identity, in Finis
 		}
 	}
 	// Generated metadata is bounded separately from the user-supplied references.
-	history := TemplateDraft{Kind: "history", Title: run.Title + " — 작업 결과", Status: "active", Tags: append([]string{"작업이력", "task:" + run.ID}, in.Tags...), Sections: map[string]string{
+	history := TemplateDraft{Kind: "history", Title: historyTitle(run.Title, run.StartedAt), Status: "active", Tags: append([]string{"작업이력", "task:" + run.ID}, in.Tags...), Sections: map[string]string{
 		"purpose": run.Task, "outcome": outcomes[in.Outcome], "summary": in.Summary, "changes": in.Changes, "decisions": in.Decisions,
 		"validation": in.Validation, "remaining": in.Remaining, "references": in.References,
 	}}
@@ -261,4 +263,31 @@ func (s *Store) finishTask(ctx context.Context, tx *sql.Tx, a Identity, in Finis
 }
 func savedDocument(d Document) SavedDocument {
 	return SavedDocument{ID: d.ID, Kind: d.Kind, Title: d.Title, Status: d.Status, Revision: d.Revision, Citation: fmt.Sprintf("kb://%s/documents/%s?revision=%d", d.ProjectID, d.ID, d.Revision)}
+}
+
+var (
+	titleWithTime = regexp.MustCompile(`^\d{4}-\d{2}-\d{2} \d{2}:\d{2} — `)
+	titleDateOnly = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}(?:\s+\d{1,2}:\d{2})?\s*[—-]+\s*`)
+	// Korea has no daylight saving time; a fixed zone avoids depending on tzdata
+	// in the container image.
+	seoul = time.FixedZone("Asia/Seoul", 9*60*60)
+)
+
+// historyTitle formats history titles as "YYYY-MM-DD HH:mm — summary" in
+// Asia/Seoul. A title that already has that prefix is kept; a date-only or
+// loosely formatted prefix is replaced with the task start time.
+func historyTitle(title, startedAt string) string {
+	title = strings.TrimSpace(title)
+	if titleWithTime.MatchString(title) {
+		return title
+	}
+	started, err := time.Parse(time.RFC3339Nano, startedAt)
+	if err != nil {
+		return title
+	}
+	summary := strings.TrimSpace(titleDateOnly.ReplaceAllString(title, ""))
+	if summary == "" {
+		summary = title
+	}
+	return started.In(seoul).Format("2006-01-02 15:04") + " — " + summary
 }

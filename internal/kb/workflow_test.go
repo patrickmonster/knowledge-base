@@ -111,6 +111,7 @@ func TestTaskWorkflowLifecycle(t *testing.T) {
 	}
 	finish := finishFixture(p.ID, run.ID)
 	finish.Documents = []TemplateDraft{templateFixture("decision")}
+	finish.Tags = []string{"작업이력", " 환불 ", "환불"}
 	completion := mustCall(t, tools, admin, "finish_task", finish).(TaskCompletion)
 	if len(completion.Documents) != 2 || completion.Documents[0].Kind != "history" || completion.Documents[1].Status != "draft" {
 		t.Fatalf("unexpected completion: %+v", completion)
@@ -118,6 +119,13 @@ func TestTaskWorkflowLifecycle(t *testing.T) {
 	history := mustCall(t, tools, admin, "get_document", DocumentRef{ProjectID: p.ID, DocumentID: completion.Documents[0].ID}).(Document)
 	if !strings.Contains(history.Content, run.ID) || !strings.Contains(history.Content, source.ID+"?revision=1") || !strings.Contains(history.Content, finish.Validation) {
 		t.Fatal("missing history provenance or actual verification")
+	}
+	wantTitle := historyTitle(run.Title, run.StartedAt)
+	if history.Title != wantTitle || strings.Contains(history.Title, "작업 결과") || !titleWithTime.MatchString(history.Title) {
+		t.Fatalf("history title not normalized: %q", history.Title)
+	}
+	if strings.Join(history.Tags, ",") != "작업이력,task:"+run.ID+",환불" {
+		t.Fatalf("history tags not normalized: %q", history.Tags)
 	}
 	var queued int
 	if err = s.DB.QueryRow("SELECT count(*) FROM chunks WHERE document_id=$1 AND embedding_status='pending'", history.ID).Scan(&queued); err != nil || queued == 0 {
