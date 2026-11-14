@@ -37,11 +37,9 @@ function ruleSection(project,title,scope,rules,canEdit,description,reload){
   if(!rules.length)c.append(el('p','등록된 규칙이 없습니다.','empty'));
   for(const r of rules)c.append(ruleRow(project,scope,r,canEdit,reload));
   if(canEdit){
-    const details=el('details',undefined,'rule-add'),summary=el('summary','규칙 추가');details.append(summary);
-    details.append(ruleForm({category:'work',title:'',body:''},'추가',async d=>{
+    c.append(btn('규칙 추가',()=>openRuleDialog(c,title+' 추가',async d=>{
       await tool('save_rule',{project_id:project.id,scope,...d});notify('규칙을 추가했습니다.');await reload();
-    }));
-    c.append(details);
+    }),'rule-add'));
   }
   return c;
 }
@@ -63,6 +61,16 @@ function ruleRow(project,scope,r,canEdit,reload){
     row.append(acts);
   }
   return row;
+}
+
+// Opens the add-rule form in a modal dialog; it closes on success, Esc, 취소 or a backdrop click.
+function openRuleDialog(parent,heading,onSubmit){
+  const dialog=el('dialog',undefined,'rule-dialog');
+  const form=ruleForm({category:'work',title:'',body:''},'추가',async d=>{await onSubmit(d);dialog.close();},()=>dialog.close());
+  dialog.append(el('h2',heading),form);
+  dialog.addEventListener('close',()=>dialog.remove(),{once:true});
+  dialog.addEventListener('click',e=>{if(e.target!==dialog)return;const r=dialog.getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)dialog.close();});
+  parent.append(dialog);dialog.showModal();form.querySelector('input[name="title"]')?.focus();
 }
 
 function ruleForm(r,submitTitle,onSubmit,onCancel){
