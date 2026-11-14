@@ -39,7 +39,7 @@ func Open(ctx context.Context, dsn string) (*Store, error) {
 	return &Store{DB: db}, nil
 }
 // migrationScripts are applied in order; version N is migrationScripts[N-1].
-var migrationScripts = []string{migrations.Initial, migrations.Auth, migrations.Embeddings, migrations.PermanentKeys, migrations.TaskWorkflow, migrations.Attachments, migrations.AttachmentUploadTokens, migrations.NormalizeTags, migrations.DocumentLinks, migrations.Issues}
+var migrationScripts = []string{migrations.Initial, migrations.Auth, migrations.Embeddings, migrations.PermanentKeys, migrations.TaskWorkflow, migrations.Attachments, migrations.AttachmentUploadTokens, migrations.NormalizeTags, migrations.DocumentLinks, migrations.Issues, migrations.KnowledgeQuality}
 
 func (s *Store) Migrate(ctx context.Context) error {
 	return transaction(ctx, s.DB, func(tx *sql.Tx) error {

@@ -252,4 +252,6 @@ type SearchInput struct {
 	Limit     int    `json:"limit,omitempty"`
 	Status    string `json:"status,omitempty"`
 	Mode      string `json:"mode,omitempty" jsonschema:"hybrid (default when configured), semantic, or lexical"`
+	// NoSynonyms disables glossary synonym expansion for this query.
+	NoSynonyms bool `json:"no_synonyms,omitempty" jsonschema:"Set true to search the exact query without glossary synonym expansion"`
 }

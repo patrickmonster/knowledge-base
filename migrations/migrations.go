@@ -31,3 +31,6 @@ var DocumentLinks string
 
 //go:embed 010_issues.sql
 var Issues string
+
+//go:embed 012_knowledge_quality.sql
+var KnowledgeQuality string

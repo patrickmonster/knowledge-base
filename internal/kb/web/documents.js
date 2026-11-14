@@ -1,6 +1,6 @@
 'use strict';
 
-const documentKinds={brief:'기획',decision:'결정',history:'작업 이력',artifact:'산출물',reference:'참고'};
+const documentKinds={brief:'기획',decision:'결정',history:'작업 이력',artifact:'산출물',reference:'참고',glossary:'용어집'};
 const documentStatuses={active:'active',draft:'draft',archived:'archived'};
 
 async function documentsPage() {
