@@ -21,7 +21,8 @@ async function rulesPage(){
   const root=el('div');
   const project=projectList.find(p=>p.id===currentProjectID);
   if(!project){const c=card('작업 규칙');c.append(el('p','먼저 프로젝트에 참여하고 사이드바에서 현재 프로젝트를 선택해 주세요.','empty'));root.append(c);return root;}
-  const data=await tool('list_rules',{project_id:project.id});
+  // The console also shows rules switched off (미사용) so they can be turned back on.
+  const data=await tool('list_rules',{project_id:project.id,include_disabled:true});
   const reload=()=>render('rules');
   // list_rules returns only the caller's own personal rules.
   const tabs={
@@ -30,6 +31,8 @@ async function rulesPage(){
     personal:{label:'개별 규칙',rules:data.personal_rules,canEdit:true,
       description:'내가 작성한 규칙만 표시됩니다. 나에게만 적용되며, 소유자 규칙과 충돌하면 소유자 규칙을 따릅니다.'},
   };
+  const offNote=' 미사용 규칙은 삭제되지 않지만 AI 작업에는 적용되지 않습니다.';
+  for(const t of Object.values(tabs))t.description+=offNote;
   if(!tabs[rulesTab])rulesTab='project';
   const c=el('section',undefined,'card rules-card'),bar=el('div',undefined,'rules-bar'),list=el('div',undefined,'rules-tabs');
   list.setAttribute('role','tablist');list.setAttribute('aria-label','규칙 종류');
@@ -58,10 +61,11 @@ async function rulesPage(){
   return root;
 }
 
-// Lists rules as a table; 수정·삭제 sit in the rightmost column when the caller can edit.
+// Lists rules as a table; the 사용 switch follows the rule text, and 수정·삭제 sit in
+// the rightmost column when the caller can edit.
 function ruleTable(project,scope,rules,canEdit,parent,reload){
   const wrap=el('div',undefined,'table-wrap rule-table'),tbl=el('table'),thead=el('thead'),head=el('tr'),body=el('tbody');
-  for(const h of ['종류','규칙','버전 · 수정일'])head.append(el('th',h));
+  for(const h of ['종류','규칙','사용','버전 · 수정일'])head.append(el('th',h));
   if(canEdit){const th=el('th','관리','rule-actions-col');head.append(th);}
   thead.append(head);
   for(const r of rules)body.append(ruleRow(project,scope,r,canEdit,parent,reload));
@@ -70,12 +74,17 @@ function ruleTable(project,scope,rules,canEdit,parent,reload){
 }
 
 function ruleRow(project,scope,r,canEdit,parent,reload){
-  const row=el('tr'),main=el('td',undefined,'rule-main');
+  const row=el('tr',undefined,r.enabled?'':'rule-off'),main=el('td',undefined,'rule-main');
   main.append(el('strong',r.title,'rule-title'),el('p',r.body,'rule-body'));
   const kind=el('td');kind.append(el('span',ruleCategoryLabels[r.category]||r.category,'pill'));
   const meta=el('td',undefined,'small muted rule-meta');
   meta.append(el('div','버전 '+r.revision),el('div',new Date(r.updated_at).toLocaleString()));
-  row.append(kind,main,meta);
+  const use=el('td',undefined,'rule-use');
+  use.append(ruleSwitch(r,canEdit,async on=>{
+    await tool('set_rule_enabled',{project_id:project.id,rule_id:r.id,enabled:on});
+    notify(on?'규칙을 사용합니다.':'규칙을 사용하지 않습니다.');await reload();
+  }));
+  row.append(kind,main,use,meta);
   if(canEdit){
     const acts=el('td',undefined,'rule-actions');
     acts.append(btn('수정',()=>openRuleDialog(parent,'규칙 수정','저장',r,async d=>{
@@ -87,6 +96,20 @@ function ruleRow(project,scope,r,canEdit,parent,reload){
     row.append(acts);
   }
   return row;
+}
+
+// A 사용/미사용 switch. Without edit rights it only shows the state.
+function ruleSwitch(r,canEdit,onChange){
+  const b=el('button',undefined,'rule-switch'+(r.enabled?' on':''));
+  b.type='button';b.setAttribute('role','switch');b.setAttribute('aria-checked',String(r.enabled));
+  b.setAttribute('aria-label','“'+r.title+'” 규칙 '+(r.enabled?'사용 중':'미사용'));
+  b.append(el('span',undefined,'rule-switch-track'),el('span',r.enabled?'사용':'미사용','rule-switch-label'));
+  if(!canEdit){b.disabled=true;return b;}
+  b.addEventListener('click',async()=>{
+    b.disabled=true;
+    try{await onChange(!r.enabled);}catch(e){notify(e.message,true);b.disabled=false;}
+  });
+  return b;
 }
 
 // Opens the add/edit rule form in a modal dialog; it closes on success, Esc, 취소 or a backdrop click.

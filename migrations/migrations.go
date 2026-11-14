@@ -40,3 +40,6 @@ var KnowledgeQuality string
 
 //go:embed 013_project_rules.sql
 var ProjectRules string
+
+//go:embed 014_rule_enabled.sql
+var RuleEnabled string
