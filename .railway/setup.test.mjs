@@ -16,6 +16,10 @@ test('prepare an isolated install without overwriting existing configuration',()
     const content=readFileSync(path,'utf8'),config=JSON.parse(content);
     assert.deepEqual(Object.keys(config.environments),['production']);
     assert.equal(config.environments.production.attachments.name,'Attachments');
+    assert.equal(config.environments.production.clamav,undefined);
+    const scanned=join(dir,'clamav.json');
+    assert.equal(spawnSync(process.execPath,[...args.slice(0,-1),scanned,'--clamav']).status,0);
+    assert.deepEqual(JSON.parse(readFileSync(scanned,'utf8')).environments.production.clamav,{name:'ClamAV',volumeName:'clamav-signatures'});
     assert.equal(spawnSync(process.execPath,args).status,1);
     assert.equal(readFileSync(path,'utf8'),content);
     assert.equal(spawnSync(process.execPath,[...args,'--environment','development','--output',join(dir,'invalid.json')]).status,1);

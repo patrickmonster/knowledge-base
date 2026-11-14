@@ -13,7 +13,7 @@ npm --prefix .railway run check
 npm --prefix .railway test
 ```
 
-프로젝트 이름과 GitHub 저장소를 바꾸면 앱·PostgreSQL·Ollama·모델 볼륨·첨부 버킷 이름이 포함된 `.railway/deployment.local.json`이 생성됩니다. 기본 환경은 `production`, 브랜치는 `main`, 버킷 지역은 `sjc`입니다. `--environment staging`, `--region sin`처럼 변경할 수 있습니다. 버킷 지역은 생성 후 바꿀 수 없습니다. 생성기는 이름과 지역을 검사하며 실제 리소스 생성 여부나 계정 권한까지 검사하지 않습니다.
+프로젝트 이름과 GitHub 저장소를 바꾸면 앱·PostgreSQL·Ollama·모델 볼륨·첨부 버킷 이름이 포함된 `.railway/deployment.local.json`이 생성됩니다. 기본 환경은 `production`, 브랜치는 `main`, 버킷 지역은 `sjc`입니다. `--environment staging`, `--region sin`처럼 변경할 수 있습니다. `--clamav`를 붙이면 업로드 악성 파일 검사용 ClamAV 서비스(`ClamAV`, 볼륨 `clamav-signatures`)도 포함합니다(메모리 약 1.5 GiB 추가). 버킷 지역은 생성 후 바꿀 수 없습니다. 생성기는 이름과 지역을 검사하며 실제 리소스 생성 여부나 계정 권한까지 검사하지 않습니다.
 
 **실제 설치가 필요해졌을 때만** Railway에서 새 프로젝트를 만든 후 다음 절차를 진행합니다. Node.js 22 이상과 Railway CLI 5.74.0 이상을 사용합니다.
 
@@ -29,7 +29,7 @@ railway config apply
 
 설정 파일의 프로젝트 이름은 선택한 새 프로젝트 이름과 맞아야 합니다. 앱의 GitHub 저장소에 Railway 설치 권한이 필요합니다. 새 프로젝트에는 기존 지식·계정·접속 키가 복사되지 않습니다. 이미 운영 중인 프로젝트를 복제하려면 DB와 버킷 데이터를 별도로 이관해야 합니다.
 
-설정 적용 후 앱 서비스에 Railway 공개 도메인을 생성합니다. `PUBLIC_URL`은 그 도메인을 참조합니다. DB와 Ollama에는 공개 도메인이나 TCP 프록시가 필요하지 않습니다. 앱 상태 확인에 실패하면 도메인 생성 여부, DB 마이그레이션, 환경변수 참조를 확인합니다.
+설정 적용 후 앱 서비스에 Railway 공개 도메인을 생성합니다. `PUBLIC_URL`은 그 도메인을 참조합니다. DB·Ollama·ClamAV에는 공개 도메인이나 TCP 프록시를 만들지 않습니다. 앱 상태 확인에 실패하면 도메인 생성 여부, DB 마이그레이션, 환경변수 참조를 확인합니다.
 
 ## 최초 관리자와 연결
 
@@ -77,6 +77,7 @@ railway config apply
 | `PORT` / `TRUST_PROXY` | `8080` / `true` |
 | 임베딩 | 같은 환경 내부 Ollama, `bge-m3`, 4 GiB 모델 볼륨 |
 | 파일 | 같은 환경의 Railway 버킷, DB에 연결 정보·SHA-256 저장 |
+| 악성 파일 검사 (선택) | `clamav` 설정 시 `clamav/clamav:1.4_base` 서비스 + 1 GiB 시그니처 볼륨, 앱 `CLAMAV_ADDRESS`=내부 주소:3310. 기존 운영 환경은 `deployment.local.json`에 `clamav`를 추가한 뒤 plan/apply해야 생깁니다. 자세한 내용은 [첨부 안내](../docs/attachments.md#clamav-서비스-구성) |
 
 `ollama-start.sh`는 모델이 없을 때 다운로드합니다. `/api/tags`는 모델의 실제 추론까지 검증하지 않습니다. CPU 첫 요청은 모델 로딩 시간이 추가될 수 있습니다. DB 자동 백업, 버킷 백업과 GitHub 브랜치 보호는 별도 운영 설정입니다.
 

@@ -57,13 +57,14 @@ func TestAttachmentStorageStatusSessionAndRedaction(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		objects ObjectStorage
+		scanner MalwareScanner
 	}{
-		{"not_configured", nil},
-		{"connected", objects},
-		{"unavailable", &checkedObjects{err: errors.New("private endpoint and secret credentials")}},
+		{"not_configured", nil, nil},
+		{"connected", objects, &fakeScanner{}},
+		{"unavailable", &checkedObjects{err: errors.New("private endpoint and secret credentials")}, &fakeScanner{err: errors.New("private clamd address")}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			s.Objects = tc.objects
+			s.Objects, s.Scanner = tc.objects, tc.scanner
 			w := get(cookie)
 			if w.Code != 200 {
 				t.Fatal(w.Code, w.Body.String())
@@ -74,7 +75,7 @@ func TestAttachmentStorageStatusSessionAndRedaction(t *testing.T) {
 			if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
 				t.Fatal(err)
 			}
-			if body.Data.State != tc.name || body.Data.CheckedAt.IsZero() {
+			if body.Data.State != tc.name || body.Data.Scanner != tc.name || body.Data.CheckedAt.IsZero() {
 				t.Fatalf("unexpected status: %+v", body.Data)
 			}
 			if strings.Contains(w.Body.String(), "private") || strings.Contains(w.Body.String(), "secret") {
@@ -82,6 +83,7 @@ func TestAttachmentStorageStatusSessionAndRedaction(t *testing.T) {
 			}
 		})
 	}
+	s.Scanner = nil
 	if objects.calls != 1 {
 		t.Fatal("bucket access was not checked")
 	}

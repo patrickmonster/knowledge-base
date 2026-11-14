@@ -52,7 +52,7 @@ func TestProjectRulesAndAdminRole(t *testing.T) {
 		t.Fatalf("initial rules: %+v", set)
 	}
 	added := mustCall(t, tools, admin, "save_rule", SaveRuleInput{ProjectID: p.ID, Scope: "project", Category: "work", Title: "Korean docs", Body: "Write docs in Korean."}).(Rule)
-	if added.Revision != 1 || added.UserID != "" {
+	if added.Revision != 1 || added.UserID != "" || !added.Enabled {
 		t.Fatalf("added: %+v", added)
 	}
 	for _, who := range []Identity{editor, viewer, ownerKey} {
@@ -107,6 +107,49 @@ func TestProjectRulesAndAdminRole(t *testing.T) {
 	tc := mustCall(t, tools, admin, "get_task_context", ContextInput{ProjectID: p.ID, Task: "commit rules"}).(TaskContext)
 	if tc.Rules == nil || len(tc.Rules.ProjectRules) != 3 || len(tc.Rules.PersonalRules) != 0 || tc.Rules.Guidance == "" {
 		t.Fatalf("task rules: %+v", tc.Rules)
+	}
+
+	// Rules can be switched off (미사용) without deleting them; same permissions as delete_rule.
+	target := set.ProjectRules[1]
+	for _, who := range []Identity{editor, viewer, ownerKey} {
+		_, err = call(t, tools, who, "set_rule_enabled", SetRuleEnabledInput{ProjectID: p.ID, RuleID: target.ID, Enabled: false})
+		denied(t, err, "FORBIDDEN")
+	}
+	off := mustCall(t, tools, admin, "set_rule_enabled", SetRuleEnabledInput{ProjectID: p.ID, RuleID: target.ID, Enabled: false}).(Rule)
+	if off.Enabled || off.Revision != target.Revision+1 || off.UpdatedBy != admin.User.ID || off.Title != target.Title {
+		t.Fatalf("disabled: %+v", off)
+	}
+	if again := mustCall(t, tools, admin, "set_rule_enabled", SetRuleEnabledInput{ProjectID: p.ID, RuleID: target.ID, Enabled: false}).(Rule); again.Revision != off.Revision {
+		t.Fatalf("repeating the same state should not bump the revision: %+v", again)
+	}
+	active := mustCall(t, tools, editor, "list_rules", ListRulesInput{ProjectID: p.ID}).(RuleSet)
+	if len(active.ProjectRules) != 2 {
+		t.Fatalf("disabled rule listed by default: %+v", active.ProjectRules)
+	}
+	for _, r := range active.ProjectRules {
+		if r.ID == target.ID || !r.Enabled {
+			t.Fatalf("default list must hold only enabled rules: %+v", active.ProjectRules)
+		}
+	}
+	all := mustCall(t, tools, editor, "list_rules", ListRulesInput{ProjectID: p.ID, IncludeDisabled: true}).(RuleSet)
+	if len(all.ProjectRules) != 3 || all.ProjectRules[1].ID != target.ID || all.ProjectRules[1].Enabled {
+		t.Fatalf("include_disabled: %+v", all.ProjectRules)
+	}
+	tc = mustCall(t, tools, editor, "get_task_context", ContextInput{ProjectID: p.ID, Task: "commit rules"}).(TaskContext)
+	if tc.Rules == nil || len(tc.Rules.ProjectRules) != 2 {
+		t.Fatalf("task context must skip disabled rules: %+v", tc.Rules)
+	}
+	// Personal rules: their author may switch them, including through a writable key; others see NOT_FOUND.
+	pref := ownerSet.PersonalRules[0]
+	_, err = call(t, tools, viewer, "set_rule_enabled", SetRuleEnabledInput{ProjectID: p.ID, RuleID: pref.ID, Enabled: false})
+	denied(t, err, "NOT_FOUND")
+	mustCall(t, tools, ownerKey, "set_rule_enabled", SetRuleEnabledInput{ProjectID: p.ID, RuleID: pref.ID, Enabled: false})
+	if got := mustCall(t, tools, owner, "list_rules", ListRulesInput{ProjectID: p.ID}).(RuleSet); len(got.PersonalRules) != 0 {
+		t.Fatalf("disabled personal rule listed: %+v", got.PersonalRules)
+	}
+	on := mustCall(t, tools, owner, "set_rule_enabled", SetRuleEnabledInput{ProjectID: p.ID, RuleID: target.ID, Enabled: true}).(Rule)
+	if !on.Enabled || on.Revision != off.Revision+1 {
+		t.Fatalf("re-enabled: %+v", on)
 	}
 
 	mustCall(t, tools, viewer, "delete_rule", RuleRef{ProjectID: p.ID, RuleID: mine.ID})

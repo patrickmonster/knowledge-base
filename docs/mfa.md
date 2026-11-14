@@ -7,7 +7,7 @@
 - `MFA_ENCRYPTION_KEY`: 32자 이상의 무작위 문자열. 사용자별 TOTP 비밀키를 AES-GCM으로 암호화하는 데 씁니다. 예: `openssl rand -base64 48`.
 - 값이 없으면 MFA를 새로 켤 수 없습니다(`MFA_UNAVAILABLE`, 503). 이미 MFA를 켠 사용자는 로그인이 실패합니다(fail closed).
 - **값을 바꾸거나 잃어버리면 기존 사용자의 MFA를 풀 수 없습니다.** 관리자가 해당 사용자의 MFA를 초기화하고 사용자가 다시 등록해야 합니다. 값은 Railway 변수에만 두고 Git·문서·지식베이스에 쓰지 않습니다.
-- 마이그레이션 `014_mfa.sql`: `user_mfa`(암호화한 비밀키, 활성 시각, 마지막 사용 시간 단계), `mfa_recovery_codes`(해시), `mfa_challenges`(비밀번호 확인 후 대기 중인 로그인). `users` 표에는 MFA 정보를 두지 않습니다.
+- 마이그레이션 `016_mfa.sql`: `user_mfa`(암호화한 비밀키, 활성 시각, 마지막 사용 시간 단계), `mfa_recovery_codes`(해시), `mfa_challenges`(비밀번호 확인 후 대기 중인 로그인). `users` 표에는 MFA 정보를 두지 않습니다.
 
 ## 사용 흐름
 

@@ -58,6 +58,22 @@ type UsageDocument struct {
 	Reads      int    `json:"reads"`
 }
 
+type UsageSearchMiss struct {
+	Query  string    `json:"query"`
+	Count  int       `json:"count"`
+	LastAt time.Time `json:"last_at"`
+}
+
+// UsageKindGrowth is the document count of one kind over the window. Kinds are
+// the documents' current kind; archived documents still count.
+type UsageKindGrowth struct {
+	Kind       string `json:"kind"`
+	Start      int    `json:"start" jsonschema:"Documents of this kind created before the window"`
+	Added      int    `json:"added"`
+	Total      int    `json:"total"`
+	Cumulative []int  `json:"cumulative" jsonschema:"Count at the end of each day of the window, aligned with daily"`
+}
+
 type UsageTotals struct {
 	Calls          int `json:"calls" jsonschema:"Successful tool calls in the window"`
 	Denied         int `json:"denied"`
@@ -71,6 +87,7 @@ type UsageTotals struct {
 	TasksCompleted int `json:"tasks_completed"`
 	TasksAbandoned int `json:"tasks_abandoned"`
 	IssuesOpened   int `json:"issues_opened"`
+	SearchMisses   int `json:"search_misses" jsonschema:"search_knowledge calls that returned no hits"`
 }
 
 type UsageInventory struct {
@@ -88,18 +105,20 @@ type UsageInventory struct {
 }
 
 type UsageStats struct {
-	ProjectID    string          `json:"project_id"`
-	Days         int             `json:"days"`
-	Timezone     string          `json:"timezone"`
-	From         string          `json:"from" jsonschema:"First day of the window, YYYY-MM-DD"`
-	To           string          `json:"to" jsonschema:"Last day of the window (today), YYYY-MM-DD"`
-	Totals       UsageTotals     `json:"totals"`
-	Inventory    UsageInventory  `json:"inventory"`
-	Daily        []UsageDay      `json:"daily" jsonschema:"One entry per day of the window, oldest first, zero-filled"`
-	TopActions   []UsageCount    `json:"top_actions"`
-	TopUsers     []UsageUser     `json:"top_users"`
-	TopDocuments []UsageDocument `json:"top_documents" jsonschema:"Most read documents (get_document) in the window"`
-	Guidance     string          `json:"guidance"`
+	ProjectID    string            `json:"project_id"`
+	Days         int               `json:"days"`
+	Timezone     string            `json:"timezone"`
+	From         string            `json:"from" jsonschema:"First day of the window, YYYY-MM-DD"`
+	To           string            `json:"to" jsonschema:"Last day of the window (today), YYYY-MM-DD"`
+	Totals       UsageTotals       `json:"totals"`
+	Inventory    UsageInventory    `json:"inventory"`
+	Daily        []UsageDay        `json:"daily" jsonschema:"One entry per day of the window, oldest first, zero-filled"`
+	TopActions   []UsageCount      `json:"top_actions"`
+	TopUsers     []UsageUser       `json:"top_users"`
+	TopDocuments []UsageDocument   `json:"top_documents" jsonschema:"Most read documents (get_document) in the window"`
+	SearchMisses []UsageSearchMiss `json:"search_misses" jsonschema:"Most frequent zero-result search_knowledge queries (normalized, lowercase), at most 20"`
+	KindGrowth   []UsageKindGrowth `json:"kind_growth"`
+	Guidance     string            `json:"guidance"`
 }
 
 // usageWindow defines the window as whole Asia/Seoul days ending today.
@@ -122,7 +141,7 @@ func usageStats(ctx context.Context, tx *sql.Tx, a Identity, in UsageStatsInput)
 	}
 	args := []any{in.ProjectID, in.Days, usageTimezone, usageSearchActions, usageReadActions}
 	out := UsageStats{ProjectID: in.ProjectID, Days: in.Days, Timezone: usageTimezone,
-		Guidance: "Calls, searches, reads and active users come from the audit log and only cover what AUDIT_RETENTION_DAYS keeps; document writes come from revisions. Searches include start_task and get_task_context. The call that reads these statistics is not counted."}
+		Guidance: "Calls, searches, reads and active users come from the audit log and only cover what AUDIT_RETENTION_DAYS keeps; document writes come from revisions. Searches include start_task and get_task_context. search_misses lists zero-result search_knowledge queries, kept at most 365 days without the searching user; read them as knowledge to write or glossary synonyms to add. The call that reads these statistics is not counted."}
 
 	type header struct {
 		From   string      `json:"from"`
@@ -144,7 +163,8 @@ func usageStats(ctx context.Context, tx *sql.Tx, a Identity, in UsageStatsInput)
 		'tasks_started',(SELECT count(*) FROM t),
 		'tasks_completed',(SELECT count(*) FROM task_runs x WHERE x.project_id=$1 AND x.status='completed' AND x.completed_at>=ws.start_at),
 		'tasks_abandoned',(SELECT count(*) FROM t WHERE status='abandoned'),
-		'issues_opened',(SELECT count(*) FROM issues i WHERE i.project_id=$1 AND i.created_at>=ws.start_at)))
+		'issues_opened',(SELECT count(*) FROM issues i WHERE i.project_id=$1 AND i.created_at>=ws.start_at),
+		'search_misses',(SELECT count(*) FROM search_misses m WHERE m.project_id=$1 AND m.created_at>=ws.start_at)))
 	FROM ws`, args...)
 	if err != nil {
 		return nil, err
@@ -206,6 +226,25 @@ func usageStats(ctx context.Context, tx *sql.Tx, a Identity, in UsageStatsInput)
 	SELECT jsonb_build_object('document_id',d.id,'title',d.title,'kind',d.kind,'status',d.status,'reads',g.n)
 	FROM g JOIN documents d ON d.id::text=g.target_id AND d.project_id=$1 ORDER BY g.n DESC,d.title,d.id LIMIT 10`,
 		in.ProjectID, in.Days, usageTimezone, usageReadActions); err != nil {
+		return nil, err
+	}
+	if out.SearchMisses, err = many[UsageSearchMiss](ctx, tx, usageWindow+`
+	SELECT jsonb_build_object('query',m.query,'count',count(*),'last_at',max(m.created_at)) FROM search_misses m, ws
+	WHERE m.project_id=$1 AND m.created_at>=ws.start_at GROUP BY m.query ORDER BY count(*) DESC,max(m.created_at) DESC,m.query LIMIT 20`, args[:3]...); err != nil {
+		return nil, err
+	}
+
+	if out.KindGrowth, err = many[UsageKindGrowth](ctx, tx, usageWindow+`,
+	days AS (SELECT generate_series(ws.from_day,ws.to_day,interval '1 day')::date AS day FROM ws),
+	k AS (SELECT DISTINCT kind FROM documents WHERE project_id=$1),
+	starts AS (SELECT d.kind,count(*) AS n FROM documents d, ws WHERE d.project_id=$1 AND d.created_at<ws.start_at GROUP BY d.kind),
+	adds AS (SELECT d.kind,(d.created_at AT TIME ZONE $3)::date AS day,count(*) AS n FROM documents d, ws
+		WHERE d.project_id=$1 AND d.created_at>=ws.start_at GROUP BY 1,2),
+	per AS (SELECT k.kind,days.day,coalesce(adds.n,0) AS added,coalesce(starts.n,0) AS start FROM k CROSS JOIN days
+		LEFT JOIN adds ON adds.kind=k.kind AND adds.day=days.day LEFT JOIN starts ON starts.kind=k.kind),
+	run AS (SELECT per.*,sum(added) OVER (PARTITION BY kind ORDER BY day) AS running FROM per)
+	SELECT jsonb_build_object('kind',kind,'start',start,'added',sum(added),'total',start+sum(added),'cumulative',jsonb_agg(start+running ORDER BY day))
+	FROM run GROUP BY kind,start ORDER BY start+sum(added) DESC,kind`, args[:3]...); err != nil {
 		return nil, err
 	}
 	return out, nil
