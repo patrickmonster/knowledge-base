@@ -145,7 +145,8 @@ func TestExtractPDF(t *testing.T) {
 		"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
 		stream("BT /F1 12 Tf 72 720 Td (Refund policy) Tj 0 -20 Td (Within 7 days) Tj ET"),
 		"<< /Type /Font /Subtype /Type0 /BaseFont /KR /Encoding /Identity-H /DescendantFonts [<< /Type /Font /Subtype /CIDFontType2 /BaseFont /KR /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> >>] /ToUnicode 10 0 R >>",
-		stream("BT /F2 12 Tf 72 720 Td <000100020003> Tj ET"),
+		// Second line: two cells of a width-less CID font placed 100pt apart.
+		stream("BT /F2 12 Tf 72 720 Td <000100020003> Tj 0 -30 Td <0001> Tj 100 0 Td <0002> Tj ET"),
 		"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 11 0 R >>",
 		stream(toUnicode),
 		stream(""),
@@ -154,13 +155,36 @@ func TestExtractPDF(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"## p.1", "Refund policy", "Within 7 days", "## p.2", "환불"} {
+	for _, want := range []string{"## p.1", "Refund policy\nWithin 7 days\n", "## p.2", "환불", "\n환 불"} {
 		if !strings.Contains(res.Text, want) {
 			t.Fatalf("missing %q in:\n%s", want, res.Text)
 		}
 	}
 	if strings.Contains(res.Text, "## p.3") || res.Units != 3 {
 		t.Fatalf("empty page listed or page count wrong: %+v", res)
+	}
+}
+
+// Lines moved with TL/T*, ' and TD (not only Tm) must stay separate lines, and
+// runs placed apart on one baseline must not be glued into one word.
+func TestExtractPDFLineOperators(t *testing.T) {
+	widths := "/FirstChar 32 /LastChar 126 /Widths [" + strings.TrimSpace(strings.Repeat("500 ", 95)) + "]"
+	file := buildPDF(t, []string{
+		"<< /Type /Catalog /Pages 2 0 R >>",
+		"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+		"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R /F2 5 0 R >> >> /Contents 6 0 R >>",
+		"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+		"<< /Type /Font /Subtype /Type1 /BaseFont /Courier /Encoding /WinAnsiEncoding " + widths + " >>",
+		stream("BT /F1 12 Tf 72 720 Td 16 TL (smoke test) Tj T* (Marker: ZEBRA-7319) Tj (next line by quote) ' 0 -16 TD (moved by TD) Tj ET\n" +
+			"BT /F2 10 Tf 72 600 Td (Name) Tj 100 0 Td (Value) Tj ET"),
+	})
+	res, err := ExtractText("pdf", file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "smoke test\nMarker: ZEBRA-7319\nnext line by quote\nmoved by TD\nName Value"
+	if !strings.Contains(res.Text, want) {
+		t.Fatalf("want lines %q in:\n%q", want, res.Text)
 	}
 }
 

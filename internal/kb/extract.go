@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path"
 	"sort"
@@ -220,9 +221,14 @@ func extractPDF(file string) (ExtractResult, error) {
 	return t.result(pages), nil
 }
 
-// pageText keeps PDF line breaks by grouping text runs into rows, and falls back
-// to the library's plain text when rows are unavailable.
+// pageText keeps PDF line breaks by grouping text into rows. Rows come from the
+// page's full text state first; the library's GetTextByRow only follows Tm and
+// puts every line moved with Td, TD, T* or ' on one row, so it is a fallback,
+// followed by the library's plain text.
 func pageText(p pdf.Page, fonts map[string]*pdf.Font) (string, error) {
+	if text := positionedPageText(p); text != "" {
+		return text, nil
+	}
 	rows, err := p.GetTextByRow()
 	if err == nil && len(rows) > 0 {
 		var b strings.Builder
@@ -237,6 +243,108 @@ func pageText(p pdf.Page, fonts map[string]*pdf.Font) (string, error) {
 		return b.String(), nil
 	}
 	return p.GetPlainText(fonts)
+}
+
+// positionedPageText rebuilds lines from glyph positions computed with the
+// whole text state (Tm, Td, TD, T*, TL, ', ", CTM).
+//   - Glyphs whose baselines round to within a point share a line; lines run
+//     top to bottom.
+//   - Inside a line, glyphs keep content-stream order, so negative kerning or
+//     fonts without width tables (every glyph at the same x) cannot shuffle
+//     letters. Only runs that jump back left by more than a font size, i.e.
+//     text placed separately, are reordered left to right.
+//   - A gap wider than a fifth of the font size after a glyph of known width
+//     becomes a space; control characters some fonts map glyphs to are dropped.
+//
+// It returns "" when the page cannot be interpreted so the caller falls back to
+// the library's readers.
+func positionedPageText(p pdf.Page) (text string) {
+	defer func() {
+		if recover() != nil {
+			text = ""
+		}
+	}()
+	type line struct {
+		y      float64
+		glyphs []pdf.Text
+	}
+	var lines []*line
+	byY := map[int]*line{}
+	for _, g := range p.Content().Text {
+		g.S = strings.Map(func(r rune) rune {
+			switch {
+			case r == '\t':
+				return ' '
+			case r < 0x20 || r == 0x7f:
+				return -1
+			}
+			return r
+		}, g.S)
+		if g.S == "" {
+			continue
+		}
+		key := int(math.Round(g.Y))
+		l := byY[key]
+		if l == nil {
+			l = byY[key-1]
+		}
+		if l == nil {
+			l = byY[key+1]
+		}
+		if l == nil {
+			l = &line{y: g.Y}
+			lines = append(lines, l)
+		}
+		byY[key] = l
+		l.glyphs = append(l.glyphs, g)
+	}
+	sort.SliceStable(lines, func(i, j int) bool { return lines[i].y > lines[j].y })
+	var b strings.Builder
+	for _, l := range lines {
+		var runs [][]pdf.Text
+		for i, g := range l.glyphs {
+			if i == 0 || g.X < l.glyphs[i-1].X-math.Max(g.FontSize, 1) {
+				runs = append(runs, nil)
+			}
+			runs[len(runs)-1] = append(runs[len(runs)-1], g)
+		}
+		sort.SliceStable(runs, func(i, j int) bool { return runs[i][0].X < runs[j][0].X })
+		var prev *pdf.Text
+		var segX float64 // start of the current run of zero-width glyphs sharing one x
+		segN := 0
+		for _, run := range runs {
+			for i := range run {
+				g := &run[i]
+				if prev != nil && !strings.HasSuffix(prev.S, " ") && !strings.HasPrefix(g.S, " ") {
+					end := prev.X + prev.W
+					if prev.W == 0 {
+						// No width table (common for CID fonts): every glyph of a
+						// show-text call sits at one x. Assume at most 1 em per glyph
+						// so only a clear jump past the segment counts as a gap.
+						end = segX + float64(segN)*math.Max(prev.FontSize, 1)
+					}
+					if g.X-end > 0.2*math.Max(g.FontSize, 1) {
+						b.WriteByte(' ')
+					}
+				}
+				b.WriteString(g.S)
+				if g.W > 0 {
+					segN = 0
+				} else {
+					if segN == 0 || g.X != segX {
+						segX, segN = g.X, 0
+					}
+					segN += utf8.RuneCountInString(g.S)
+				}
+				prev = g
+			}
+		}
+		b.WriteByte('\n')
+	}
+	if strings.TrimSpace(b.String()) == "" {
+		return ""
+	}
+	return b.String()
 }
 
 // zipArchive guards DOCX/XLSX reads against archive bombs.
