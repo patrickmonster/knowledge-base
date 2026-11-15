@@ -38,6 +38,9 @@ func (s *Store) taskContext(ctx context.Context, tx *sql.Tx, a Identity, in Cont
 	if out.Deployments, err = s.taskDeployments(ctx, tx, a.User.ID, in.ProjectID); err != nil {
 		return TaskContext{}, err
 	}
+	if out.Todos, err = taskTodos(ctx, tx, in.ProjectID, in.Task); err != nil {
+		return TaskContext{}, err
+	}
 	remaining := in.ExcerptBudget
 	for _, hit := range results.Hits {
 		if remaining == 0 {

@@ -376,7 +376,18 @@ func (s *Store) recordTaskDeployment(ctx context.Context, tx *sql.Tx, taskID str
 			}
 		}
 	}
-	return true, audit(ctx, tx, Event{Action: "deployment_recorded", ProjectID: doc.ProjectID, TargetID: doc.ID, Outcome: "success", Details: map[string]any{"task_id": taskID, "pull_requests": len(rows)}})
+	details := map[string]any{"task_id": taskID, "pull_requests": len(rows)}
+	// The change landed: the linked to-do is done even if the task ended partial.
+	if s.pullsLanded(rows) {
+		todo, err := completeRunTodo(ctx, tx, taskID, creator)
+		if err != nil {
+			return false, err
+		}
+		if todo != nil {
+			details["todo_id"] = todo.ID
+		}
+	}
+	return true, audit(ctx, tx, Event{Action: "deployment_recorded", ProjectID: doc.ProjectID, TargetID: doc.ID, Outcome: "success", Details: details})
 }
 
 func shortSHA(sha *string) string {

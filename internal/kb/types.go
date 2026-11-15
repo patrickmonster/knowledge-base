@@ -126,6 +126,8 @@ type TaskContext struct {
 	// Deployments lists the caller's pull requests whose merge or deployment
 	// is not yet recorded in the task history.
 	Deployments *TaskDeployments `json:"deployments,omitempty"`
+	// Todos are the linked to-do (start_task todo_id) and open to-dos resembling the task.
+	Todos *TaskTodos `json:"todos,omitempty"`
 }
 
 type SearchResult struct {

@@ -111,6 +111,7 @@ async function todosPage(){
       const track=el('span',undefined,'todo-progress-track'),fill=el('span',undefined,'todo-progress-fill');fill.style.width=t.progress+'%';
       track.append(fill);p.append(track,el('span',t.progress+'%','todo-progress-label'));c.append(p);
     }
+    const links=todoLinkPills(t);if(links)c.append(links);
     const meta=[t.assignee_name,t.due_date?`마감 ${t.due_date}`:''].filter(Boolean).join(' · ');
     if(meta){const m=el('p',meta,'todo-meta');if(t.due_date&&t.status!=='completed'&&t.due_date<todayISO())m.classList.add('overdue');c.append(m);}
     c.addEventListener('click',()=>todoDialog(root,project,ctx,t));
@@ -152,6 +153,36 @@ async function todosPage(){
   return root;
 }
 
+// Linked AI tasks (start_task todo_id / link_task_todo) and their latest pull request.
+const todoPRLabels={unknown:'확인 전',open:'PR 열림',closed:'PR 닫힘',merged:'PR 병합',deployed:'PR 배포'};
+function todoLinkPills(t){
+  if(!t.task_count)return null;
+  const row=el('div',undefined,'todo-links');
+  row.append(el('span',`작업 ${t.task_count}`+(t.open_task_count?` · 진행 중 ${t.open_task_count}`:''),'todo-link-pill'+(t.open_task_count?' active':'')));
+  const pr=(t.pull_requests||[])[0];
+  if(pr)row.append(el('span',`#${pr.number} ${todoPRLabels[pr.state]||pr.state}`,'todo-link-pill pr-'+pr.state));
+  return row;
+}
+
+// The tasks linked to a to-do, shown in its dialog.
+async function todoTasksSection(project,t){
+  const box=el('section',undefined,'todo-tasks');
+  box.append(el('h3','연결된 AI 작업'));
+  if(!t.task_count){box.append(el('p','아직 연결된 작업이 없습니다. AI가 start_task에 todo_id를 넘기거나, 진행 중 작업 화면에서 “할 일 연결”로 붙이면 시작 시 진행 중, 완료 시 완료로 자동 이동합니다.','small muted'));return box;}
+  const list=el('ul');box.append(list);list.append(el('li','불러오는 중…','muted'));
+  try{
+    const runs=await tool('list_task_runs',{project_id:project.id,todo_id:t.id,limit:20});
+    list.replaceChildren(...runs.map(r=>{
+      const li=el('li');
+      li.append(el('span',taskStatusLabels[r.status]||r.status,'pill task-'+r.status),document.createTextNode(' '+r.title+' '));
+      li.append(el('span',`${r.created_by_name||''} · ${new Date(r.started_at).toLocaleDateString()}`,'small muted'));
+      for(const pr of r.pull_requests||[]){const a=el('a',` #${pr.number} ${todoPRLabels[pr.state]||pr.state}`,'small');a.href=pr.url;a.target='_blank';a.rel='noopener noreferrer';li.append(a);}
+      return li;
+    }));
+  }catch(e){list.replaceChildren(el('li',e.message,'muted'));}
+  return box;
+}
+
 function todayISO(){const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;}
 
 // Add (no id) or edit a to-do. Viewers get a read-only dialog.
@@ -173,7 +204,11 @@ function todoDialog(parent,project,ctx,t){
   if(t.assignee_id&&![...assignee.options].some(o=>o.value===t.assignee_id))assignee.append(new Option(t.assignee_name||t.assignee_id,t.assignee_id));
   assignee.value=t.assignee_id||'';
   const due=field(grid,'마감일 (선택)','due_date','date',t.due_date||'');due.required=false;
-  if(editing)form.append(el('p',`${t.created_by_name||''} 작성 · ${new Date(t.updated_at).toLocaleString()} 수정`,'small muted'));
+  if(editing){
+    form.append(el('p',`${t.created_by_name||''} 작성 · ${new Date(t.updated_at).toLocaleString()} 수정`,'small muted'));
+    const slot=el('div');form.append(slot);
+    todoTasksSection(project,t).then(s=>slot.replaceWith(s));
+  }
   const actions=el('div',undefined,'actions review-dialog-actions');
   const close=btn('닫기',()=>dialog.close(),'secondary');
   if(!canWrite){form.querySelectorAll('input,select,textarea').forEach(n=>n.disabled=true);actions.append(close);}

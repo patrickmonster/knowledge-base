@@ -45,6 +45,17 @@ type Todo struct {
 	CreatedAt     string  `json:"created_at"`
 	UpdatedAt     string  `json:"updated_at"`
 	CompletedAt   string  `json:"completed_at,omitempty"`
+	// Linked task runs (start_task todo_id / link_task_todo) and their pull requests.
+	TaskCount     int               `json:"task_count"`
+	OpenTaskCount int               `json:"open_task_count"`
+	PullRequests  []TodoPullRequest `json:"pull_requests"`
+}
+
+type TodoPullRequest struct {
+	Repository string `json:"repository"`
+	Number     int    `json:"number"`
+	URL        string `json:"url"`
+	State      string `json:"state"`
 }
 
 type ListTodosInput struct {
@@ -94,7 +105,11 @@ func oneOf(value string, allowed []string) bool {
 }
 
 // todoSelect returns each to-do with the assignee's and creator's names.
-const todoSelect = `SELECT to_jsonb(t)||jsonb_build_object('assignee_name',COALESCE(a.name,''),'created_by_name',COALESCE(c.name,''))
+const todoSelect = `SELECT to_jsonb(t)||jsonb_build_object('assignee_name',COALESCE(a.name,''),'created_by_name',COALESCE(c.name,''),
+	'task_count',(SELECT count(*) FROM task_runs r WHERE r.todo_id=t.id),
+	'open_task_count',(SELECT count(*) FROM task_runs r WHERE r.todo_id=t.id AND r.status='open'),
+	'pull_requests',COALESCE((SELECT jsonb_agg(jsonb_build_object('repository',pr.repository,'number',pr.number,'url',pr.url,'state',pr.state) ORDER BY pr.created_at DESC)
+		FROM task_pull_requests pr JOIN task_runs r ON r.id=pr.task_id WHERE r.todo_id=t.id),'[]'::jsonb))
 	FROM todos t LEFT JOIN users a ON a.id=t.assignee_id LEFT JOIN users c ON c.id=t.created_by`
 
 func validateTodo(in *SaveTodoInput) error {

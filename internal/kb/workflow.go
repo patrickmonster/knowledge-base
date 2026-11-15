@@ -20,6 +20,7 @@ type StartTaskInput struct {
 	Title         string `json:"title" jsonschema:"Short task title, up to 150 characters"`
 	Task          string `json:"task" jsonschema:"Requested work and retrieval query, up to 1000 characters"`
 	ExcerptBudget int    `json:"excerpt_budget,omitempty" jsonschema:"Maximum total excerpt characters, 1000 to 20000; omit for the default 8000"`
+	TodoID        string `json:"todo_id,omitempty" jsonschema:"The to-do (list_todos) this task carries out; it moves to in_progress and completes with the task. Omit when the request matches no to-do"`
 }
 type TaskRef struct {
 	ProjectID string `json:"project_id"`
@@ -47,6 +48,8 @@ type TaskCompletion struct {
 	Feedback *ContextFeedbackResult `json:"context_feedback,omitempty"`
 	// PullRequests are the tracked pull request links (normalized).
 	PullRequests []string `json:"pull_requests,omitempty"`
+	// Todo is the linked to-do after completion (completed when outcome is completed).
+	Todo *TodoSummary `json:"todo,omitempty"`
 }
 type TaskRun struct {
 	ID            string          `json:"id"`
@@ -56,6 +59,7 @@ type TaskRun struct {
 	Title         string          `json:"title"`
 	Task          string          `json:"task"`
 	ExcerptBudget int             `json:"excerpt_budget"`
+	TodoID        string          `json:"todo_id,omitempty"`
 	Status        string          `json:"status"`
 	Context       TaskContext     `json:"context"`
 	Completion    *TaskCompletion `json:"completion"`
@@ -106,7 +110,7 @@ func registerWorkflowTools(t Tools, s *Store) {
 		run, err := one[TaskRun](ctx, tx, `SELECT to_jsonb(r)-'completion_hash' FROM task_runs r WHERE id=$1 AND project_id=$2`, in.TaskID, in.ProjectID)
 		return run, notFound(err)
 	})
-	add(t, s, "list_task_runs", "List project tasks to find open work or recover a task ID after an interrupted response. status: open, completed or abandoned; omitted means all. older_than_days lists tasks started at least that many days ago (with status open: long-open tasks to finish or close); mine=true lists only your tasks. Each task includes created_by_name, pull_requests with tracked state and open_issues; context excerpts are not returned.", false, func(in TaskListInput) string { return in.ProjectID }, func(ctx context.Context, tx *sql.Tx, a Identity, in TaskListInput) (any, error) {
+	add(t, s, "list_task_runs", "List project tasks to find open work or recover a task ID after an interrupted response. status: open, completed or abandoned; omitted means all. older_than_days lists tasks started at least that many days ago (with status open: long-open tasks to finish or close); mine=true lists only your tasks; todo_id lists the tasks linked to a to-do. Each task includes created_by_name, pull_requests with tracked state, open_issues and its linked todo; context excerpts are not returned.", false, func(in TaskListInput) string { return in.ProjectID }, func(ctx context.Context, tx *sql.Tx, a Identity, in TaskListInput) (any, error) {
 		if _, err := projectAccess(ctx, tx, a.User.ID, in.ProjectID, false); err != nil {
 			return nil, err
 		}
@@ -117,6 +121,11 @@ func registerWorkflowTools(t Tools, s *Store) {
 		if in.Status != "" && in.Status != "open" && in.Status != "completed" && in.Status != "abandoned" {
 			return nil, problem("INVALID_INPUT", "Choose open, completed or abandoned status.")
 		}
+		if in.TodoID != "" {
+			if err := validID(in.TodoID); err != nil {
+				return nil, err
+			}
+		}
 		if in.OlderThanDays < 0 || in.OlderThanDays > 365 {
 			return nil, problem("INVALID_INPUT", "older_than_days must be 0–365.")
 		}
@@ -125,8 +134,8 @@ func registerWorkflowTools(t Tools, s *Store) {
 			mine = a.User.ID
 		}
 		return many[map[string]any](ctx, tx, taskListSelect+` WHERE r.project_id=$1 AND ($2='' OR r.status=$2) AND ($5::int=0 OR r.started_at < now()-make_interval(days=>$5::int))
-		AND ($6='' OR r.created_by::text=$6)
-		ORDER BY r.started_at DESC,r.id LIMIT $3 OFFSET $4`, in.ProjectID, in.Status, limit, in.Offset, in.OlderThanDays, mine)
+		AND ($6='' OR r.created_by::text=$6) AND ($7='' OR r.todo_id::text=$7)
+		ORDER BY r.started_at DESC,r.id LIMIT $3 OFFSET $4`, in.ProjectID, in.Status, limit, in.Offset, in.OlderThanDays, mine, in.TodoID)
 	})
 }
 
@@ -140,7 +149,8 @@ const taskListSelect = `SELECT (to_jsonb(r)-'context'-'completion_hash')||jsonb_
 	'closed_by_name',cu.name,
 	'pull_requests',COALESCE((SELECT jsonb_agg(jsonb_build_object('repository',pr.repository,'number',pr.number,'url',pr.url,'state',pr.state) ORDER BY pr.repository,pr.number)
 		FROM task_pull_requests pr WHERE pr.task_id=r.id),'[]'::jsonb),
-	'open_issues',(SELECT count(*) FROM issues i WHERE i.task_id=r.id AND i.status IN ('open','answered')))
+	'open_issues',(SELECT count(*) FROM issues i WHERE i.task_id=r.id AND i.status IN ('open','answered')),
+	'todo',(SELECT jsonb_build_object('id',t.id,'title',t.title,'status',t.status,'priority',t.priority) FROM todos t WHERE t.id=r.todo_id))
 	FROM task_runs r JOIN users u ON u.id=r.created_by LEFT JOIN users cu ON cu.id=r.closed_by`
 
 type TaskListInput struct {
@@ -152,6 +162,8 @@ type TaskListInput struct {
 	OlderThanDays int `json:"older_than_days,omitempty" jsonschema:"Only tasks started at least this many days ago, 1–365"`
 	// Mine limits the list to tasks the caller started.
 	Mine bool `json:"mine,omitempty" jsonschema:"true lists only tasks you started"`
+	// TodoID lists the tasks linked to one to-do.
+	TodoID string `json:"todo_id,omitempty" jsonschema:"Only tasks linked to this to-do"`
 }
 
 func (s *Store) startTask(ctx context.Context, tx *sql.Tx, a Identity, in StartTaskInput) (any, error) {
@@ -175,6 +187,11 @@ func (s *Store) startTask(ctx context.Context, tx *sql.Tx, a Identity, in StartT
 	if in.ExcerptBudget < 1000 || in.ExcerptBudget > 20000 {
 		return nil, problem("INVALID_INPUT", "excerpt_budget must be 1000–20000 characters.")
 	}
+	if in.TodoID != "" {
+		if err := checkTodoRef(ctx, tx, in.ProjectID, in.TodoID); err != nil {
+			return nil, err
+		}
+	}
 	result, err := tx.ExecContext(ctx, `INSERT INTO task_runs(id,project_id,created_by,request_key,title,task,excerpt_budget) VALUES($1,$2,$3,$4,$5,$6,$7)
 	ON CONFLICT(project_id,created_by,request_key) DO NOTHING`, uuid.NewString(), in.ProjectID, a.User.ID, in.RequestKey, in.Title, in.Task, in.ExcerptBudget)
 	if err != nil {
@@ -188,13 +205,34 @@ func (s *Store) startTask(ctx context.Context, tx *sql.Tx, a Identity, in StartT
 	if err != nil {
 		return nil, err
 	}
-	if run.Title != in.Title || run.Task != in.Task || run.ExcerptBudget != in.ExcerptBudget {
+	// A retry that names a to-do must name the linked one; link_task_todo changes it afterwards.
+	if run.Title != in.Title || run.Task != in.Task || run.ExcerptBudget != in.ExcerptBudget || (inserted == 0 && in.TodoID != "" && run.TodoID != in.TodoID) {
 		return nil, problem("CONFLICT", "request_key was already used with different task inputs.")
+	}
+	if inserted > 0 && in.TodoID != "" {
+		if err := startTodo(ctx, tx, run.ID, in.TodoID, a.User.ID); err != nil {
+			return nil, err
+		}
+		run.TodoID = in.TodoID
 	}
 	if inserted > 0 {
 		run.Context, err = s.taskContext(ctx, tx, a, ContextInput{ProjectID: in.ProjectID, Task: in.Task, ExcerptBudget: in.ExcerptBudget})
 		if err != nil {
 			return nil, err
+		}
+		if run.TodoID != "" {
+			linked, err := todoSummary(ctx, tx, run.TodoID)
+			if err != nil {
+				return nil, err
+			}
+			run.Context.Todos.Linked = &linked
+			kept := []TodoSummary{}
+			for _, c := range run.Context.Todos.Candidates {
+				if c.ID != linked.ID {
+					kept = append(kept, c)
+				}
+			}
+			run.Context.Todos.Candidates = kept
 		}
 		raw, err := json.Marshal(run.Context)
 		if err != nil {
@@ -206,6 +244,7 @@ func (s *Store) startTask(ctx context.Context, tx *sql.Tx, a Identity, in StartT
 	}
 	return StartTaskResult{Run: run, NextSteps: []string{
 		"Check run.status first. If completed, use run.completion; do not repeat the work. If abandoned, it was closed with closed_reason: start a new task with a new request_key. This context is a start-time snapshot, not a live view.",
+		"Check context.todos: linked is the to-do this task carries out. If none is linked and a candidate is exactly what the user asked for, link it with link_task_todo so the board follows the work; finish_task completed (or the task's merged pull requests) completes it.",
 		"Check context.issues before working: answer questions assigned to you only with facts, read answers to your questions, and confirm with the user before proceeding past an open blocking question. For shared_areas you do not own (owner_is_you=false), leave a question for the owner with create_issue(area_id, task_id) instead of deciding alone.",
 		"Follow context.rules while working: project_rules (set by the project owner or admins) apply to everyone and win on conflict; personal_rules are your user's own preferences. Use them for commit messages and work conventions; ask the user when a rule is unclear. Re-read with list_rules when resuming.",
 		"Inspect context.retrieval, warning and unindexed_chunks. Read relevant full documents and recent decision pointers with get_document before relying on them.",
@@ -370,6 +409,20 @@ func (s *Store) finishTask(ctx context.Context, tx *sql.Tx, a Identity, in Finis
 		out.Guidance += " decision_candidates are unconfirmed drafts extracted from the decisions text; nothing was saved for them. Confirm with the user, fill the unknown sections, then save with create_templated_document (draft)."
 	} else {
 		out.DecisionCandidates = nil
+	}
+	if in.Outcome == "completed" {
+		if out.Todo, err = completeRunTodo(ctx, tx, run.ID, a.User.ID); err != nil {
+			return nil, err
+		}
+	} else if run.TodoID != "" {
+		todo, err := todoSummary(ctx, tx, run.TodoID)
+		if err != nil {
+			return nil, err
+		}
+		out.Todo = &todo
+		if len(pulls) > 0 {
+			out.Guidance += " The linked to-do stays where it is and is completed automatically once the tracked pull requests are merged."
+		}
 	}
 	raw, err = json.Marshal(out)
 	if err != nil {

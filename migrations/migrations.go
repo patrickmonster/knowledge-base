@@ -76,3 +76,6 @@ var IssueAttachmentParts string
 
 //go:embed 025_todos.sql
 var Todos string
+
+//go:embed 026_todo_task_link.sql
+var TodoTaskLink string
