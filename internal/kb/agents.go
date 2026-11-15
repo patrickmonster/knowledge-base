@@ -3,11 +3,14 @@ package kb
 import (
 	"context"
 	"database/sql"
-	"strings"
 )
 
-// AGENTS.md rollout: other repositories adopt the same task rules (knowledge
-// lookup at start, history at finish) with their own project slug.
+// User-level instructions: the same task rules (knowledge lookup at start,
+// history at finish) as a Markdown file for clients that want them in their
+// own instruction file. The server instructions already carry the workflow, so
+// the file is optional. It names no server address, project name or slug: it
+// belongs in user-level settings, never committed to a repository, where such
+// names would mark the repository as using this server.
 
 type AgentsTemplate struct {
 	Filename    string   `json:"filename"`
@@ -17,30 +20,25 @@ type AgentsTemplate struct {
 	Notes       []string `json:"notes"`
 }
 
-func renderAgentsTemplate(p Project, serverURL string) (AgentsTemplate, error) {
+func renderAgentsTemplate(p Project) (AgentsTemplate, error) {
 	raw, err := templateFiles.ReadFile("templates/agents.md")
 	if err != nil {
 		return AgentsTemplate{}, err
 	}
-	if serverURL == "" {
-		serverURL = "(서버 주소)"
-	}
-	// Names cannot break out of Markdown code spans or the HTML comment.
-	name := strings.NewReplacer("`", "'", "-->", "->", "\n", " ", "\r", " ").Replace(p.Name)
-	content := strings.NewReplacer("{{PROJECT_SLUG}}", p.Slug, "{{PROJECT_NAME}}", name, "{{SERVER_URL}}", serverURL).Replace(string(raw))
-	return AgentsTemplate{Filename: "AGENTS.md", ProjectID: p.ID, ProjectSlug: p.Slug, Content: content, Notes: []string{
-		"저장소 루트에 AGENTS.md로 저장하고 커밋합니다. Codex·Cursor 등은 AGENTS.md를 읽습니다.",
-		"Claude Code는 CLAUDE.md를 읽습니다. CLAUDE.md 한 줄에 @AGENTS.md 를 적어 같은 규칙을 불러옵니다.",
-		"AI 도구에 이 지식베이스 MCP 서버와 해당 프로젝트에 접근 가능한 키를 연결해야 규칙이 동작합니다.",
+	return AgentsTemplate{Filename: "AGENTS.md", ProjectID: p.ID, ProjectSlug: p.Slug, Content: string(raw), Notes: []string{
+		"선택 사항입니다. 서버가 접속할 때 같은 절차를 지침으로 내려주므로 이 파일이 없어도 동작합니다.",
+		"저장소에 커밋하지 마세요. 서버·프로젝트를 쓴다는 흔적이 남습니다. 필요하면 사용자 수준 지침(~/.claude/CLAUDE.md, ~/.codex/AGENTS.md 등)에 넣습니다.",
+		"저장소를 이 프로젝트에 연결하려면 소유자·관리자가 그 저장소의 git remote를 등록합니다(add_project_repository). 등록되지 않은 저장소에서는 이 서버를 쓰지 않습니다.",
+		"MCP 서버 연결도 커밋되는 프로젝트 설정(.mcp.json 등)이 아니라 사용자 수준 설정에 둡니다.",
 	}}, nil
 }
 
 func registerAgentsTools(t Tools, s *Store) {
-	add(t, s, "get_agents_template", "Return an AGENTS.md for another repository that applies this server's task rules (knowledge lookup at start, history at finish) to the given project. Save it at the repository root.", false, func(in ProjectInput) string { return in.ProjectID }, func(ctx context.Context, tx *sql.Tx, a Identity, in ProjectInput) (any, error) {
+	add(t, s, "get_agents_template", "Return optional user-level instructions (Markdown) with this server's task rules. The server instructions already carry them. The text names no server or project; keep it in user-level settings and never commit it to a repository.", false, func(in ProjectInput) string { return in.ProjectID }, func(ctx context.Context, tx *sql.Tx, a Identity, in ProjectInput) (any, error) {
 		p, err := projectAccess(ctx, tx, a.User.ID, in.ProjectID, false)
 		if err != nil {
 			return nil, err
 		}
-		return renderAgentsTemplate(p, s.PublicURL)
+		return renderAgentsTemplate(p)
 	})
 }

@@ -74,15 +74,19 @@ func TestParseImport(t *testing.T) {
 }
 
 func TestRenderAgentsTemplate(t *testing.T) {
-	out, err := renderAgentsTemplate(Project{ID: "id", Slug: "billing", Name: "결제`팀 -->"}, "https://kb.example.com")
+	out, err := renderAgentsTemplate(Project{ID: "id", Slug: "billing", Name: "결제팀"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(out.Content, "{{") || strings.Contains(out.Content, "knowledge-base") || !strings.Contains(out.Content, "slug가 `billing`인") {
-		t.Fatalf("template placeholders not replaced:\n%s", out.Content)
+	// The text goes into user-level settings and must not name the server or
+	// project: in a repository those names would mark it as using this server.
+	for _, leak := range []string{"{{", "billing", "결제팀", "knowledge-base", "http://", "https://", "exports/"} {
+		if strings.Contains(out.Content, leak) {
+			t.Fatalf("template contains %q:\n%s", leak, out.Content)
+		}
 	}
-	if strings.Contains(out.Content, "결제`팀") || strings.Count(out.Content, "-->") != 1 || !strings.Contains(out.Content, "https://kb.example.com") {
-		t.Fatal("project name can break Markdown code spans or the HTML comment")
+	if !strings.Contains(out.Content, "`resolve_project`") || !strings.Contains(out.Content, "`matched: false`") {
+		t.Fatal("template does not pick the project with resolve_project")
 	}
 	if out.Filename != "AGENTS.md" || len(out.Notes) == 0 {
 		t.Fatalf("unexpected template metadata: %+v", out)
@@ -144,13 +148,13 @@ func TestTeamRolloutTools(t *testing.T) {
 	}
 	mustCall(t, tools, admin, "set_project_member", MemberInput{ProjectID: p.ID, UserID: editor.User.ID, Role: "editor"})
 
-	// AGENTS.md uses the project's slug.
+	// The user-level instructions never name the project.
 	agents := mustCall(t, tools, editor, "get_agents_template", ProjectInput{ProjectID: p.ID}).(AgentsTemplate)
-	if !strings.Contains(agents.Content, "`rollout`") {
-		t.Fatal("AGENTS.md does not reference the project slug")
+	if strings.Contains(agents.Content, "rollout") || agents.ProjectSlug != "rollout" {
+		t.Fatal("instructions must not name the project")
 	}
-	if !strings.Contains(agents.Content, "`git remote get-url origin`") || !strings.Contains(agents.Content, "`repository`") {
-		t.Fatal("AGENTS.md does not pick the project by repository")
+	if !strings.Contains(agents.Content, "`git remote get-url origin`") || !strings.Contains(agents.Content, "`resolve_project`") {
+		t.Fatal("instructions do not pick the project by repository")
 	}
 
 	// Export, then import into another project twice: the second run skips everything.

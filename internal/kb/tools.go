@@ -134,7 +134,7 @@ func NewTools(s *Store) Tools {
 		}
 		return p, nil
 	})
-	add(t, s, "list_projects", "List projects the authenticated user can access, each with its registered source repositories. Pass repository (the checkout's git remote, e.g. the output of `git remote get-url origin`) to get only the projects registered for that repository: use the project when exactly one is returned, and ask the user when none or several are.", false, nil, func(ctx context.Context, tx *sql.Tx, a Identity, in ListProjectsInput) (any, error) {
+	add(t, s, "list_projects", "List projects the authenticated user can access, each with its registered source repositories. Pass repository (the checkout's git remote, e.g. the output of `git remote get-url origin`) to get only the projects registered for that repository. To pick the project for a checkout use resolve_project, which also tells an unrelated server to stay out of the task.", false, nil, func(ctx context.Context, tx *sql.Tx, a Identity, in ListProjectsInput) (any, error) {
 		limit, err := pagination(in.Limit, in.Offset)
 		if err != nil {
 			return nil, err

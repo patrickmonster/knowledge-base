@@ -131,6 +131,11 @@ func (s *Store) Perform(ctx context.Context, identity Identity, action, projectI
 				e.TargetID = out.ID
 			case StartTaskResult:
 				e.TargetID = out.Run.ID
+			case ResolvedProject:
+				if out.Project != nil {
+					e.TargetID = out.Project.ID
+					e.ProjectID = out.Project.ID
+				}
 			case Document:
 				e.TargetID = out.ID
 			case Project:

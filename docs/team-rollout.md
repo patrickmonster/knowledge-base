@@ -9,7 +9,7 @@
 | 문서 버전 비교 | 웹 **지식 문서** → 문서 펼치기 → **버전 비교** | 참여자 |
 | 검토 대기 배지 | 사이드바 **검토 대기** 옆 숫자 (현재 프로젝트의 draft 수) | 참여자 |
 | 공통 작업 영역 삭제·정리 | 웹 **이슈 · 질의** → 영역 표, MCP `delete_work_area` | 프로젝트 소유자 또는 영역 담당자 |
-| 다른 저장소에 AGENTS.md 적용 | 웹 **프로젝트** → **백업 · 이전 · AGENTS.md**, MCP `get_agents_template` | 참여자 |
+| 다른 저장소에 작업 규칙 적용 | 저장소 등록 `add_project_repository`(소유자·관리자) + 사용자 수준 MCP 연결. 지침 파일은 선택(`get_agents_template`) | 소유자·관리자 |
 | 프로젝트 내보내기·가져오기 | 웹 **프로젝트** → **백업 · 이전 · AGENTS.md** | 내보내기: 참여자. 가져오기: 프로젝트 소유자 |
 
 ## 이슈 담당자 알림
@@ -53,13 +53,15 @@
 - `list_work_areas`의 `owner_active`가 `false`면 담당자가 프로젝트를 떠났거나 조회자가 되었거나 비활성화된 영역입니다. 웹 영역 표에 “담당자 확인 필요”로 표시됩니다. 담당자를 바꾸거나 삭제합니다.
 - `delete_work_area(project_id, area_id, move_to_area_id?)`: 질의·이슈는 지우지 않습니다. `move_to_area_id`가 있으면 그 영역으로 옮기고, 없으면 영역 없이 남깁니다(담당자는 유지). 결과에 옮긴 건수(`moved_issues`)와 영역 없이 남은 건수(`detached_issues`)가 나옵니다.
 
-## 다른 저장소에 작업 규칙(AGENTS.md) 적용
+## 다른 저장소에 작업 규칙 적용
 
-이 저장소의 `AGENTS.md`를 일반화한 양식(`internal/kb/templates/agents.md`)에 프로젝트 slug·이름·서버 주소를 채워 줍니다.
+대상 저장소에는 아무 파일도 두지 않습니다. 서버 주소·프로젝트 이름·지침 파일이 저장소에 남으면 이 서버를 쓴다는 흔적(워터마크)이 되어 공격 대상 식별이 쉬워지기 때문입니다. 저장소와 프로젝트의 연결은 서버에만 둡니다.
 
-1. 웹 **프로젝트** → 대상 프로젝트의 **백업 · 이전 · AGENTS.md** → **AGENTS.md 내려받기** 또는 **내용 복사**. AI에게 “지식베이스 `get_agents_template` 도구로 `<slug>` 프로젝트의 AGENTS.md를 만들어 저장소 루트에 저장해줘”라고 요청해도 됩니다.
-2. 대상 저장소 루트에 `AGENTS.md`로 저장하고 커밋합니다. Claude Code는 `CLAUDE.md`를 읽으므로 `CLAUDE.md`에 `@AGENTS.md` 한 줄을 둡니다.
-3. 그 저장소에서 쓰는 AI 도구에 이 서버의 MCP(`/mcp`)와 해당 프로젝트에 접근 가능한 키를 연결합니다.
+1. 소유자·관리자가 대상 저장소의 git remote를 프로젝트에 등록합니다(`add_project_repository`).
+2. 그 저장소에서 쓰는 AI 도구에 이 서버의 MCP(`/mcp`)와 해당 프로젝트에 접근 가능한 키를 **사용자 수준 설정**으로 연결합니다(예: `claude mcp add --scope user`). 커밋되는 `.mcp.json` 같은 프로젝트 설정에는 두지 않습니다.
+3. AI는 연결 시 서버 지침(`internal/kb/instructions.go`)을 받아, 연결된 knowledge 서버마다 `resolve_project(git remote)`를 부릅니다. `matched: true`인 서버의 프로젝트로 `start_task`·`finish_task`를 하고, `matched: false`인 서버는 사용자에게 묻지 않고 건너뜁니다. 서버가 여러 대 연결돼 있어도 등록된 서버만 기록하고, 어디에도 등록되지 않은 저장소에서는 knowledge 없이 평소대로 작업합니다.
+
+웹 **백업 · 이전** 화면과 `get_agents_template`는 같은 지침을 서버·프로젝트 이름 없이 Markdown으로 줍니다. 선택 사항이며, 쓰려면 사용자 수준 지침(`~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md` 등)에 넣고 저장소에는 커밋하지 않습니다.
 
 ## 프로젝트 내보내기·가져오기
 

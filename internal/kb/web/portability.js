@@ -45,8 +45,8 @@ async function portability(project) {
   }
   root.append(imp);
 
-  const agents=card('다른 저장소에 작업 규칙 적용 (AGENTS.md)');
-  agents.append(el('p','다른 저장소의 AI 도구도 작업 시작 시 이 프로젝트의 지식을 조회하고, 끝나면 작업 이력을 저장하도록 하는 규칙 파일입니다.','muted'));
+  const agents=card('AI 작업 지침 (선택, 사용자 수준)');
+  agents.append(el('p','AI 도구는 서버 접속 시 받는 지침만으로 저장소 git remote로 이 프로젝트를 찾아 작업합니다. 저장소에는 아무것도 둘 필요가 없고, 이 파일은 지침을 직접 두고 싶을 때만 사용자 수준 설정에 넣습니다. 저장소에 커밋하지 마세요.','muted'));
   root.append(agents);
   try {
     const t=await tool('get_agents_template',{project_id:project.id});
@@ -55,7 +55,7 @@ async function portability(project) {
     const actions=el('div',undefined,'actions');
     const download=el('a','AGENTS.md 내려받기','button-link');download.href=base+'/agents.md';download.setAttribute('download','AGENTS.md');
     actions.append(btn('내용 복사',async()=>{await navigator.clipboard.writeText(t.content);notify('AGENTS.md 내용을 복사했습니다.');}),download);
-    agents.append(notes,actions,el('p','AI에게 "지식베이스 get_agents_template 도구로 '+t.project_slug+' 프로젝트의 AGENTS.md를 만들어 저장소 루트에 저장해줘"라고 요청해도 됩니다.','small muted'),pre);
+    agents.append(notes,actions,pre);
   } catch(e) { agents.append(el('p',e.message,'muted')); }
   $('#page').replaceChildren(root);
 }
