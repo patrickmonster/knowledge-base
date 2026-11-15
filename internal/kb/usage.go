@@ -64,6 +64,21 @@ type UsageSearchMiss struct {
 	LastAt time.Time `json:"last_at"`
 }
 
+// UsageSearchLatency summarizes search_timings for one retrieval path.
+// Phase averages and percentiles are null when the phase never ran.
+type UsageSearchLatency struct {
+	Retrieval        string    `json:"retrieval" jsonschema:"Retrieval actually used: hybrid, semantic, lexical or lexical-fallback"`
+	Searches         int       `json:"searches"`
+	P50MS            float64   `json:"p50_ms" jsonschema:"Median total search time in milliseconds"`
+	P95MS            float64   `json:"p95_ms"`
+	MaxMS            float64   `json:"max_ms"`
+	AvgEmbedMS       *float64  `json:"avg_embed_ms" jsonschema:"Average query embedding time (Ollama)"`
+	P95VectorMS      *float64  `json:"p95_vector_ms" jsonschema:"95th percentile exact vector scan time; the figure an HNSW index would reduce"`
+	AvgLexicalMS     *float64  `json:"avg_lexical_ms"`
+	MaxScannedChunks int       `json:"max_scanned_chunks" jsonschema:"Most embedded chunks one exact vector scan compared"`
+	LastAt           time.Time `json:"last_at"`
+}
+
 // UsageKindGrowth is the document count of one kind over the window. Kinds are
 // the documents' current kind; archived documents still count.
 type UsageKindGrowth struct {
@@ -105,20 +120,21 @@ type UsageInventory struct {
 }
 
 type UsageStats struct {
-	ProjectID    string            `json:"project_id"`
-	Days         int               `json:"days"`
-	Timezone     string            `json:"timezone"`
-	From         string            `json:"from" jsonschema:"First day of the window, YYYY-MM-DD"`
-	To           string            `json:"to" jsonschema:"Last day of the window (today), YYYY-MM-DD"`
-	Totals       UsageTotals       `json:"totals"`
-	Inventory    UsageInventory    `json:"inventory"`
-	Daily        []UsageDay        `json:"daily" jsonschema:"One entry per day of the window, oldest first, zero-filled"`
-	TopActions   []UsageCount      `json:"top_actions"`
-	TopUsers     []UsageUser       `json:"top_users"`
-	TopDocuments []UsageDocument   `json:"top_documents" jsonschema:"Most read documents (get_document) in the window"`
-	SearchMisses []UsageSearchMiss `json:"search_misses" jsonschema:"Most frequent zero-result search_knowledge queries (normalized, lowercase), at most 20"`
-	KindGrowth   []UsageKindGrowth `json:"kind_growth"`
-	Guidance     string            `json:"guidance"`
+	ProjectID     string               `json:"project_id"`
+	Days          int                  `json:"days"`
+	Timezone      string               `json:"timezone"`
+	From          string               `json:"from" jsonschema:"First day of the window, YYYY-MM-DD"`
+	To            string               `json:"to" jsonschema:"Last day of the window (today), YYYY-MM-DD"`
+	Totals        UsageTotals          `json:"totals"`
+	Inventory     UsageInventory       `json:"inventory"`
+	Daily         []UsageDay           `json:"daily" jsonschema:"One entry per day of the window, oldest first, zero-filled"`
+	TopActions    []UsageCount         `json:"top_actions"`
+	TopUsers      []UsageUser          `json:"top_users"`
+	TopDocuments  []UsageDocument      `json:"top_documents" jsonschema:"Most read documents (get_document) in the window"`
+	SearchMisses  []UsageSearchMiss    `json:"search_misses" jsonschema:"Most frequent zero-result search_knowledge queries (normalized, lowercase), at most 20"`
+	SearchLatency []UsageSearchLatency `json:"search_latency" jsonschema:"Search time per retrieval path from search_knowledge and task context searches in the window"`
+	KindGrowth    []UsageKindGrowth    `json:"kind_growth"`
+	Guidance      string               `json:"guidance"`
 }
 
 // usageWindow defines the window as whole Asia/Seoul days ending today.
@@ -141,7 +157,7 @@ func usageStats(ctx context.Context, tx *sql.Tx, a Identity, in UsageStatsInput)
 	}
 	args := []any{in.ProjectID, in.Days, usageTimezone, usageSearchActions, usageReadActions}
 	out := UsageStats{ProjectID: in.ProjectID, Days: in.Days, Timezone: usageTimezone,
-		Guidance: "Calls, searches, reads and active users come from the audit log and only cover what AUDIT_RETENTION_DAYS keeps; document writes come from revisions. Searches include start_task and get_task_context. search_misses lists zero-result search_knowledge queries, kept at most 365 days without the searching user; read them as knowledge to write or glossary synonyms to add. The call that reads these statistics is not counted."}
+		Guidance: "Calls, searches, reads and active users come from the audit log and only cover what AUDIT_RETENTION_DAYS keeps; document writes come from revisions. Searches include start_task and get_task_context. search_misses lists zero-result search_knowledge queries, kept at most 365 days without the searching user; read them as knowledge to write or glossary synonyms to add. search_latency summarizes measured search times (same retention as search_misses); compare p95_vector_ms with max_scanned_chunks to decide when exact vector search needs an HNSW index. The call that reads these statistics is not counted."}
 
 	type header struct {
 		From   string      `json:"from"`
@@ -231,6 +247,20 @@ func usageStats(ctx context.Context, tx *sql.Tx, a Identity, in UsageStatsInput)
 	if out.SearchMisses, err = many[UsageSearchMiss](ctx, tx, usageWindow+`
 	SELECT jsonb_build_object('query',m.query,'count',count(*),'last_at',max(m.created_at)) FROM search_misses m, ws
 	WHERE m.project_id=$1 AND m.created_at>=ws.start_at GROUP BY m.query ORDER BY count(*) DESC,max(m.created_at) DESC,m.query LIMIT 20`, args[:3]...); err != nil {
+		return nil, err
+	}
+
+	if out.SearchLatency, err = many[UsageSearchLatency](ctx, tx, usageWindow+`,
+	t AS (SELECT st.* FROM search_timings st, ws WHERE st.project_id=$1 AND st.created_at>=ws.start_at)
+	SELECT jsonb_build_object('retrieval',retrieval,'searches',count(*),
+		'p50_ms',round(percentile_cont(0.5) WITHIN GROUP (ORDER BY total_ms::float8)::numeric,2),
+		'p95_ms',round(percentile_cont(0.95) WITHIN GROUP (ORDER BY total_ms::float8)::numeric,2),
+		'max_ms',round(max(total_ms)::numeric,2),
+		'avg_embed_ms',round(avg(embed_ms)::numeric,2),
+		'p95_vector_ms',round((percentile_cont(0.95) WITHIN GROUP (ORDER BY vector_ms::float8))::numeric,2),
+		'avg_lexical_ms',round(avg(lexical_ms)::numeric,2),
+		'max_scanned_chunks',max(scanned_chunks),'last_at',max(created_at))
+	FROM t GROUP BY retrieval ORDER BY count(*) DESC,retrieval`, args[:3]...); err != nil {
 		return nil, err
 	}
 

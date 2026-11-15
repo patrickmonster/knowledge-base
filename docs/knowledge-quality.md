@@ -66,11 +66,17 @@ MCP 도구와 기존 작업 흐름(`start_task`·`finish_task`)에 붙는 품질
 - `search_misses`: 기간 안에 `search_knowledge`가 결과 0건을 돌려준 검색어 상위 20개(횟수·마지막 시각), `totals.search_misses`는 전체 건수입니다. 자주 나오는 검색어는 아직 쓰지 않은 지식이거나 용어집 동의어 후보입니다.
   - 저장 범위: 공백을 하나로 줄이고 소문자로 바꾼 검색어 앞 200자, 검색 방식, 시각만 `search_misses` 테이블에 저장합니다. 검색한 사용자는 저장하지 않습니다. `search_across_projects`, `start_task`, `get_task_context`는 기록하지 않습니다.
   - 보관: 최대 365일, `AUDIT_RETENTION_DAYS`가 더 짧으면 그 기간. 매시간 정리합니다.
+- `search_latency`: 검색 방식(`retrieval`: hybrid·semantic·lexical·lexical-fallback)별 검색 시간(ms). 횟수, 전체 p50·p95·최대, 질의 임베딩 평균(`avg_embed_ms`), 벡터 검색 p95(`p95_vector_ms`), 키워드 검색 평균(`avg_lexical_ms`), 한 번의 벡터 검색이 비교한 최대 청크 수(`max_scanned_chunks`), 마지막 시각. 실행하지 않은 단계는 null입니다.
+  - 목적: HNSW 같은 근사 벡터 인덱스 도입 시점을 측정으로 정합니다. 현재 의미 검색은 범위 안의 준비된 청크를 모두 비교하는 정확 검색이라 `p95_vector_ms`가 `max_scanned_chunks`에 비례해 커집니다.
+  - 저장 범위: `search_knowledge`와 `start_task`·`get_task_context`의 맥락 검색 1회마다 `search_timings`에 출처(`source`), 요청·실제 검색 방식, 단계별 시간, 비교 청크 수, 결과 수, 시각만 저장합니다. 검색어와 사용자는 저장하지 않습니다. `search_across_projects`는 기록하지 않습니다. 오류로 끝난 검색은 트랜잭션과 함께 취소되어 남지 않습니다.
+  - 보관: `search_misses`와 같습니다(최대 365일 또는 더 짧은 `AUDIT_RETENTION_DAYS`, 매시간 정리).
 - `inventory`: 현재 문서 수(종류·상태별), 열린 작업·이슈, 준비된 첨부 수·용량, 참여자, 임베딩 준비·실패 청크 수.
 - 호출·검색·열람·활성 사용자는 감사 로그 기준이라 `AUDIT_RETENTION_DAYS`가 남긴 기록만 집계됩니다. 작성·수정은 문서 버전(revisions) 기준이며 `REVISION_RETENTION_DAYS`로 정리된 버전은 빠집니다. 통계를 조회한 그 요청은 집계에 들어가지 않습니다.
 - 웹 '사용 통계' 화면은 이 도구와 `get_retrieval_metrics`를 함께 보여 줍니다. 기간은 7·30·90일·1년이며 90일을 넘으면 차트를 주 단위로 묶습니다(활성 사용자는 주 중 일 최대값). 일별 추이 카드의 '표로 보기'로 일별 값을 확인할 수 있습니다.
 
 ## 마이그레이션
+
+`022_search_timings.sql`은 검색 시간 표본 테이블 `search_timings`를 추가합니다(스키마 버전 22).
 
 `015_search_misses.sql`은 결과 0건 검색어 테이블 `search_misses`를 추가합니다(스키마 버전 15).
 

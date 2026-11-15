@@ -64,3 +64,6 @@ var TaskPullRequests string
 
 //go:embed 021_github_webhooks.sql
 var GitHubWebhooks string
+
+//go:embed 022_search_timings.sql
+var SearchTimings string
