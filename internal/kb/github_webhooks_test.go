@@ -1,7 +1,6 @@
 package kb
 
 import (
-	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -17,48 +16,6 @@ func signWebhook(secret string, body []byte) string {
 	m := hmac.New(sha256.New, []byte(secret))
 	m.Write(body)
 	return "sha256=" + hex.EncodeToString(m.Sum(nil))
-}
-
-func TestParseWebhookKey(t *testing.T) {
-	long := strings.Repeat("k", 32)
-	if k, err := ParseWebhookKey("", ""); err != nil || k != nil {
-		t.Fatalf("empty: %v %v", k, err)
-	}
-	if _, err := ParseWebhookKey("short", ""); err == nil {
-		t.Fatal("short WEBHOOK_ENCRYPTION_KEY must fail")
-	}
-	own, _ := ParseWebhookKey(long, "")
-	fromMFA, _ := ParseWebhookKey("", long)
-	mfa, _ := ParseMFAKey(long)
-	if len(own) != 32 || len(fromMFA) != 32 || bytes.Equal(own, fromMFA) || bytes.Equal(fromMFA, mfa) {
-		t.Fatal("keys must be 32 bytes and separated by label")
-	}
-	if k, _ := ParseWebhookKey("", "short"); k != nil {
-		t.Fatal("a short MFA key must not enable webhooks")
-	}
-}
-
-func TestWebhookSecretSealing(t *testing.T) {
-	s := &Store{}
-	if _, err := s.sealWebhookSecret("id", "x"); errorCode(err) != "WEBHOOK_UNAVAILABLE" {
-		t.Fatalf("no key: %v", err)
-	}
-	s.WebhookKey, _ = ParseWebhookKey(strings.Repeat("a", 40), "")
-	sealed, err := s.sealWebhookSecret("hook-1", "top-secret")
-	if err != nil || strings.Contains(sealed, "top-secret") || !strings.HasPrefix(sealed, "v1:") {
-		t.Fatalf("seal: %q %v", sealed, err)
-	}
-	if got, err := s.openWebhookSecret("hook-1", sealed); err != nil || string(got) != "top-secret" {
-		t.Fatalf("open: %q %v", got, err)
-	}
-	// Bound to the webhook ID and the key.
-	if _, err := s.openWebhookSecret("hook-2", sealed); err == nil {
-		t.Fatal("secret must not open for another webhook")
-	}
-	s.WebhookKey, _ = ParseWebhookKey(strings.Repeat("b", 40), "")
-	if _, err := s.openWebhookSecret("hook-1", sealed); err == nil {
-		t.Fatal("secret must not open with another key")
-	}
 }
 
 func TestValidWebhookSignature(t *testing.T) {
@@ -79,7 +36,6 @@ func TestValidWebhookSignature(t *testing.T) {
 
 func TestGitHubWebhooks(t *testing.T) {
 	s := testStore(t)
-	s.WebhookKey, _ = ParseWebhookKey(strings.Repeat("w", 40), "")
 	app, err := NewApp(s, Config{PublicURL: "http://localhost:8080"})
 	if err != nil {
 		t.Fatal(err)
@@ -95,19 +51,27 @@ func TestGitHubWebhooks(t *testing.T) {
 	_, err = call(t, tools, editor, "set_github_webhook", GitHubWebhookInput{ProjectID: p.ID, Repository: "o/r"})
 	denied(t, err, "FORBIDDEN")
 	saved := mustCall(t, tools, admin, "set_github_webhook", GitHubWebhookInput{ProjectID: p.ID, Repository: "https://github.com/O/R", Tags: []string{"외부"}}).(GitHubWebhookSaved)
-	if saved.Secret == "" || saved.Webhook.Repository != "o/r" || saved.Webhook.PayloadURL != "http://localhost:8080/api/github/webhooks/"+saved.Webhook.ID {
+	if saved.Secret == "" || saved.WebhookID != saved.Webhook.ID || saved.PayloadURL != "http://localhost:8080/api/github/webhooks/"+saved.WebhookID ||
+		saved.Webhook.Repository != "o/r" || !saved.Webhook.SecretSet {
 		t.Fatalf("created: %+v", saved)
 	}
 	_, err = call(t, tools, admin, "set_github_webhook", GitHubWebhookInput{ProjectID: p.ID, Repository: "o/r"})
 	denied(t, err, "CONFLICT")
 	list := mustCall(t, tools, editor, "list_github_webhooks", ProjectInput{ProjectID: p.ID}).(GitHubWebhookList)
-	if len(list.Webhooks) != 1 || !list.Available {
+	if len(list.Webhooks) != 1 || !list.Webhooks[0].SecretSet {
 		t.Fatalf("list: %+v", list)
 	}
 	raw, _ := json.Marshal(list)
-	if strings.Contains(string(raw), saved.Secret) || strings.Contains(string(raw), "secret_sealed") {
+	if strings.Contains(string(raw), saved.Secret) {
 		t.Fatal("list must not expose the secret")
 	}
+	// The owner can show the connection info again; editors cannot.
+	shown := mustCall(t, tools, admin, "set_github_webhook", GitHubWebhookInput{ProjectID: p.ID, WebhookID: saved.WebhookID, ShowSecret: true}).(GitHubWebhookSaved)
+	if shown.Secret != saved.Secret || shown.WebhookID != saved.WebhookID || shown.PayloadURL != saved.PayloadURL {
+		t.Fatalf("show secret: %+v", shown)
+	}
+	_, err = call(t, tools, editor, "set_github_webhook", GitHubWebhookInput{ProjectID: p.ID, WebhookID: saved.WebhookID, ShowSecret: true})
+	denied(t, err, "FORBIDDEN")
 	hookID, secret := saved.Webhook.ID, saved.Secret
 
 	deliver := func(event, delivery, body, sig string) (int, map[string]any) {
@@ -204,6 +168,15 @@ func TestGitHubWebhooks(t *testing.T) {
 	if len(list.Webhooks[0].Recent) == 0 || list.Webhooks[0].LastOutcome == nil || *list.Webhooks[0].LastOutcome != "processed" {
 		t.Fatalf("delivery log: %+v", list.Webhooks[0])
 	}
+	// A webhook without a secret (created before migration 028) refuses deliveries.
+	if _, err := s.DB.ExecContext(ctx, `UPDATE github_webhooks SET secret=NULL WHERE id=$1`, hookID); err != nil {
+		t.Fatal(err)
+	}
+	if code, _ := send("ping", "d-12", ping); code != http.StatusUnauthorized {
+		t.Fatalf("missing secret: %d", code)
+	}
+	_, err = call(t, tools, admin, "set_github_webhook", GitHubWebhookInput{ProjectID: p.ID, WebhookID: hookID, ShowSecret: true})
+	denied(t, err, "INVALID_INPUT")
 	mustCall(t, tools, admin, "set_github_webhook", GitHubWebhookInput{ProjectID: p.ID, WebhookID: hookID, Remove: true})
 	if code, _ := send("ping", "d-11", ping); code != http.StatusNotFound {
 		t.Fatalf("removed: %d", code)
