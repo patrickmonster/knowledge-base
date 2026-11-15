@@ -79,39 +79,71 @@ async function issueTodoForm(cardEl,i,after) {
   cardEl.append(form);select.focus();
 }
 
+// Remembers the selected tab (list | github | areas | notify) while the page re-renders.
+let issuesTab='list';
+
 async function issuesPage() {
   const root=el('div'), projects=[];
   for (let offset=0; offset<=100000; offset+=50) {
     const batch=await tool('list_projects',{limit:50,offset});
     projects.push(...batch); if(batch.length<50)break;
   }
-  const controls=card('이슈 · 질의');
-  controls.append(el('p','공통 작업처럼 담당자가 따로 있는 일은 바로 결정하지 말고 담당자에게 질의를 남깁니다. 작업을 시작할 때(start_task) 내게 배정된 질의, 내가 남긴 질의의 답변, 관련 이슈가 함께 표시됩니다.','muted'));
-  controls.append(el('p','"작업 보류"로 표시한 질의는 답변 전까지 관련 작업을 진행하지 않도록 AI에게 안내됩니다. 해결된 질의응답은 참고 문서로 저장해 지식 검색에 포함할 수 있습니다.','small muted'));
-  root.append(controls);
-  if (!projects.length) { controls.append(el('p','먼저 프로젝트에 참여해 주세요.','empty')); return root; }
-  const filters=el('div',undefined,'vector-controls');
+  const top=el('section',undefined,'card issues-card');
+  root.append(top);
+  if (!projects.length) { top.append(el('p','먼저 프로젝트에 참여해 주세요.','empty')); return root; }
   const project=projectSelect(projects);
-  const scope=selectField(filters,'보기','scope',[['all','전체'],['assigned','내게 배정'],['asked','내가 남긴']]);
-  const status=selectField(filters,'상태','status',[['active','진행 중 (대기·답변됨)'],['open','답변 대기'],['answered','답변됨'],['resolved','해결'],['closed','닫힘'],['all','모든 상태']]);
-  const query=selectQuery(filters);
-  controls.append(filters);
-  const summary=el('p','','small muted');summary.setAttribute('role','status');controls.append(summary);
-  const createCard=card('새 질의 · 이슈'), importCard=card('GitHub 이슈 가져오기'), webhookCard=el('div'), areaCard=card('공통 작업 영역과 담당자'), notifyCard=el('div'), list=el('div');
-  root.append(list,createCard,importCard,webhookCard,areaCard,notifyCard);
   let generation=0, members=[], areas=[], todos=[];
   const current=()=>projects.find(p=>p.id===project.value);
   const canWrite=()=>['owner','admin','editor'].includes(current().role);
+
+  // One tab bar keeps the list in front and moves setup (GitHub, areas, alerts) behind tabs.
+  const bar=el('div',undefined,'rules-bar'), tabList=el('div',undefined,'rules-tabs'), addSlot=el('div',undefined,'rules-add-slot');
+  tabList.setAttribute('role','tablist');tabList.setAttribute('aria-label','이슈 · 질의 메뉴');
+  const listPanel=el('div'), githubPanel=el('div'), areaPanel=el('div'), notifyPanel=el('div');
+  const tabs={
+    list:{label:'질의 목록',panel:listPanel,description:'담당자가 따로 있는 일은 바로 결정하지 말고 질의를 남깁니다. 작업을 시작할 때(start_task) 내게 배정된 질의, 내가 남긴 질의의 답변, 관련 이슈가 함께 안내되고, "작업 보류" 질의는 답변 전까지 관련 작업을 멈추도록 안내됩니다.'},
+    github:{label:'GitHub 연동',panel:githubPanel,description:'GitHub 저장소의 이슈를 이 목록으로 가져옵니다. 웹훅으로 새 이벤트를 자동 반영하고, 기존 이슈는 처음 한 번 가져오기로 채웁니다.'},
+    areas:{label:'영역 · 담당자',panel:areaPanel,description:'여러 사람이 함께 건드리는 범위와 담당자를 등록합니다. 영역을 고르고 질의를 남기면 담당자에게 자동 배정됩니다.'},
+    notify:{label:'알림',panel:notifyPanel,description:'질의 배정·답변·댓글·상태 변경을 담당자와 질의자에게 알리는 채널입니다.'},
+  };
+  const tabButtons={}, intro=el('p','','small muted');
+  function showTab(key) {
+    issuesTab=tabs[key]?key:'list';
+    for (const [k,b] of Object.entries(tabButtons)) {const on=k===issuesTab;b.classList.toggle('active',on);b.setAttribute('aria-selected',String(on));b.tabIndex=on?0:-1;}
+    for (const [k,t] of Object.entries(tabs)) t.panel.hidden=k!==issuesTab;
+    listFilters.hidden=issuesTab!=='list'; // filters belong to the list tab only
+    intro.textContent=tabs[issuesTab].description;
+  }
+  for (const [key,t] of Object.entries(tabs)) {
+    const b=el('button',t.label,'rules-tab');b.type='button';b.setAttribute('role','tab');
+    b.addEventListener('click',()=>showTab(key));
+    b.addEventListener('keydown',e=>{if(e.key!=='ArrowLeft'&&e.key!=='ArrowRight')return;const keys=Object.keys(tabs),next=keys[(keys.indexOf(key)+(e.key==='ArrowRight'?1:keys.length-1))%keys.length];showTab(next);tabButtons[next].focus();});
+    tabButtons[key]=b;tabList.append(b);
+  }
+  const setCount=(key,n)=>{tabButtons[key].textContent=tabs[key].label+(n?` (${n})`:'');};
+  bar.append(tabList,addSlot);
+
+  const filters=el('div',undefined,'vector-controls');
+  const scope=selectField(filters,'보기','scope',[['all','전체'],['assigned','내게 배정'],['asked','내가 남긴']]);
+  const status=selectField(filters,'상태','status',[['active','진행 중 (대기·답변됨)'],['open','답변 대기'],['answered','답변됨'],['resolved','해결'],['closed','닫힘'],['all','모든 상태']]);
+  const query=selectQuery(filters);
+  const summary=el('p','','small muted issues-summary');summary.setAttribute('role','status');
+  const listFilters=el('div');listFilters.append(filters,summary);
+  const list=el('div');
+  listPanel.append(list);
+  top.append(bar,intro,listFilters);
+  root.append(listPanel,githubPanel,areaPanel,notifyPanel);
+  showTab(issuesTab);
 
   async function loadProject() {
     const ticket=++generation, p=current();
     [members,areas,todos]=await Promise.all([tool('list_project_members',{project_id:p.id}),tool('list_work_areas',{project_id:p.id}),tool('list_todos',{project_id:p.id}).then(l=>l.filter(t=>t.status!=='completed')).catch(()=>[])]);
     if (ticket!==generation) return;
-    renderCreate(); renderImport(); renderAreas(); await refresh();
-    const webhooks=await githubWebhookCard(p,{members,areas});
-    if (ticket===generation||current().id===p.id) webhookCard.replaceChildren(webhooks);
+    renderAddButton(); renderAreas(); setCount('areas',areas.length); await refresh();
+    const importCard=renderImport(), webhooks=await githubWebhookCard(p,{members,areas});
+    if (ticket===generation||current().id===p.id) githubPanel.replaceChildren(webhooks,importCard);
     const notifications=await notificationCard(p);
-    if (ticket===generation||current().id===p.id) notifyCard.replaceChildren(notifications);
+    if (ticket===generation||current().id===p.id) notifyPanel.replaceChildren(notifications);
   }
   async function refresh() {
     const ticket=++generation, p=current();
@@ -265,9 +297,21 @@ async function issuesPage() {
   function memberOptions(empty) {
     return [...(empty?[['',empty]]:[]),...members.filter(m=>m.role!=='viewer'&&!m.disabled).map(m=>[m.user_id,`${m.name} (${m.role})`])];
   }
-  function renderCreate() {
-    createCard.replaceChildren(el('h2','새 질의 · 이슈'));
-    if (!canWrite()) { createCard.append(el('p','편집자 이상만 질의를 남길 수 있습니다.','small muted')); return; }
+  function renderAddButton() {
+    addSlot.replaceChildren();
+    if (canWrite()) addSlot.append(btn('새 질의 · 이슈',openCreate,'rule-add'));
+  }
+  // The create form opens in a dialog so the list stays the first thing on the page.
+  function openCreate() {
+    const dialog=el('dialog',undefined,'issue-dialog');
+    const close=btn('닫기',()=>dialog.close(),'secondary');
+    const head=el('div',undefined,'issue-dialog-head');head.append(el('h2','새 질의 · 이슈'),close);
+    dialog.append(head,createForm(()=>dialog.close()));
+    // No close on backdrop click: a stray click must not throw away a half-written question.
+    dialog.addEventListener('close',()=>dialog.remove(),{once:true});
+    root.append(dialog);dialog.showModal();dialog.querySelector('input[name="title"]')?.focus();
+  }
+  function createForm(done) {
     const f=el('form');
     selectField(f,'종류','kind',[['question','질의 — 담당자에게 확인할 내용'],['issue','이슈 — 문제·결함·리스크']]);
     const t=field(f,'제목','title');t.maxLength=200;
@@ -292,16 +336,15 @@ async function issuesPage() {
         if (failed.length) notify('등록했지만 일부 사진을 올리지 못했습니다. 카드의 "사진 추가"로 다시 올려 주세요: '+failed.join(', '),true);
         else notify(`등록하고 사진 ${picked.length}장을 첨부했습니다.`);
       } else notify('등록했습니다.');
-      f.reset();images.clear();await loadProject();
+      done();showTab('list');await loadProject();
     });
-    createCard.append(f);
+    return f;
   }
   function renderImport() {
-    importCard.replaceChildren(el('h2','GitHub 이슈 가져오기'));
-    importCard.append(el('p','GitHub 저장소의 이슈를 이 프로젝트의 이슈·질의로 가져옵니다(단방향, PR 제외). 다시 가져오면 같은 항목의 제목·본문·라벨이 갱신되고, 상태는 GitHub에서 열림·닫힘이 바뀐 경우에만 따라갑니다. 여기서 단 답변·담당자·영역은 유지됩니다.','small muted'));
-    importCard.append(el('p','처음 한 번 기존 이슈를 가져올 때 씁니다. 이후 변경은 아래 GitHub 웹훅으로 자동 반영할 수 있습니다. 비공개 저장소를 가져오려면 서버에 GITHUB_TOKEN이 설정되어 있어야 합니다.','small muted'));
-    if (!canWrite()) { importCard.append(el('p','편집자 이상만 가져올 수 있습니다.','small muted')); return; }
-    const f=el('form');
+    const importCard=card('기존 이슈 가져오기');
+    importCard.append(el('p','GitHub 저장소의 이슈를 이 프로젝트의 이슈·질의로 가져옵니다(단방향, PR 제외). 웹훅은 설정 이후의 이벤트만 보내므로, 기존 이슈는 처음 한 번 여기서 가져옵니다. 다시 가져오면 같은 항목의 제목·본문·라벨이 갱신되고, 상태는 GitHub에서 열림·닫힘이 바뀐 경우에만 따라갑니다. 여기서 단 답변·담당자·영역은 유지됩니다. 비공개 저장소는 서버에 GITHUB_TOKEN이 있어야 합니다.','small muted'));
+    if (!canWrite()) { importCard.append(el('p','편집자 이상만 가져올 수 있습니다.','small muted')); return importCard; }
+    const f=el('form',undefined,'issue-form-grid');
     const repo=field(f,'저장소 (owner/name 또는 GitHub 주소)','repository');repo.placeholder='octocat/hello-world';repo.maxLength=200;
     selectField(f,'상태','state',[['open','열린 이슈'],['closed','닫힌 이슈'],['all','전체']]);
     selectField(f,'종류','kind',[['issue','모두 이슈'],['question','모두 질의'],['auto','자동 — question 라벨이면 질의']]);
@@ -326,18 +369,21 @@ async function issuesPage() {
         notify('GitHub 이슈를 가져왔습니다.');await refresh();
       } catch(e) { result.replaceChildren(); throw e; }
     });
-    importCard.append(f,result);
+    const fold=el('details',undefined,'issue-setup');fold.append(el('summary','가져오기 설정'),f);
+    importCard.append(fold,result);
+    return importCard;
   }
   function renderAreas() {
-    areaCard.replaceChildren(el('h2','공통 작업 영역과 담당자'));
-    areaCard.append(el('p','작업 내용에 영역 이름이 포함되면 작업 시작 시 담당자가 표시됩니다. 담당자가 아닌 사람(또는 AI)은 결정 전에 질의를 남깁니다.','small muted'));
+    const c=card('공통 작업 영역과 담당자');
+    areaPanel.replaceChildren(c);
+    c.append(el('p','작업 내용에 영역 이름이 포함되면 작업 시작 시 담당자가 표시됩니다. 담당자가 아닌 사람(또는 AI)은 결정 전에 질의를 남깁니다.','small muted'));
     const p=current();
     const areaOwnerCell=a=>{if(a.owner_active)return a.owner_name;const n=el('div');n.append(el('div',a.owner_name),el('span','담당자 확인 필요','pill stale'));n.title='담당자가 프로젝트를 떠났거나 조회자로 바뀌었거나 비활성화되었습니다. 담당자를 바꾸거나 영역을 정리하세요.';return n;};
     const inactive=areas.filter(a=>!a.owner_active).length;
-    if (inactive) areaCard.append(el('p',`담당자 확인이 필요한 영역 ${inactive}개: 담당자를 바꾸거나 더 쓰지 않는 영역은 삭제하세요.`,'vector-warning'));
-    areaCard.append(table(['영역','설명','담당자','진행 중',''],areas.map(a=>[a.name,a.description||'—',areaOwnerCell(a),a.open_issues,canDeleteArea(a)?areaDelete(a):''])));
+    if (inactive) c.append(el('p',`담당자 확인이 필요한 영역 ${inactive}개: 담당자를 바꾸거나 더 쓰지 않는 영역은 삭제하세요.`,'vector-warning'));
+    c.append(table(['영역','설명','담당자','진행 중',''],areas.map(a=>[a.name,a.description||'—',areaOwnerCell(a),a.open_issues,canDeleteArea(a)?areaDelete(a):''])));
     if (!canWrite()) return;
-    const f=el('form');
+    const f=el('form',undefined,'issue-form-grid');
     const pick=selectField(f,'편집할 영역','area_id',[['','새 영역 추가'],...areas.map(a=>[a.id,a.name])]);
     const name=field(f,'영역 이름','name');name.maxLength=100;
     const desc=field(f,'설명 (선택)','description');desc.required=false;desc.maxLength=2000;
@@ -348,7 +394,9 @@ async function issuesPage() {
       if (d.area_id) input.area_id=d.area_id;
       await tool('set_work_area',input);notify('영역을 저장했습니다.');await loadProject();
     });
-    areaCard.append(f);
+    // The edit form stays folded until needed so the table reads first.
+    const edit=el('details',undefined,'issue-setup');edit.open=!areas.length;
+    edit.append(el('summary','영역 추가 · 수정'),f);c.append(edit);
   }
   function canDeleteArea(a) { return canWrite()&&(current().role==='owner'||a.owner_id===me.id); }
   function areaDelete(a) {

@@ -86,7 +86,7 @@ open / answered ──update_issue──▶ closed(닫힘: 취소·불필요)
 
 ## GitHub 이슈 가져오기
 
-`import_github_issues`(웹: **이슈 · 질의 → GitHub 이슈 가져오기**)는 GitHub 저장소의 이슈를 이 프로젝트의 질의·이슈로 가져옵니다. 편집자 이상만 쓸 수 있고, 권한을 확인한 뒤에 GitHub를 호출합니다.
+`import_github_issues`(웹: **이슈 · 질의 → GitHub 연동 탭 → 기존 이슈 가져오기**)는 GitHub 저장소의 이슈를 이 프로젝트의 질의·이슈로 가져옵니다. 편집자 이상만 쓸 수 있고, 권한을 확인한 뒤에 GitHub를 호출합니다.
 
 | 입력 | 내용 |
 | --- | --- |
@@ -117,7 +117,7 @@ open / answered ──update_issue──▶ closed(닫힘: 취소·불필요)
 
 ## GitHub 웹훅 (자동 동기화)
 
-가져오기는 누를 때만 반영됩니다. 이후 변경을 계속 따라가려면 프로젝트 소유자가 웹 **이슈 · 질의 → GitHub 웹훅**에서 저장소를 등록합니다. GitHub가 이벤트가 생길 때만 이 서버로 알려 주므로 GitHub API 호출 한도를 거의 쓰지 않고, 비공개 저장소의 새 이벤트도 `GITHUB_TOKEN` 없이 받습니다.
+가져오기는 누를 때만 반영됩니다. 이후 변경을 계속 따라가려면 프로젝트 소유자가 웹 **이슈 · 질의 → GitHub 연동 탭 → GitHub 웹훅**에서 저장소를 등록합니다. GitHub가 이벤트가 생길 때만 이 서버로 알려 주므로 GitHub API 호출 한도를 거의 쓰지 않고, 비공개 저장소의 새 이벤트도 `GITHUB_TOKEN` 없이 받습니다.
 
 1. 웹에서 저장소(`owner/name`)와 동기화 범위(이슈, 작업 PR 병합·닫힘)를 정해 **웹훅 추가**를 누릅니다. 이슈는 가져오기와 같은 종류·영역·담당자·추가 태그를 씁니다.
 2. 표시되는 **Payload URL**(`/api/github/webhooks/<id>`)과 **Secret**을 GitHub 저장소 **Settings → Webhooks → Add webhook**에 붙여 넣습니다. Content type은 `application/json`, 이벤트는 *Let me select individual events*에서 **Issues**와 **Pull requests**를 고릅니다. Secret은 이때 한 번만 표시되며 잃어버리면 **Secret 재발급** 후 GitHub 설정도 바꿉니다.
