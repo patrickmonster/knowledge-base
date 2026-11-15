@@ -52,3 +52,6 @@ var MFA string
 
 //go:embed 017_attachment_chunks.sql
 var AttachmentChunks string
+
+//go:embed 018_attachment_text.sql
+var AttachmentText string

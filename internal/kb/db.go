@@ -28,6 +28,9 @@ type Store struct {
 	Scanner MalwareScanner
 	// AllowExecutables disables the built-in executable file block.
 	AllowExecutables bool
+	// Extractor turns uploaded PDF/DOCX/XLSX files into searchable artifact
+	// documents; nil disables extraction.
+	Extractor TextExtractor
 	// MFAKey seals TOTP secrets (ParseMFAKey). Empty disables MFA setup, and
 	// sign-in for users who already enabled MFA fails closed.
 	MFAKey []byte
@@ -53,7 +56,7 @@ func Open(ctx context.Context, dsn string) (*Store, error) {
 	return &Store{DB: db}, nil
 }
 // migrationScripts are applied in order; version N is migrationScripts[N-1].
-var migrationScripts = []string{migrations.Initial, migrations.Auth, migrations.Embeddings, migrations.PermanentKeys, migrations.TaskWorkflow, migrations.Attachments, migrations.AttachmentUploadTokens, migrations.NormalizeTags, migrations.DocumentLinks, migrations.Issues, migrations.TeamRollout, migrations.KnowledgeQuality, migrations.ProjectRules, migrations.RuleEnabled, migrations.SearchMisses, migrations.MFA, migrations.AttachmentChunks}
+var migrationScripts = []string{migrations.Initial, migrations.Auth, migrations.Embeddings, migrations.PermanentKeys, migrations.TaskWorkflow, migrations.Attachments, migrations.AttachmentUploadTokens, migrations.NormalizeTags, migrations.DocumentLinks, migrations.Issues, migrations.TeamRollout, migrations.KnowledgeQuality, migrations.ProjectRules, migrations.RuleEnabled, migrations.SearchMisses, migrations.MFA, migrations.AttachmentChunks, migrations.AttachmentText}
 
 func (s *Store) Migrate(ctx context.Context) error {
 	return transaction(ctx, s.DB, func(tx *sql.Tx) error {

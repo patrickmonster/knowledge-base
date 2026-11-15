@@ -535,3 +535,89 @@ func TestRailwayBucketLive(t *testing.T) {
 		t.Fatal("deleted object was not confirmed absent")
 	}
 }
+
+func docxBytes(t *testing.T, text string) []byte {
+	t.Helper()
+	b, err := os.ReadFile(docxWith(t, `<w:p><w:r><w:t>`+text+`</w:t></w:r></w:p>`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+func TestAttachmentTextExtractionIndexesDocument(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	s.Objects = &memoryObjects{files: map[string][]byte{}}
+	s.Extractor = InProcessExtractor{}
+	tools := NewTools(s)
+	admin := loginAs(t, s, "admin@example.com")
+	owner := inviteAs(t, s, admin, "owner@example.com")
+	viewer := inviteAs(t, s, admin, "viewer@example.com")
+	p := mustCall(t, tools, owner, "create_project", CreateProjectInput{Slug: "extract", Name: "Extract"}).(Project)
+	mustCall(t, tools, owner, "set_project_member", MemberInput{ProjectID: p.ID, UserID: viewer.User.ID, Role: "viewer"})
+	upload := func(name string, body []byte) Attachment {
+		t.Helper()
+		out := mustCall(t, tools, owner, "prepare_attachment_upload", PrepareAttachmentInput{ProjectID: p.ID, Filename: name, SizeBytes: int64(len(body))}).(map[string]any)
+		stored, err := s.UploadAttachment(ctx, owner, AttachmentInput{p.ID, out["id"].(string)}, bytes.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return stored.(Attachment)
+	}
+
+	f := upload("환불 규정.docx", docxBytes(t, "결제 후 칠일 이내 전액 환불"))
+	if f.Status != "ready" || f.TextStatus != "extracted" || f.TextDocumentID == nil || f.TextError != nil {
+		t.Fatalf("bad extraction metadata: %+v", f)
+	}
+	doc := mustCall(t, tools, viewer, "get_document", DocumentRef{ProjectID: p.ID, DocumentID: *f.TextDocumentID}).(Document)
+	if doc.Kind != "artifact" || doc.Status != "active" || doc.Title != "첨부 본문: 환불 규정.docx" || doc.CreatedBy != owner.User.ID ||
+		!strings.Contains(doc.Content, "결제 후 칠일 이내 전액 환불") || !strings.Contains(doc.Content, f.ID) {
+		t.Fatalf("bad text document: %+v", doc)
+	}
+	hits := mustCall(t, tools, viewer, "search_knowledge", SearchInput{ProjectID: p.ID, Query: "전액 환불", Mode: "lexical"}).(SearchResult)
+	if len(hits.Hits) == 0 || hits.Hits[0].DocumentID != doc.ID {
+		t.Fatalf("extracted text not searchable: %+v", hits)
+	}
+	listed := mustCall(t, tools, viewer, "list_attachments", ListAttachmentsInput{ProjectID: p.ID}).([]Attachment)
+	if len(listed) != 1 || listed[0].TextDocumentID == nil || *listed[0].TextDocumentID != doc.ID {
+		t.Fatalf("list misses text link: %+v", listed)
+	}
+
+	// Broken and unsupported files are stored; only the index is skipped.
+	broken := upload("깨진.xlsx", []byte("PK not a zip"))
+	if broken.Status != "ready" || broken.TextStatus != "failed" || broken.TextError == nil || *broken.TextError != ExtractInvalidFile || broken.TextDocumentID != nil {
+		t.Fatalf("broken file: %+v", broken)
+	}
+	plain := upload("notes.txt", []byte("hello"))
+	if plain.Status != "ready" || plain.TextStatus != "none" || plain.TextDocumentID != nil {
+		t.Fatalf("plain file: %+v", plain)
+	}
+	empty := upload("빈 문서.docx", docxBytes(t, ""))
+	if empty.TextStatus != "empty" || empty.TextDocumentID != nil {
+		t.Fatalf("empty file: %+v", empty)
+	}
+
+	// Deleting the file archives its text so search stops returning it.
+	mustCall(t, tools, owner, "delete_attachment", AttachmentInput{p.ID, f.ID})
+	doc = mustCall(t, tools, viewer, "get_document", DocumentRef{ProjectID: p.ID, DocumentID: doc.ID}).(Document)
+	if doc.Status != "archived" || doc.Revision != 2 {
+		t.Fatalf("text document not archived: %+v", doc)
+	}
+	hits = mustCall(t, tools, viewer, "search_knowledge", SearchInput{ProjectID: p.ID, Query: "전액 환불", Mode: "lexical"}).(SearchResult)
+	for _, h := range hits.Hits {
+		if h.DocumentID == doc.ID {
+			t.Fatal("archived text still returned by default search")
+		}
+	}
+	if err := s.CleanupAttachments(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	// Extraction disabled keeps the old behavior.
+	s.Extractor = nil
+	off := upload("끔.docx", docxBytes(t, "색인 안 함"))
+	if off.TextStatus != "none" || off.TextDocumentID != nil {
+		t.Fatalf("disabled extraction: %+v", off)
+	}
+}

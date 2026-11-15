@@ -91,7 +91,9 @@ async function attachmentsPage() {
           if(project.value===projectID)await refresh();
         },'danger'));
         const name=el('div');name.append(el('strong',f.filename),el('p',f.id,'small muted'));
-        return [name,`${(f.size_bytes/1024).toFixed(1)} KB · ${labels[f.status]||f.status}`,f.document_id?`${f.document_id} · v${f.document_revision}`:'프로젝트 첨부',actions];
+        if(f.text_document_id)name.append(el('p',`본문 문서 ${f.text_document_id}`,'small muted'));
+        const text={extracted:f.text_truncated?' · 본문 색인됨(앞부분만)':' · 본문 색인됨',empty:' · 추출할 본문 없음(스캔본은 OCR 필요)',failed:` · 본문 추출 실패(${f.text_error||'오류'})`}[f.text_status]||'';
+        return [name,`${(f.size_bytes/1024).toFixed(1)} KB · ${labels[f.status]||f.status}${text}`,f.document_id?`${f.document_id} · v${f.document_revision}`:'프로젝트 첨부',actions];
       })));
       const nav=el('div',undefined,'actions');
       const prev=btn('이전',async()=>{offset=Math.max(0,offset-25);await refresh();});prev.disabled=offset===0;
