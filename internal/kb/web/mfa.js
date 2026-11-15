@@ -55,7 +55,8 @@ async function mfaCard(){
   area.append(btn('설정 시작',async()=>{
     const s=await api('/api/mfa/setup',{});
     const box=el('div');
-    box.append(el('p','1. 인증 앱에서 “설정 키 입력(수동 입력)”을 고르고 아래 키를 등록합니다. 계정 이름은 이메일, 종류는 시간 기반입니다.','small'));
+    box.append(el('p','1. 인증 앱에서 QR 코드를 스캔합니다. 스캔할 수 없으면 “설정 키 입력(수동 입력)”을 고르고 아래 키를 등록합니다(계정 이름은 이메일, 종류는 시간 기반).','small'));
+    try{const qr=el('div',undefined,'mfa-qr');qr.append(qrSVG(s.otpauth_uri,'인증 앱 등록용 QR 코드'));box.append(qr);}catch(err){box.append(el('p','QR 코드를 그리지 못했습니다. 설정 키를 직접 입력하세요.','small muted'));}
     const key=el('div',undefined,'mcp-address');key.append(el('code',s.secret.replace(/(.{4})/g,'$1 ').trim()),btn('설정 키 복사',async()=>{await navigator.clipboard.writeText(s.secret);notify('설정 키를 복사했습니다.');}));
     box.append(key);
     const uri=el('details',undefined,'mcp-guide-details');uri.append(el('summary','otpauth 링크 (링크를 지원하는 앱·비밀번호 관리자용)'));const u=el('div',undefined,'mcp-address');u.append(el('code',s.otpauth_uri),btn('링크 복사',async()=>{await navigator.clipboard.writeText(s.otpauth_uri);notify('링크를 복사했습니다.');}));uri.append(u);box.append(uri);
