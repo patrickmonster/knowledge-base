@@ -13,7 +13,7 @@ function webhookSecretDialog(r){
 async function githubWebhookCard(project,{members=[],areas=[]}={}) {
   const c=card('GitHub 웹훅 (자동 동기화)');
   c.append(el('p','GitHub에서 이슈가 열리거나 바뀌고, PR이 병합·닫힐 때 GitHub가 이 서버로 알려 줍니다. 이벤트가 생길 때만 반영하므로 GitHub API 호출 한도를 거의 쓰지 않고, 비공개 저장소의 새 이벤트도 토큰 없이 받습니다.','small muted'));
-  c.append(el('p','웹훅은 설정 이후의 이벤트만 보냅니다. 기존 이슈는 위의 "GitHub 이슈 가져오기"로 한 번 가져오세요. 서버 재시작 중 놓친 PR 병합은 6시간 간격 확인으로 보정합니다.','small muted'));
+  c.append(el('p','웹훅은 설정 이후의 이벤트만 보냅니다. 기존 이슈는 아래 "기존 이슈 가져오기"로 한 번 가져오세요. 서버 재시작 중 놓친 PR 병합은 6시간 간격 확인으로 보정합니다.','small muted'));
   let data;
   try { data=await tool('list_github_webhooks',{project_id:project.id}); }
   catch(e) { c.append(el('p',e.message,'muted')); return c; }
@@ -51,8 +51,7 @@ async function githubWebhookCard(project,{members=[],areas=[]}={}) {
     return [repo,sync.join(' / ')||'—',last,actions];
   })));
   if (!owner) { c.append(el('p','GitHub 웹훅은 프로젝트 소유자가 관리합니다.','small muted')); return c; }
-  const f=el('form');
-  f.append(el('h3','웹훅 추가'));
+  const f=el('form',undefined,'issue-form-grid');
   const repo=field(f,'저장소 (owner/name 또는 GitHub 주소)','repository');repo.placeholder='octocat/hello-world';repo.maxLength=200;
   const check=(label,name)=>{const l=el('label',undefined,'check'),i=el('input');i.type='checkbox';i.name=name;i.checked=true;l.append(i,document.createTextNode(label));f.append(l);return i;};
   const issues=check('이슈를 이 프로젝트의 이슈·질의로 동기화','import_issues');
@@ -72,7 +71,9 @@ async function githubWebhookCard(project,{members=[],areas=[]}={}) {
     const r=await tool('set_github_webhook',input);
     webhookSecretDialog(r);await reload();
   });
-  c.append(f);
+  // Folded once a webhook exists so the list of webhooks reads first.
+  const add=el('details',undefined,'issue-setup');add.open=!data.webhooks.length;
+  add.append(el('summary','웹훅 추가'),f);c.append(add);
   async function reload(){c.replaceWith(await githubWebhookCard(project,{members,areas}));}
   return c;
 }
