@@ -46,9 +46,12 @@ type Todo struct {
 	UpdatedAt     string  `json:"updated_at"`
 	CompletedAt   string  `json:"completed_at,omitempty"`
 	// Linked task runs (start_task todo_id / link_task_todo) and their pull requests.
-	TaskCount     int               `json:"task_count"`
-	OpenTaskCount int               `json:"open_task_count"`
-	PullRequests  []TodoPullRequest `json:"pull_requests"`
+	TaskCount     int `json:"task_count"`
+	OpenTaskCount int `json:"open_task_count"`
+	// Linked questions and issues still waiting (open or answered), and open blocking ones.
+	OpenIssueCount     int               `json:"open_issue_count"`
+	BlockingIssueCount int               `json:"blocking_issue_count"`
+	PullRequests       []TodoPullRequest `json:"pull_requests"`
 }
 
 type TodoPullRequest struct {
@@ -108,6 +111,8 @@ func oneOf(value string, allowed []string) bool {
 const todoSelect = `SELECT to_jsonb(t)||jsonb_build_object('assignee_name',COALESCE(a.name,''),'created_by_name',COALESCE(c.name,''),
 	'task_count',(SELECT count(*) FROM task_runs r WHERE r.todo_id=t.id),
 	'open_task_count',(SELECT count(*) FROM task_runs r WHERE r.todo_id=t.id AND r.status='open'),
+	'open_issue_count',(SELECT count(*) FROM issues i WHERE i.todo_id=t.id AND i.status IN ('open','answered')),
+	'blocking_issue_count',(SELECT count(*) FROM issues i WHERE i.todo_id=t.id AND i.status='open' AND i.blocking),
 	'pull_requests',COALESCE((SELECT jsonb_agg(jsonb_build_object('repository',pr.repository,'number',pr.number,'url',pr.url,'state',pr.state) ORDER BY pr.created_at DESC)
 		FROM task_pull_requests pr JOIN task_runs r ON r.id=pr.task_id WHERE r.todo_id=t.id),'[]'::jsonb))
 	FROM todos t LEFT JOIN users a ON a.id=t.assignee_id LEFT JOIN users c ON c.id=t.created_by`

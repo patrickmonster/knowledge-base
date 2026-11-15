@@ -79,3 +79,6 @@ var Todos string
 
 //go:embed 026_todo_task_link.sql
 var TodoTaskLink string
+
+//go:embed 027_issue_todo_link.sql
+var IssueTodoLink string

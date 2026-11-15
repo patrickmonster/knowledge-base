@@ -59,6 +59,26 @@ async function uploadIssueImages(projectID,issueID,files,target={}) {
 
 function issueImageURL(f) { return `/api/attachments/${encodeURIComponent(f.id)}/image?project_id=${encodeURIComponent(f.project_id)}`; }
 
+// Inline picker that ties a question or issue to a to-do (link_issue_todo).
+async function issueTodoForm(cardEl,i,after) {
+  cardEl.querySelector('.task-todo-form')?.remove();
+  const form=el('div',undefined,'task-todo-form');
+  const todos=(await tool('list_todos',{project_id:i.project_id})).filter(t=>t.status!=='completed'||t.id===i.todo?.id);
+  const label=el('label','이 질의·이슈가 속한 할 일 (보드 카드에 질의·보류 수가 표시되고, 할 일과 연결된 AI 작업을 시작할 때 함께 안내됩니다)');
+  const select=el('select');select.append(new Option('연결 안 함',''));
+  for (const t of todos) select.append(new Option(`${t.title} · ${todoPriorityLabel[t.priority]} · ${todoStatusLabel[t.status]}`,t.id));
+  select.value=i.todo?.id||'';label.append(select);
+  const row=el('div',undefined,'actions');
+  row.append(btn('저장',async()=>{
+    const out=await tool('link_issue_todo',{project_id:i.project_id,issue_id:i.id,todo_id:select.value});
+    notify(out.todo?`“${out.todo.title}”에 연결했습니다.`:'할 일 연결을 해제했습니다.');
+    await after();
+  }),btn('취소',()=>form.remove()));
+  form.append(label,row);
+  if (!todos.length) form.prepend(el('p','연결할 수 있는 할 일이 없습니다. 할 일 보드에서 먼저 추가하세요.','small muted'));
+  cardEl.append(form);select.focus();
+}
+
 async function issuesPage() {
   const root=el('div'), projects=[];
   for (let offset=0; offset<=100000; offset+=50) {
@@ -79,13 +99,13 @@ async function issuesPage() {
   const summary=el('p','','small muted');summary.setAttribute('role','status');controls.append(summary);
   const createCard=card('새 질의 · 이슈'), importCard=card('GitHub 이슈 가져오기'), webhookCard=el('div'), areaCard=card('공통 작업 영역과 담당자'), notifyCard=el('div'), list=el('div');
   root.append(list,createCard,importCard,webhookCard,areaCard,notifyCard);
-  let generation=0, members=[], areas=[];
+  let generation=0, members=[], areas=[], todos=[];
   const current=()=>projects.find(p=>p.id===project.value);
   const canWrite=()=>['owner','admin','editor'].includes(current().role);
 
   async function loadProject() {
     const ticket=++generation, p=current();
-    [members,areas]=await Promise.all([tool('list_project_members',{project_id:p.id}),tool('list_work_areas',{project_id:p.id})]);
+    [members,areas,todos]=await Promise.all([tool('list_project_members',{project_id:p.id}),tool('list_work_areas',{project_id:p.id}),tool('list_todos',{project_id:p.id}).then(l=>l.filter(t=>t.status!=='completed')).catch(()=>[])]);
     if (ticket!==generation) return;
     renderCreate(); renderImport(); renderAreas(); await refresh();
     const webhooks=await githubWebhookCard(p,{members,areas});
@@ -116,6 +136,10 @@ async function issuesPage() {
     const meta=[i.area_name&&('영역 '+i.area_name),'담당 '+(i.assignee_name||'미지정'),'작성 '+i.created_by_name,new Date(i.updated_at).toLocaleString()];
     if (i.comment_count) meta.push('댓글 '+i.comment_count);
     c.append(el('p',meta.filter(Boolean).join(' · '),'small muted'));
+    if (i.todo) {
+      const b=btn(`할 일 · ${i.todo.title} (${todoStatusLabel[i.todo.status]||i.todo.status})`,()=>render('todos'),'secondary task-todo');
+      b.title='할 일 보드로 이동';const row=el('div',undefined,'task-facts');row.append(b);c.append(row);
+    }
     if (i.tags?.length) c.append(el('p',i.tags.join(' · '),'small'));
     if (i.source==='github') {
       const src=el('p',undefined,'small muted');
@@ -230,6 +254,7 @@ async function issuesPage() {
       if (failed.length) notify('일부 사진을 올리지 못했습니다: '+failed.join(', '),true); else notify('사진을 첨부했습니다.');
       i.attachment_count=(i.attachment_count||0)+picked.length-failed.length;await loadImages();
     });
+    actions.append(btn(i.todo?'할 일 변경':'할 일 연결',()=>issueTodoForm(c,i,refresh)));
     const addBody=btn('질문에 사진 추가',()=>addImages.click());addBody.title='질문 본문에 사진을 붙입니다. 답변·댓글 사진은 위 입력란에서 첨부합니다.';
     actions.append(addBody,addImages);
     if (i.status==='open') actions.append(btn(i.blocking?'보류 해제':'작업 보류로 표시',async()=>{await tool('update_issue',{project_id:i.project_id,issue_id:i.id,blocking:!i.blocking});await refresh();}));
@@ -250,12 +275,14 @@ async function issuesPage() {
     const images=issueImagePicker(body);f.append(images.node);
     selectField(f,'공통 작업 영역 (선택하면 담당자가 자동 지정)','area_id',[['','없음'],...areas.map(a=>[a.id,`${a.name} — ${a.owner_name}`])]);
     selectField(f,'담당자 (비우면 영역 담당자)','assignee_id',memberOptions('자동 / 미지정'));
+    if (todos.length) selectField(f,'할 일 (선택, 할 일 보드에 질의·보류 수로 표시)','todo_id',[['','없음'],...todos.map(t=>[t.id,`${t.title} · ${todoStatusLabel[t.status]}`])]);
     const tags=field(f,'태그 (쉼표로 구분, 선택)','tags');tags.required=false;
     const bk=el('label','답변 전까지 관련 작업 보류'),cb=el('input');cb.type='checkbox';cb.name='blocking';cb.value='true';cb.style.width='auto';bk.classList.add('inline-check');bk.prepend(cb);f.append(bk);
     formSubmit(f,'등록',async d=>{
       const input={project_id:current().id,kind:d.kind,title:d.title,body:d.body,blocking:d.blocking==='true'};
       if (d.area_id) input.area_id=d.area_id;
       if (d.assignee_id) input.assignee_id=d.assignee_id;
+      if (d.todo_id) input.todo_id=d.todo_id;
       const tagList=(d.tags||'').split(',').map(s=>s.trim()).filter(Boolean);if(tagList.length)input.tags=tagList;
       const issue=await tool('create_issue',input);
       const picked=images.files();
