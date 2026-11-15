@@ -18,6 +18,7 @@ Go로 만든 팀 공용 지식 서버입니다. 프로젝트별 기획·결정·
 - 한국어 키워드 검색과 의미 검색을 결합한 하이브리드 검색
 - 문서 저장·수정 시 자동 임베딩 대기열, 실패 재시도·상태 조회·소유자 재색인
 - 이슈·질의 베이스: 공통 작업 영역과 담당자, 질의·이슈 등록·답변·해결, 작업 시작 시 관련 질의 표시, 질의응답의 지식 문서화, GitHub 저장소 이슈 가져오기([안내](docs/issues.md#github-이슈-가져오기))
+- 할 일 보드([안내](docs/todos.md)): 프로젝트 할 일을 상태(시작 전·진행 중·완료·아이디어) 열과 우선순위(높음·보통·낮음) 행으로 보는 웹 보드, 분류·진행률·담당자·마감일, 드래그로 이동, AI도 MCP로 추가·이동
 - 팀 확산([안내](docs/team-rollout.md)): 이슈 담당자 알림(웹훅·Slack·이메일), 웹 문서 관계 보기·편집, 문서 버전 비교, 검토 대기 사이드바 배지, 공통 작업 영역 삭제·정리, 다른 저장소용 AGENTS.md 생성, 프로젝트 내보내기·가져오기(JSON·Markdown)
 - 작업 PR 병합·배포 자동 기록: `finish_task`에 남긴 PR을 GitHub에서 확인해 병합·배포(서버 자신의 저장소)되면 history에 상태 갱신 블록 추가, 미기록 PR은 작업 시작 맥락에 표시
 - 지식 품질과 AI 작업 흐름: 중복·충돌 결정 감지, 재확인 담당자·주기 요약, start_task 맥락 활용도 피드백과 검색 품질 지표, finish_task 결정 후보 추출, 오래 열린 작업 정리, 용어집(glossary)과 검색 동의어 확장([안내](docs/knowledge-quality.md))
@@ -147,6 +148,7 @@ Authorization: Bearer <발급받은 MCP 키>
 | `create_issue`, `list_issues`, `get_issue` | 질의·이슈 등록·목록(상태·담당자·검색어 필터)·상세 |
 | `answer_issue`, `comment_issue`, `update_issue` | 답변·댓글·해결/닫기/다시 열기, 질의응답 지식 문서화(`publish_answer`) |
 | `import_github_issues` | GitHub 저장소 이슈를 질의·이슈로 가져오기(단방향, 다시 가져오면 갱신). 서버 `GITHUB_TOKEN`(선택)·`GITHUB_API_URL`(선택, GitHub Enterprise). 이후 변경은 웹 콘솔의 GitHub 웹훅(`/api/github/webhooks/<id>`, `WEBHOOK_ENCRYPTION_KEY`)으로 자동 반영 |
+| `list_todos`, `save_todo`, `move_todo`, `delete_todo` | 할 일 보드 조회(상태·우선순위·분류·담당자 필터)·추가·수정(`expected_revision`)·칸 이동(`before_id`)·삭제. 쓰기는 편집자 이상 |
 | `get_usage_stats` | 프로젝트 사용 통계(최근 1~365일, 기본 30일, 한국 시간 일 단위): 합계·일별 추이·종류별 증가·결과 0건 검색어·검색 시간·상위 도구·사용자·열람 문서·보유 현황 |
 
 문서 종류는 `brief`, `decision`, `history`, `artifact`, `reference`입니다. 상태는 `draft`, `active`, `archived`이고 기본 검색에는 활성 문서의 최신 버전만 포함됩니다. `update_document`는 `expected_revision`과 수정 이유 `reason`이 필요합니다. 충돌하면 최신 내용을 읽고 변경을 병합해야 합니다.
@@ -171,6 +173,8 @@ Authorization: Bearer <발급받은 MCP 키>
 `get_document`(현재 버전)와 `get_document_links`는 `supersedes`, `superseded_by`, `implements`, `implemented_by`, `related`로 묶어 돌려줍니다. 과거 버전 조회에는 관계를 붙이지 않습니다. 검색에서는 결과 목록 안에서만 순서를 바꾸며 대체된 문서를 숨기지 않습니다.
 
 웹 **진행 중 작업** 화면은 `start_task`로 시작해 아직 `finish_task`로 마치지 않은 작업을 보여 줍니다. 상태·내 작업 필터, 7일 넘게 열린 작업 표시, 시작 자료 스냅샷, 완료 기록과 PR 병합·배포 상태, 연결된 미해결 질의 수를 확인하고 중단 처리(`close_task_run`)·오래된 작업 일괄 정리(소유자)를 할 수 있습니다. 사이드바에 진행 중 작업 수 배지가 붙습니다.
+
+웹 **할 일 보드** 화면은 프로젝트 할 일을 상태 열 × 우선순위 행으로 보여 줍니다. 카드를 끌어 다른 칸이나 카드 사이로 옮기고, 완료 체크로 완료 열로 보내며, 카드를 눌러 제목·내용·분류·진행률·담당자·마감일을 고칩니다. 자세한 내용은 [docs/todos.md](docs/todos.md)를 참고하세요(`025_todos` 마이그레이션 필요).
 
 웹 **검토 대기** 화면은 프로젝트의 draft 문서를 모아 보여 줍니다. 소유자·편집자가 본문을 확인하고 사유와 함께 승인(`active`) 또는 반려(`archived`)하면 사유가 `검토 승인: …` / `검토 반려: …` 형식으로 버전 기록에 남고 감사 로그에 결정이 기록됩니다(사유 본문은 감사 로그에 복사하지 않음). 이 동작(`review_document`)은 로그인한 사람만 할 수 있으며 MCP 도구 목록에 노출되지 않고 MCP 키 호출은 거부됩니다. AI가 만든 미확정 지식을 같은 AI가 승격하지 않도록 하기 위한 제한입니다. 단, `update_document`로 상태를 바꾸는 기존 경로는 그대로 남아 있습니다.
 
@@ -303,6 +307,7 @@ TEST_DATABASE_URL='<test-only PostgreSQL URL>' TEST_OLLAMA_URL=http://localhost:
 - `internal/kb/embedding_worker.go`: 비동기 생성·pgvector 저장·재시도
 - `internal/kb/vector_search.go`: 질문 임베딩·권한 범위 내 의미 검색·하이브리드 순위
 - `internal/kb/issues.go`, `web/issues.js`: 이슈·질의 베이스와 작업 시작 연동
+- `internal/kb/todos.go`, `web/todos.js`: 할 일 보드(`025_todos.sql`)
 - `internal/kb/github_issues.go`: GitHub 이슈 가져오기(`import_github_issues`)
 - `internal/kb/github_webhooks.go`: GitHub 웹훅 설정(웹 전용)과 수신·서명 검증, 이슈·PR 이벤트 반영
 - `internal/kb/deployments.go`: 작업 PR의 병합·배포 확인과 history 상태 갱신 블록(`check_task_deployments`, 주기 확인)

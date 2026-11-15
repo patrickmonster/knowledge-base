@@ -268,6 +268,7 @@ func NewTools(s *Store) Tools {
 	registerAgentsTools(t, s)
 	registerQualityTools(t, s)
 	registerRuleTools(t, s)
+	registerTodoTools(t, s)
 
 	return t
 }

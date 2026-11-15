@@ -73,3 +73,6 @@ var IssueAttachments string
 
 //go:embed 024_issue_attachment_parts.sql
 var IssueAttachmentParts string
+
+//go:embed 025_todos.sql
+var Todos string
