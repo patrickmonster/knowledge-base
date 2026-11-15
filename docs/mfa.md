@@ -2,6 +2,8 @@
 
 웹 로그인에 인증 앱의 시간 기반 일회용 코드(TOTP, RFC 6238)를 추가합니다. 사용자가 **내 계정** 화면에서 직접 켜고 끕니다. 아직 팀 전체에 강제하지는 않습니다.
 
+사용자용 단계별 안내: [Google OTP(Google Authenticator)로 2단계 인증 설정하기](mfa-google-authenticator.md)
+
 ## 서버 설정
 
 - `MFA_ENCRYPTION_KEY`: 32자 이상의 무작위 문자열. 사용자별 TOTP 비밀키를 AES-GCM으로 암호화하는 데 씁니다. 예: `openssl rand -base64 48`.
