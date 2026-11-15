@@ -1,0 +1,130 @@
+package kb
+
+import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+)
+
+func TestIssueImageAttachments(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	m := &memoryObjects{files: map[string][]byte{}}
+	s.Objects = m
+	tools := NewTools(s)
+	admin := loginAs(t, s, "admin@example.com")
+	owner := inviteAs(t, s, admin, "owner@example.com")
+	viewer := inviteAs(t, s, admin, "viewer@example.com")
+	p := mustCall(t, tools, owner, "create_project", CreateProjectInput{Slug: "imgs", Name: "Images"}).(Project)
+	other := mustCall(t, tools, owner, "create_project", CreateProjectInput{Slug: "imgs-other", Name: "Other"}).(Project)
+	mustCall(t, tools, owner, "set_project_member", MemberInput{ProjectID: p.ID, UserID: viewer.User.ID, Role: "viewer"})
+	issue := mustCall(t, tools, owner, "create_issue", CreateIssueInput{ProjectID: p.ID, Title: "화면 깨짐", Body: "스크린샷 첨부"}).(Issue)
+	otherIssue := mustCall(t, tools, owner, "create_issue", CreateIssueInput{ProjectID: other.ID, Title: "다른 프로젝트", Body: "x"}).(Issue)
+
+	png := "\x89PNG\r\n\x1a\n" + strings.Repeat("\x00", 40)
+	prepare := func(in PrepareAttachmentInput) (Attachment, error) {
+		out, err := call(t, tools, owner, "prepare_attachment_upload", in)
+		if err != nil {
+			return Attachment{}, err
+		}
+		return out.(map[string]any)["attachment"].(Attachment), nil
+	}
+
+	// Reservation rules: issue in the same project, image filename, 10 MiB, not both links.
+	_, err := prepare(PrepareAttachmentInput{ProjectID: p.ID, IssueID: otherIssue.ID, Filename: "a.png", SizeBytes: 10})
+	denied(t, err, "NOT_FOUND")
+	_, err = prepare(PrepareAttachmentInput{ProjectID: p.ID, IssueID: issue.ID, Filename: "a.pdf", SizeBytes: 10})
+	denied(t, err, "INVALID_INPUT")
+	_, err = prepare(PrepareAttachmentInput{ProjectID: p.ID, IssueID: issue.ID, Filename: "a.svg", SizeBytes: 10})
+	denied(t, err, "INVALID_INPUT")
+	_, err = prepare(PrepareAttachmentInput{ProjectID: p.ID, IssueID: issue.ID, Filename: "a.png", SizeBytes: MaxIssueImageBytes + 1})
+	denied(t, err, "INVALID_INPUT")
+	doc := mustCall(t, tools, owner, "create_document", DocumentInput{ProjectID: p.ID, Title: "Doc", Kind: "brief", Content: "x"}).(Document)
+	_, err = prepare(PrepareAttachmentInput{ProjectID: p.ID, IssueID: issue.ID, DocumentID: doc.ID, Filename: "a.png", SizeBytes: 10})
+	denied(t, err, "INVALID_INPUT")
+	_, err = call(t, tools, viewer, "prepare_attachment_upload", PrepareAttachmentInput{ProjectID: p.ID, IssueID: issue.ID, Filename: "a.png", SizeBytes: 10})
+	denied(t, err, "FORBIDDEN")
+
+	// Content must really be a raster image, not just named like one.
+	fake, err := prepare(PrepareAttachmentInput{ProjectID: p.ID, IssueID: issue.ID, Filename: "fake.png", SizeBytes: 11})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = s.UploadAttachment(ctx, owner, AttachmentInput{p.ID, fake.ID}, strings.NewReader("<svg></svg>"))
+	denied(t, err, "INVALID_INPUT")
+	if m.puts != 0 {
+		t.Fatal("non-image content reached the bucket")
+	}
+
+	img, err := prepare(PrepareAttachmentInput{ProjectID: p.ID, IssueID: issue.ID, Filename: "screen.png", SizeBytes: int64(len(png))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if img.IssueID == nil || *img.IssueID != issue.ID {
+		t.Fatalf("issue link missing: %+v", img)
+	}
+	if _, err = s.UploadAttachment(ctx, owner, AttachmentInput{p.ID, img.ID}, strings.NewReader(png)); err != nil {
+		t.Fatal(err)
+	}
+	full := mustCall(t, tools, viewer, "get_issue", IssueRef{ProjectID: p.ID, IssueID: issue.ID}).(Issue)
+	if full.AttachmentCount != 1 || len(full.Attachments) != 1 || full.Attachments[0].ID != img.ID {
+		t.Fatalf("get_issue attachments: count %d, %+v", full.AttachmentCount, full.Attachments)
+	}
+	listed := mustCall(t, tools, viewer, "list_attachments", ListAttachmentsInput{ProjectID: p.ID, IssueID: issue.ID}).([]Attachment)
+	if len(listed) != 2 { // the ready image and the rejected reservation awaiting cleanup
+		t.Fatalf("list by issue: %d", len(listed))
+	}
+
+	// Inline image route: session only, project members only, sniffed image type.
+	app, err := NewApp(s, Config{PublicURL: "http://localhost:8080"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := app.Handler()
+	get := func(email, projectID, id string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest("GET", "/api/attachments/"+id+"/image?project_id="+projectID, nil)
+		if email != "" {
+			cookie, err := s.Login(ctx, email, testPassword)
+			if err != nil {
+				t.Fatal(err)
+			}
+			r.AddCookie(&http.Cookie{Name: "kb_session", Value: cookie})
+		}
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		return w
+	}
+	if w := get("", p.ID, img.ID); w.Code != 401 {
+		t.Fatalf("anonymous image read: %d", w.Code)
+	}
+	if w := get("admin@example.com", p.ID, img.ID); w.Code != 404 {
+		t.Fatalf("non-member image read: %d", w.Code)
+	}
+	if w := get("viewer@example.com", other.ID, img.ID); w.Code == 200 {
+		t.Fatal("image served under another project")
+	}
+	w := get("viewer@example.com", p.ID, img.ID)
+	if w.Code != 200 || w.Body.String() != png || w.Header().Get("Content-Type") != "image/png" ||
+		w.Header().Get("X-Content-Type-Options") != "nosniff" || !strings.Contains(w.Header().Get("Content-Security-Policy"), "sandbox") {
+		t.Fatalf("image response: %d %q %v", w.Code, w.Header().Get("Content-Type"), w.Header())
+	}
+	// Ordinary project files are not served inline.
+	plain := preparedAttachment(t, tools, owner, p.ID, png)
+	if _, err = s.UploadAttachment(ctx, owner, AttachmentInput{p.ID, plain.ID}, strings.NewReader(png)); err != nil {
+		t.Fatal(err)
+	}
+	if w := get("viewer@example.com", p.ID, plain.ID); w.Code != 404 {
+		t.Fatalf("document file served inline: %d", w.Code)
+	}
+
+	mustCall(t, tools, owner, "delete_attachment", AttachmentInput{p.ID, img.ID})
+	full = mustCall(t, tools, viewer, "get_issue", IssueRef{ProjectID: p.ID, IssueID: issue.ID}).(Issue)
+	if full.AttachmentCount != 0 || len(full.Attachments) != 0 {
+		t.Fatal("deleted image still listed")
+	}
+	if w := get("viewer@example.com", p.ID, img.ID); w.Code != 404 {
+		t.Fatalf("deleted image served: %d", w.Code)
+	}
+}

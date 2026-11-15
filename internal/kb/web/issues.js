@@ -2,6 +2,62 @@
 
 const issueStatusLabels={open:'답변 대기',answered:'답변됨',resolved:'해결',closed:'닫힘'};
 const issueKindLabels={question:'질의',issue:'이슈'};
+const issueImageTypes=['image/png','image/jpeg','image/gif','image/webp'];
+const issueImageMaxBytes=10*1024*1024, issueImageMaxCount=5;
+
+// Picks up to five images from a file chooser or pasted screenshots and previews them before upload.
+function issueImagePicker(pasteTarget) {
+  const box=el('div',undefined,'issue-image-picker'), files=[];
+  const input=el('input');input.type='file';input.multiple=true;input.accept=issueImageTypes.join(',');input.hidden=true;
+  const choose=btn('사진 선택',()=>input.click());
+  const previews=el('div',undefined,'issue-images');
+  const hint=el('p',`PNG·JPG·GIF·WEBP, 장당 10MB, 최대 ${issueImageMaxCount}장. 내용 칸에 스크린샷을 붙여 넣어도 됩니다.`,'small muted');
+  const head=el('div',undefined,'actions');head.append(choose,hint);
+  box.append(el('span','사진 첨부 (선택)','field-title'),head,input,previews);
+  function add(list) {
+    for (const f of list) {
+      if (!issueImageTypes.includes(f.type)) { notify(`${f.name||'붙여 넣은 파일'}: 이미지(PNG·JPG·GIF·WEBP)만 첨부할 수 있습니다.`,true); continue; }
+      if (f.size<1||f.size>issueImageMaxBytes) { notify(`${f.name||'붙여 넣은 이미지'}: 10MB 이하 이미지만 첨부할 수 있습니다.`,true); continue; }
+      if (files.length>=issueImageMaxCount) { notify(`사진은 최대 ${issueImageMaxCount}장까지 첨부할 수 있습니다.`,true); break; }
+      // Pasted screenshots are often named image.png; give each a distinct name.
+      const ext=f.type.split('/')[1].replace('jpeg','jpg');
+      files.push(f.name&&f.name!=='image.'+ext?f:new File([f],`screenshot-${Date.now()}-${files.length+1}.${ext}`,{type:f.type}));
+    }
+    draw();
+  }
+  function draw() {
+    for (const img of previews.querySelectorAll('img')) URL.revokeObjectURL(img.src);
+    previews.replaceChildren(...files.map((f,i)=>{
+      const fig=el('figure',undefined,'issue-image'), img=el('img');img.src=URL.createObjectURL(f);img.alt=f.name;
+      const remove=el('button','×','issue-image-remove');remove.type='button';remove.title='첨부 취소';remove.setAttribute('aria-label',f.name+' 첨부 취소');
+      remove.addEventListener('click',()=>{files.splice(i,1);draw();});
+      fig.append(img,el('figcaption',f.name),remove);return fig;
+    }));
+  }
+  input.addEventListener('change',()=>{add([...input.files]);input.value='';});
+  pasteTarget?.addEventListener('paste',e=>{
+    const pasted=[...(e.clipboardData?.files||[])].filter(f=>f.type.startsWith('image/'));
+    if (!pasted.length) return;
+    e.preventDefault();add(pasted);
+  });
+  return {node:box,files:()=>[...files],clear(){files.length=0;draw();}};
+}
+
+// Uploads images to an existing issue one by one; returns the names that failed.
+async function uploadIssueImages(projectID,issueID,files) {
+  const failed=[];
+  for (const f of files) {
+    try {
+      const prepared=await tool('prepare_attachment_upload',{project_id:projectID,issue_id:issueID,filename:f.name,size_bytes:f.size});
+      const response=await fetch(prepared.upload_path,{method:'PUT',headers:{'Content-Type':'application/octet-stream','X-CSRF-Token':csrf},body:f});
+      const body=await response.json().catch(()=>({}));
+      if (!response.ok) throw Error(body.error?.message||'업로드 실패');
+    } catch(e) { failed.push(`${f.name} (${e.message})`); }
+  }
+  return failed;
+}
+
+function issueImageURL(f) { return `/api/attachments/${encodeURIComponent(f.id)}/image?project_id=${encodeURIComponent(f.project_id)}`; }
 
 async function issuesPage() {
   const root=el('div'), projects=[];
@@ -69,6 +125,32 @@ async function issuesPage() {
       c.append(src);
     }
     c.append(renderMarkdown(i.body,'vector-content'));
+    const gallery=el('div',undefined,'issue-images');
+    c.append(gallery);
+    async function loadImages() {
+      if (!i.attachment_count) { gallery.replaceChildren(); return; }
+      try {
+        const items=(await tool('list_attachments',{project_id:i.project_id,issue_id:i.id,limit:50})).filter(f=>f.status==='ready').reverse();
+        gallery.replaceChildren(...items.map(f=>{
+          const fig=el('figure',undefined,'issue-image'), link=el('a'), img=el('img');
+          link.href=issueImageURL(f);link.target='_blank';link.rel='noopener';link.title=f.filename+' 원본 보기';
+          img.src=issueImageURL(f);img.alt=f.filename;img.loading='lazy';link.append(img);
+          fig.append(link,el('figcaption',f.filename));
+          if (canWrite()) {
+            const remove=el('button','×','issue-image-remove');remove.type='button';remove.title='사진 삭제';remove.setAttribute('aria-label',f.filename+' 삭제');
+            remove.addEventListener('click',async()=>{
+              if (!confirm(`사진 "${f.filename}"을 삭제할까요?`)) return;
+              remove.disabled=true;
+              try { await tool('delete_attachment',{project_id:i.project_id,attachment_id:f.id});fig.remove();i.attachment_count=Math.max(0,i.attachment_count-1); }
+              catch(e) { remove.disabled=false;notify(e.message,true); }
+            });
+            fig.append(remove);
+          }
+          return fig;
+        }));
+      } catch(e) { gallery.replaceChildren(el('p','사진을 불러오지 못했습니다: '+e.message,'small muted')); }
+    }
+    void loadImages();
     if (i.answer) {
       const answer=el('div',undefined,'issue-answer');
       answer.append(el('p',`답변 · ${i.answered_by_name||''} · ${i.answered_at?new Date(i.answered_at).toLocaleString():''}`,'small muted'),renderMarkdown(i.answer,'vector-content'));
@@ -107,6 +189,18 @@ async function issuesPage() {
       actions.append(btn('다시 열기',async()=>{await tool('update_issue',{project_id:i.project_id,issue_id:i.id,status:'open'});notify('다시 열었습니다.');await refresh();}));
       if (i.status==='resolved'&&i.answer) actions.append(btn(i.knowledge_document_id?'지식 문서 갱신':'지식 문서로 저장',async()=>{await tool('update_issue',{project_id:i.project_id,issue_id:i.id,publish_answer:true});notify('지식 문서에 저장했습니다.');await refresh();}));
     }
+    const addImages=el('input');addImages.type='file';addImages.multiple=true;addImages.accept=issueImageTypes.join(',');addImages.hidden=true;
+    addImages.addEventListener('change',async()=>{
+      const picked=[...addImages.files];addImages.value='';
+      const bad=picked.find(f=>!issueImageTypes.includes(f.type)||f.size<1||f.size>issueImageMaxBytes);
+      if (bad) { notify(`${bad.name}: 10MB 이하 PNG·JPG·GIF·WEBP 이미지만 첨부할 수 있습니다.`,true); return; }
+      if (picked.length>issueImageMaxCount) { notify(`한 번에 최대 ${issueImageMaxCount}장까지 올릴 수 있습니다.`,true); return; }
+      notify('사진을 올리는 중…');
+      const failed=await uploadIssueImages(i.project_id,i.id,picked);
+      if (failed.length) notify('일부 사진을 올리지 못했습니다: '+failed.join(', '),true); else notify('사진을 첨부했습니다.');
+      i.attachment_count=(i.attachment_count||0)+picked.length-failed.length;await loadImages();
+    });
+    actions.append(btn('사진 추가',()=>addImages.click()),addImages);
     if (i.status==='open') actions.append(btn(i.blocking?'보류 해제':'작업 보류로 표시',async()=>{await tool('update_issue',{project_id:i.project_id,issue_id:i.id,blocking:!i.blocking});await refresh();}));
     c.append(label,actions);
     return c;
@@ -122,6 +216,7 @@ async function issuesPage() {
     selectField(f,'종류','kind',[['question','질의 — 담당자에게 확인할 내용'],['issue','이슈 — 문제·결함·리스크']]);
     const t=field(f,'제목','title');t.maxLength=200;
     const bl=el('label','내용 (배경, 확인할 점, 검토한 선택지)'),body=el('textarea');body.name='body';body.rows=5;body.required=true;body.maxLength=20000;bl.append(body);f.append(bl);
+    const images=issueImagePicker(body);f.append(images.node);
     selectField(f,'공통 작업 영역 (선택하면 담당자가 자동 지정)','area_id',[['','없음'],...areas.map(a=>[a.id,`${a.name} — ${a.owner_name}`])]);
     selectField(f,'담당자 (비우면 영역 담당자)','assignee_id',memberOptions('자동 / 미지정'));
     const tags=field(f,'태그 (쉼표로 구분, 선택)','tags');tags.required=false;
@@ -131,7 +226,15 @@ async function issuesPage() {
       if (d.area_id) input.area_id=d.area_id;
       if (d.assignee_id) input.assignee_id=d.assignee_id;
       const tagList=(d.tags||'').split(',').map(s=>s.trim()).filter(Boolean);if(tagList.length)input.tags=tagList;
-      await tool('create_issue',input);f.reset();notify('등록했습니다.');await loadProject();
+      const issue=await tool('create_issue',input);
+      const picked=images.files();
+      if (picked.length) {
+        notify('등록했습니다. 사진을 올리는 중…');
+        const failed=await uploadIssueImages(issue.project_id,issue.id,picked);
+        if (failed.length) notify('등록했지만 일부 사진을 올리지 못했습니다. 카드의 "사진 추가"로 다시 올려 주세요: '+failed.join(', '),true);
+        else notify(`등록하고 사진 ${picked.length}장을 첨부했습니다.`);
+      } else notify('등록했습니다.');
+      f.reset();images.clear();await loadProject();
     });
     createCard.append(f);
   }

@@ -43,6 +43,15 @@ func (m *memoryObjects) Put(_ context.Context, key, _ string, r io.ReadSeeker, _
 func (m *memoryObjects) DownloadURL(_ context.Context, key, _ string) (string, error) {
 	return "https://files.example.com/" + key + "?signature=private", nil
 }
+func (m *memoryObjects) Get(_ context.Context, key string) (io.ReadCloser, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	b, ok := m.files[key]
+	if !ok {
+		return nil, fmt.Errorf("missing object")
+	}
+	return io.NopCloser(bytes.NewReader(b)), nil
+}
 func (m *memoryObjects) Delete(_ context.Context, key string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

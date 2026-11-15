@@ -48,6 +48,7 @@ func NewApp(s *Store, c Config) (*App, error) {
 func (a *App) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("PUT /api/attachments/{id}/content", a.attachmentUpload)
+	mux.HandleFunc("GET /api/attachments/{id}/image", a.attachmentImage)
 	a.sessionRoute(mux, "GET /api/attachments/storage", a.attachmentStorage)
 	mux.HandleFunc("GET /api/projects/{id}/export", a.projectExport)
 	mux.HandleFunc("POST /api/projects/{id}/import", a.projectImport)
@@ -309,7 +310,7 @@ func (a *App) Handler() http.Handler {
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.Header().Set("Cache-Control", "no-store")
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; img-src 'self' blob:; script-src 'self'; style-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
 		if a.secure {
 			w.Header().Set("Strict-Transport-Security", "max-age=31536000")
 		}

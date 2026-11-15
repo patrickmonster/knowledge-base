@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"os"
 	"strings"
 	"time"
@@ -23,11 +24,45 @@ const MaxAttachmentBytes int64 = 25 << 20
 // envelope under the 1 MiB request body limit.
 const MaxAttachmentChunkBytes = 512 << 10
 
+// MaxIssueImageBytes caps one image attached to a question or issue.
+const MaxIssueImageBytes int64 = 10 << 20
+
+// issueImageTypes are the raster formats accepted for issue images, keyed by the
+// type http.DetectContentType reports. SVG is excluded because it can carry script.
+var issueImageTypes = map[string]bool{"image/png": true, "image/jpeg": true, "image/gif": true, "image/webp": true}
+
+func issueImageFilename(name string) bool {
+	i := strings.LastIndexByte(name, '.')
+	if i < 0 {
+		return false
+	}
+	switch strings.ToLower(name[i+1:]) {
+	case "png", "jpg", "jpeg", "gif", "webp":
+		return true
+	}
+	return false
+}
+
+// sniffImage reports the raster image type of the first bytes of r, or "".
+func sniffImage(r io.Reader) (string, error) {
+	head := make([]byte, 512)
+	n, err := io.ReadFull(r, head)
+	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) && !errors.Is(err, io.EOF) {
+		return "", err
+	}
+	t := http.DetectContentType(head[:n])
+	if !issueImageTypes[t] {
+		return "", nil
+	}
+	return t, nil
+}
+
 type Attachment struct {
 	ID               string  `json:"id"`
 	ProjectID        string  `json:"project_id"`
 	DocumentID       *string `json:"document_id"`
 	DocumentRevision *int    `json:"document_revision"`
+	IssueID          *string `json:"issue_id"`
 	Filename         string  `json:"filename"`
 	SizeBytes        int64   `json:"size_bytes"`
 	SHA256           *string `json:"sha256"`
@@ -45,6 +80,7 @@ type Attachment struct {
 type PrepareAttachmentInput struct {
 	ProjectID  string `json:"project_id"`
 	DocumentID string `json:"document_id,omitempty"`
+	IssueID    string `json:"issue_id,omitempty" jsonschema:"Attach an image (png, jpg, gif or webp, at most 10 MiB) to this question or issue instead of a document"`
 	Filename   string `json:"filename"`
 	SizeBytes  int64  `json:"size_bytes" jsonschema:"File size in bytes, from 1 to 26214400"`
 }
@@ -61,6 +97,7 @@ type UploadAttachmentChunkInput struct {
 type ListAttachmentsInput struct {
 	ProjectID  string `json:"project_id"`
 	DocumentID string `json:"document_id,omitempty"`
+	IssueID    string `json:"issue_id,omitempty"`
 	PageInput
 }
 
@@ -72,7 +109,7 @@ func (s *Store) requireBucket() error {
 }
 func attachmentKey(projectID, id string) string { return "attachments/" + projectID + "/" + id }
 func registerAttachmentTools(t Tools, s *Store) {
-	add(t, s, "prepare_attachment_upload", "Reserve a private file (max 25 MiB) for a file the user attached or that you produced (for example an .xlsx summary). Then PUT the raw bytes with Content-Type application/octet-stream to upload_url (one-time, 1 hour, no Authorization header; e.g. curl --fail-with-body -T <file> -H 'Content-Type: application/octet-stream' '<upload_url>'), or to upload_path with the same Bearer key. Prefer the PUT. Only if your network cannot reach upload_url, send the bytes with upload_attachment_chunk instead (base64, costly for large files). Confirm status ready with the PUT response or list_attachments. Text of .pdf, .docx and .xlsx files is extracted on upload into an artifact document (text_status, text_document_id) that search indexes; scanned PDFs need OCR and stay empty. Other files are not indexed. Still save a knowledge document summarizing the file's purpose and key points and pass its document_id.", true, func(in PrepareAttachmentInput) string { return in.ProjectID }, func(ctx context.Context, tx *sql.Tx, a Identity, in PrepareAttachmentInput) (any, error) {
+	add(t, s, "prepare_attachment_upload", "Reserve a private file (max 25 MiB) for a file the user attached or that you produced (for example an .xlsx summary). Then PUT the raw bytes with Content-Type application/octet-stream to upload_url (one-time, 1 hour, no Authorization header; e.g. curl --fail-with-body -T <file> -H 'Content-Type: application/octet-stream' '<upload_url>'), or to upload_path with the same Bearer key. Prefer the PUT. Only if your network cannot reach upload_url, send the bytes with upload_attachment_chunk instead (base64, costly for large files). Confirm status ready with the PUT response or list_attachments. Text of .pdf, .docx and .xlsx files is extracted on upload into an artifact document (text_status, text_document_id) that search indexes; scanned PDFs need OCR and stay empty. Other files are not indexed. Still save a knowledge document summarizing the file's purpose and key points and pass its document_id. To attach a screenshot or photo to a question or issue, pass issue_id instead (png, jpg, gif or webp, at most 10 MiB; the content must be that image type).", true, func(in PrepareAttachmentInput) string { return in.ProjectID }, func(ctx context.Context, tx *sql.Tx, a Identity, in PrepareAttachmentInput) (any, error) {
 		if _, err := projectAccess(ctx, tx, a.User.ID, in.ProjectID, true); err != nil {
 			return nil, err
 		}
@@ -87,6 +124,17 @@ func registerAttachmentTools(t Tools, s *Store) {
 		}
 		if !s.AllowExecutables && blockedFilename(in.Filename) {
 			return nil, problem("BLOCKED_FILE", "Executable and script files cannot be attached. Compress or rename only if the file is safe documentation.")
+		}
+		if in.IssueID != "" {
+			if in.DocumentID != "" {
+				return nil, problem("INVALID_INPUT", "Link a file to either a document or an issue, not both.")
+			}
+			if err := belongsToProject(ctx, tx, "issues", in.IssueID, in.ProjectID); err != nil {
+				return nil, err
+			}
+			if !issueImageFilename(in.Filename) || in.SizeBytes > MaxIssueImageBytes {
+				return nil, problem("INVALID_INPUT", "Issue attachments must be png, jpg, gif or webp images of at most 10 MiB.")
+			}
 		}
 		if err := s.reserveQuota(ctx, tx, in.ProjectID, in.SizeBytes); err != nil {
 			return nil, err
@@ -111,7 +159,7 @@ func registerAttachmentTools(t Tools, s *Store) {
 			raw := "kbu_" + token()
 			uploadToken, tokenHash, keyID = raw, digest(raw), a.KeyID
 		}
-		f, err := one[Attachment](ctx, tx, `WITH a AS (INSERT INTO attachments(id,project_id,document_id,document_revision,filename,size_bytes,object_key,created_by,upload_token_hash,upload_key_id) VALUES($1,$2,NULLIF($3,'')::uuid,$4,$5,$6,$7,$8,$9,$10::uuid) RETURNING *) SELECT to_jsonb(a)-'object_key'-'upload_token_hash'-'upload_key_id' FROM a`, id, in.ProjectID, in.DocumentID, revision, in.Filename, in.SizeBytes, attachmentKey(in.ProjectID, id), a.User.ID, tokenHash, keyID)
+		f, err := one[Attachment](ctx, tx, `WITH a AS (INSERT INTO attachments(id,project_id,document_id,document_revision,filename,size_bytes,object_key,created_by,upload_token_hash,upload_key_id,issue_id) VALUES($1,$2,NULLIF($3,'')::uuid,$4,$5,$6,$7,$8,$9,$10::uuid,NULLIF($11,'')::uuid) RETURNING *) SELECT to_jsonb(a)-'object_key'-'upload_token_hash'-'upload_key_id' FROM a`, id, in.ProjectID, in.DocumentID, revision, in.Filename, in.SizeBytes, attachmentKey(in.ProjectID, id), a.User.ID, tokenHash, keyID, in.IssueID)
 		path := "/api/attachments/" + id + "/content?project_id=" + in.ProjectID
 		out := map[string]any{"id": id, "attachment": f, "upload_path": path, "method": "PUT", "content_type": "application/octet-stream", "expires_in_seconds": 3600, "max_chunk_bytes": MaxAttachmentChunkBytes}
 		if uploadToken != nil {
@@ -127,7 +175,7 @@ func registerAttachmentTools(t Tools, s *Store) {
 		}
 		return s.attachmentUsage(ctx, tx, in.ProjectID)
 	})
-	add(t, s, "list_attachments", "List project files and upload status. Optional document_id filters files linked to that document.", false, func(in ListAttachmentsInput) string { return in.ProjectID }, func(ctx context.Context, tx *sql.Tx, a Identity, in ListAttachmentsInput) (any, error) {
+	add(t, s, "list_attachments", "List project files and upload status. Optional document_id or issue_id filters files linked to that document or issue.", false, func(in ListAttachmentsInput) string { return in.ProjectID }, func(ctx context.Context, tx *sql.Tx, a Identity, in ListAttachmentsInput) (any, error) {
 		if _, err := projectAccess(ctx, tx, a.User.ID, in.ProjectID, false); err != nil {
 			return nil, err
 		}
@@ -135,12 +183,14 @@ func registerAttachmentTools(t Tools, s *Store) {
 		if err != nil {
 			return nil, err
 		}
-		if in.DocumentID != "" {
-			if err := validID(in.DocumentID); err != nil {
-				return nil, err
+		for _, id := range []string{in.DocumentID, in.IssueID} {
+			if id != "" {
+				if err := validID(id); err != nil {
+					return nil, err
+				}
 			}
 		}
-		return many[Attachment](ctx, tx, `SELECT to_jsonb(a)-'object_key' FROM attachments a WHERE project_id=$1 AND status<>'deleting' AND ($2='' OR document_id=NULLIF($2,'')::uuid) ORDER BY created_at DESC,id LIMIT $3 OFFSET $4`, in.ProjectID, in.DocumentID, limit, in.Offset)
+		return many[Attachment](ctx, tx, `SELECT to_jsonb(a)-'object_key'-'upload_token_hash'-'upload_key_id' FROM attachments a WHERE project_id=$1 AND status<>'deleting' AND ($2='' OR document_id=NULLIF($2,'')::uuid) AND ($5='' OR issue_id=NULLIF($5,'')::uuid) ORDER BY created_at DESC,id LIMIT $3 OFFSET $4`, in.ProjectID, in.DocumentID, limit, in.Offset, in.IssueID)
 	})
 	add(t, s, "get_attachment_download", "Issue a private download link valid for 5 minutes. Anyone with the link can use it until expiry; do not save it in knowledge documents.", false, func(in AttachmentInput) string { return in.ProjectID }, func(ctx context.Context, tx *sql.Tx, a Identity, in AttachmentInput) (any, error) {
 		f, err := readAttachment(ctx, tx, a, in, false)
@@ -240,6 +290,19 @@ func (s *Store) UploadAttachment(ctx context.Context, a Identity, in AttachmentI
 	}
 	if _, err = file.Seek(0, io.SeekStart); err != nil {
 		return nil, err
+	}
+	if f.IssueID != nil {
+		// Issue images are shown inline, so the bytes must match an allowed raster type.
+		kind, err := sniffImage(file)
+		if err != nil {
+			return nil, err
+		}
+		if kind == "" {
+			return nil, problem("INVALID_INPUT", "Issue attachments must be png, jpg, gif or webp images.")
+		}
+		if _, err = file.Seek(0, io.SeekStart); err != nil {
+			return nil, err
+		}
 	}
 	if err = s.screenUpload(ctx, a, in, f, file); err != nil {
 		return nil, err
