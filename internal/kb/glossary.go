@@ -87,7 +87,8 @@ func hasHangul(s string) bool {
 
 // mentions reports whether normalized query q contains normalized term t.
 // Korean terms match as substrings (particles attach directly: 결제를);
-// other terms must stand alone so "pg" does not match "upgrade".
+// other terms must stand alone so "pg" does not match "upgrade", except that
+// a Korean particle may follow them directly ("task run이", "PG를").
 func mentions(q, t string) bool {
 	if utf8.RuneCountInString(t) < 2 {
 		return false
@@ -103,7 +104,7 @@ func mentions(q, t string) bool {
 		i += start
 		before, _ := utf8.DecodeLastRuneInString(q[:i])
 		after, _ := utf8.DecodeRuneInString(q[i+len(t):])
-		if !isWordRune(before) && !isWordRune(after) {
+		if !isWordRune(before) && (!isWordRune(after) || unicode.Is(unicode.Hangul, after)) {
 			return true
 		}
 		start = i + 1

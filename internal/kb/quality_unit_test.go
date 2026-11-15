@@ -41,6 +41,18 @@ func TestExpandWithGlossary(t *testing.T) {
 	if got := expandWithGlossary("결제 upgrade", groups); !reflect.DeepEqual(got, []string{"payment", "PG"}) {
 		t.Fatalf("dedupe ignored word boundaries: %v", got)
 	}
+	// A Korean particle may follow a Latin term directly.
+	if got := expandWithGlossary("PG를 바꾸는 방법", groups); !reflect.DeepEqual(got, []string{"결제", "payment"}) {
+		t.Fatalf("latin term with korean particle: %v", got)
+	}
+	runs := [][]string{{"작업 실행", "task run", "task_run"}}
+	if got := expandWithGlossary("task run이 뭐야", runs); !reflect.DeepEqual(got, []string{"작업 실행", "task_run"}) {
+		t.Fatalf("multi-word latin term with particle: %v", got)
+	}
+	// Hangul before a Latin term is still not a boundary, and Latin letters after it never are.
+	if got := expandWithGlossary("새PG 또는 PGs", groups); len(got) != 0 {
+		t.Fatalf("latin term inside a word matched: %v", got)
+	}
 	if got := expandWithGlossary("배포 deploy", groups); len(got) != 0 {
 		t.Fatalf("terms already in the query were added: %v", got)
 	}
