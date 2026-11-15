@@ -102,3 +102,65 @@ func TestTodoTaskLink(t *testing.T) {
 		t.Fatalf("task after deleting its to-do: %+v", got)
 	}
 }
+
+func TestTodoIssueLink(t *testing.T) {
+	s := testStore(t)
+	tools := NewTools(s)
+	owner := loginAs(t, s, "admin@example.com")
+	editor := inviteAs(t, s, owner, "issue-link-editor@example.com")
+	viewer := inviteAs(t, s, owner, "issue-link-viewer@example.com")
+	p := mustCall(t, tools, owner, "create_project", CreateProjectInput{Slug: "todo-issues", Name: "todo issues"}).(Project)
+	mustCall(t, tools, owner, "set_project_member", MemberInput{ProjectID: p.ID, UserID: editor.User.ID, Role: "editor"})
+	mustCall(t, tools, owner, "set_project_member", MemberInput{ProjectID: p.ID, UserID: viewer.User.ID, Role: "viewer"})
+	todo := mustCall(t, tools, editor, "save_todo", SaveTodoInput{ProjectID: p.ID, Title: "정산 화면"}).(Todo)
+	other := mustCall(t, tools, editor, "save_todo", SaveTodoInput{ProjectID: p.ID, Title: "다른 일"}).(Todo)
+
+	// todo_id on create_issue; a question raised from a linked task inherits its to-do.
+	direct := mustCall(t, tools, editor, "create_issue", CreateIssueInput{ProjectID: p.ID, Title: "정산 기준일", Body: "언제 기준인가요?", TodoID: todo.ID, Blocking: true}).(Issue)
+	if direct.TodoID == nil || *direct.TodoID != todo.ID || direct.Todo == nil || direct.Todo.Title != todo.Title {
+		t.Fatalf("direct link: %+v", direct)
+	}
+	run := mustCall(t, tools, editor, "start_task", StartTaskInput{ProjectID: p.ID, RequestKey: "issue-1", Title: "정산", Task: "정산 화면", TodoID: todo.ID}).(StartTaskResult).Run
+	if l := run.Context.Todos.Linked; l == nil || l.OpenIssues != 1 || l.BlockingIssues != 1 {
+		t.Fatalf("linked to-do issue counts: %+v", run.Context.Todos.Linked)
+	}
+	inherited := mustCall(t, tools, editor, "create_issue", CreateIssueInput{ProjectID: p.ID, Title: "환율", Body: "어느 환율?", TaskID: run.ID}).(Issue)
+	if inherited.TodoID == nil || *inherited.TodoID != todo.ID {
+		t.Fatalf("inherited link: %+v", inherited)
+	}
+	plain := mustCall(t, tools, editor, "create_issue", CreateIssueInput{ProjectID: p.ID, Title: "무관", Body: "무관한 질의"}).(Issue)
+	_, err := call(t, tools, editor, "create_issue", CreateIssueInput{ProjectID: p.ID, Title: "x", Body: "x", TodoID: "00000000-0000-4000-8000-000000000000"})
+	denied(t, err, "INVALID_INPUT")
+
+	// link_issue_todo: editors link, move and unlink; viewers cannot.
+	_, err = call(t, tools, viewer, "link_issue_todo", LinkIssueTodoInput{ProjectID: p.ID, IssueID: plain.ID, TodoID: todo.ID})
+	denied(t, err, "FORBIDDEN")
+	linked := mustCall(t, tools, editor, "link_issue_todo", LinkIssueTodoInput{ProjectID: p.ID, IssueID: plain.ID, TodoID: other.ID}).(Issue)
+	if linked.Todo == nil || linked.Todo.ID != other.ID {
+		t.Fatalf("linked: %+v", linked)
+	}
+	if un := mustCall(t, tools, editor, "link_issue_todo", LinkIssueTodoInput{ProjectID: p.ID, IssueID: plain.ID}).(Issue); un.TodoID != nil || un.Todo != nil {
+		t.Fatalf("unlinked: %+v", un)
+	}
+
+	// Board counts and the list filter.
+	board := mustCall(t, tools, viewer, "list_todos", ListTodosInput{ProjectID: p.ID, Status: "in_progress"}).([]Todo)
+	if len(board) != 1 || board[0].OpenIssueCount != 2 || board[0].BlockingIssueCount != 1 {
+		t.Fatalf("board counts: %+v", board)
+	}
+	if got := mustCall(t, tools, viewer, "list_issues", IssueListInput{ProjectID: p.ID, TodoID: todo.ID, Status: "all"}).([]Issue); len(got) != 2 {
+		t.Fatalf("issues by to-do: %+v", got)
+	}
+	mustCall(t, tools, editor, "update_issue", UpdateIssueInput{ProjectID: p.ID, IssueID: direct.ID, Status: "resolved"})
+	board = mustCall(t, tools, viewer, "list_todos", ListTodosInput{ProjectID: p.ID, Status: "in_progress"}).([]Todo)
+	if board[0].OpenIssueCount != 1 || board[0].BlockingIssueCount != 0 {
+		t.Fatalf("counts after resolving: %+v", board[0])
+	}
+
+	// Deleting the to-do keeps its questions.
+	mustCall(t, tools, editor, "delete_todo", TodoRef{ProjectID: p.ID, TodoID: todo.ID})
+	kept := mustCall(t, tools, editor, "get_issue", IssueRef{ProjectID: p.ID, IssueID: inherited.ID}).(Issue)
+	if kept.TodoID != nil || kept.Todo != nil {
+		t.Fatalf("issue after deleting its to-do: %+v", kept)
+	}
+}

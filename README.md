@@ -18,7 +18,7 @@ Go로 만든 팀 공용 지식 서버입니다. 프로젝트별 기획·결정·
 - 한국어 키워드 검색과 의미 검색을 결합한 하이브리드 검색
 - 문서 저장·수정 시 자동 임베딩 대기열, 실패 재시도·상태 조회·소유자 재색인
 - 이슈·질의 베이스: 공통 작업 영역과 담당자, 질의·이슈 등록·답변·해결, 작업 시작 시 관련 질의 표시, 질의응답의 지식 문서화, GitHub 저장소 이슈 가져오기([안내](docs/issues.md#github-이슈-가져오기))
-- 할 일 보드([안내](docs/todos.md)): 프로젝트 할 일을 상태(시작 전·진행 중·완료·아이디어) 열과 우선순위(높음·보통·낮음) 행으로 보는 웹 보드, 분류·진행률·담당자·마감일, 드래그로 이동, AI도 MCP로 추가·이동, 진행 중 작업과 연결해 시작·완료·PR 병합에 따라 자동 이동
+- 할 일 보드([안내](docs/todos.md)): 프로젝트 할 일을 상태(시작 전·진행 중·완료·아이디어) 열과 우선순위(높음·보통·낮음) 행으로 보는 웹 보드, 분류·진행률·담당자·마감일, 드래그로 이동, AI도 MCP로 추가·이동, 진행 중 작업과 연결해 시작·완료·PR 병합에 따라 자동 이동, 질의·이슈를 연결해 카드에 질의·보류 수 표시
 - 팀 확산([안내](docs/team-rollout.md)): 이슈 담당자 알림(웹훅·Slack·이메일), 웹 문서 관계 보기·편집, 문서 버전 비교, 검토 대기 사이드바 배지, 공통 작업 영역 삭제·정리, 다른 저장소용 AGENTS.md 생성, 프로젝트 내보내기·가져오기(JSON·Markdown)
 - 작업 PR 병합·배포 자동 기록: `finish_task`에 남긴 PR을 GitHub에서 확인해 병합·배포(서버 자신의 저장소)되면 history에 상태 갱신 블록 추가, 미기록 PR은 작업 시작 맥락에 표시
 - 지식 품질과 AI 작업 흐름: 중복·충돌 결정 감지, 재확인 담당자·주기 요약, start_task 맥락 활용도 피드백과 검색 품질 지표, finish_task 결정 후보 추출, 오래 열린 작업 정리, 용어집(glossary)과 검색 동의어 확장([안내](docs/knowledge-quality.md))
@@ -149,6 +149,7 @@ Authorization: Bearer <발급받은 MCP 키>
 | `answer_issue`, `comment_issue`, `update_issue` | 답변·댓글·해결/닫기/다시 열기, 질의응답 지식 문서화(`publish_answer`) |
 | `import_github_issues` | GitHub 저장소 이슈를 질의·이슈로 가져오기(단방향, 다시 가져오면 갱신). 서버 `GITHUB_TOKEN`(선택)·`GITHUB_API_URL`(선택, GitHub Enterprise). 이후 변경은 웹 콘솔의 GitHub 웹훅(`/api/github/webhooks/<id>`, `WEBHOOK_ENCRYPTION_KEY`)으로 자동 반영 |
 | `list_todos`, `save_todo`, `move_todo`, `delete_todo` | 할 일 보드 조회(상태·우선순위·분류·담당자 필터, 연결 작업 수·PR 상태 포함)·추가·수정(`expected_revision`)·칸 이동(`before_id`)·삭제. 쓰기는 편집자 이상 |
+| `link_issue_todo` | 질의·이슈를 할 일에 연결·해제(편집자 이상). `create_issue`의 `todo_id`로도 연결하고, `task_id`만 넘기면 그 작업의 할 일을 따른다([안내](docs/todos.md#이슈질의와-연결)) |
 | `link_task_todo` | 열린 작업을 할 일에 연결·해제. `start_task`의 `todo_id`와 같이 할 일을 진행 중으로 옮기고, 작업 완료·PR 병합 때 완료로 옮긴다([안내](docs/todos.md#진행-중-작업과-연결)) |
 | `get_usage_stats` | 프로젝트 사용 통계(최근 1~365일, 기본 30일, 한국 시간 일 단위): 합계·일별 추이·종류별 증가·결과 0건 검색어·검색 시간·상위 도구·사용자·열람 문서·보유 현황 |
 

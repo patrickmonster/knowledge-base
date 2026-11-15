@@ -156,12 +156,35 @@ async function todosPage(){
 // Linked AI tasks (start_task todo_id / link_task_todo) and their latest pull request.
 const todoPRLabels={unknown:'확인 전',open:'PR 열림',closed:'PR 닫힘',merged:'PR 병합',deployed:'PR 배포'};
 function todoLinkPills(t){
-  if(!t.task_count)return null;
+  if(!t.task_count&&!t.open_issue_count)return null;
   const row=el('div',undefined,'todo-links');
-  row.append(el('span',`작업 ${t.task_count}`+(t.open_task_count?` · 진행 중 ${t.open_task_count}`:''),'todo-link-pill'+(t.open_task_count?' active':'')));
+  if(t.task_count)row.append(el('span',`작업 ${t.task_count}`+(t.open_task_count?` · 진행 중 ${t.open_task_count}`:''),'todo-link-pill'+(t.open_task_count?' active':'')));
   const pr=(t.pull_requests||[])[0];
   if(pr)row.append(el('span',`#${pr.number} ${todoPRLabels[pr.state]||pr.state}`,'todo-link-pill pr-'+pr.state));
+  if(t.open_issue_count)row.append(el('span',`질의 ${t.open_issue_count}`,'todo-link-pill issue'));
+  if(t.blocking_issue_count)row.append(el('span',`보류 ${t.blocking_issue_count}`,'todo-link-pill blocking'));
   return row;
+}
+
+// Questions and issues linked to a to-do, shown in its dialog.
+async function todoIssuesSection(project,t){
+  const box=el('section',undefined,'todo-tasks');
+  box.append(el('h3','연결된 질의·이슈'));
+  const list=el('ul');box.append(list);list.append(el('li','불러오는 중…','muted'));
+  try{
+    const issues=await tool('list_issues',{project_id:project.id,todo_id:t.id,status:'all',limit:30});
+    if(!issues.length){list.replaceWith(el('p','연결된 질의·이슈가 없습니다. 이슈·질의 화면에서 “할 일 연결”로 붙이거나, 작업 중에 남긴 질의는 그 작업의 할 일에 자동으로 연결됩니다.','small muted'));return box;}
+    list.replaceChildren(...issues.map(i=>{
+      const li=el('li');
+      li.append(el('span',issueStatusLabels[i.status]||i.status,'pill issue-'+i.status));
+      if(i.blocking&&i.status==='open')li.append(document.createTextNode(' '),el('span','작업 보류','pill error'));
+      li.append(document.createTextNode(` ${issueKindLabels[i.kind]||i.kind} · ${i.title} `),el('span',`담당 ${i.assignee_name||'미지정'}`,'small muted'));
+      return li;
+    }));
+  }catch(e){list.replaceChildren(el('li',e.message,'muted'));}
+  const go=btn('이슈 · 질의 화면으로',()=>{document.querySelector('.todo-dialog')?.close();render('issues');});
+  box.append(go);
+  return box;
 }
 
 // The tasks linked to a to-do, shown in its dialog.
@@ -207,7 +230,7 @@ function todoDialog(parent,project,ctx,t){
   if(editing){
     form.append(el('p',`${t.created_by_name||''} 작성 · ${new Date(t.updated_at).toLocaleString()} 수정`,'small muted'));
     const slot=el('div');form.append(slot);
-    todoTasksSection(project,t).then(s=>slot.replaceWith(s));
+    Promise.all([todoTasksSection(project,t),todoIssuesSection(project,t)]).then(s=>slot.replaceWith(...s));
   }
   const actions=el('div',undefined,'actions review-dialog-actions');
   const close=btn('닫기',()=>dialog.close(),'secondary');
