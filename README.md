@@ -21,7 +21,7 @@ Go로 만든 팀 공용 지식 서버입니다. 프로젝트별 기획·결정·
 - 팀 확산([안내](docs/team-rollout.md)): 이슈 담당자 알림(웹훅·Slack·이메일), 웹 문서 관계 보기·편집, 문서 버전 비교, 검토 대기 사이드바 배지, 공통 작업 영역 삭제·정리, 다른 저장소용 AGENTS.md 생성, 프로젝트 내보내기·가져오기(JSON·Markdown)
 - 작업 PR 병합·배포 자동 기록: `finish_task`에 남긴 PR을 GitHub에서 확인해 병합·배포(서버 자신의 저장소)되면 history에 상태 갱신 블록 추가, 미기록 PR은 작업 시작 맥락에 표시
 - 지식 품질과 AI 작업 흐름: 중복·충돌 결정 감지, 재확인 담당자·주기 요약, start_task 맥락 활용도 피드백과 검색 품질 지표, finish_task 결정 후보 추출, 오래 열린 작업 정리, 용어집(glossary)과 검색 동의어 확장([안내](docs/knowledge-quality.md))
-- 사용 통계 대시보드: 프로젝트별 도구 호출·활성 사용자·검색·문서 열람·작성·작업 수의 일별 추이, 문서 종류별 증가 추이, 결과 0건 검색어, 많이 쓴 도구·활동 사용자·많이 열람한 문서, 보유 현황, 검색 품질(`get_usage_stats`, 웹 '사용 통계')
+- 사용 통계 대시보드: 프로젝트별 도구 호출·활성 사용자·검색·문서 열람·작성·작업 수의 일별 추이, 문서 종류별 증가 추이, 결과 0건 검색어, 검색 방식별 검색 시간(HNSW 도입 판단용), 많이 쓴 도구·활동 사용자·많이 열람한 문서, 보유 현황, 검색 품질(`get_usage_stats`, 웹 '사용 통계')
 - 공식 Go MCP SDK 기반 Streamable HTTP `/mcp`
 - Railway용 Dockerfile, 배포 전 마이그레이션, `/healthz`, 배포 커밋·스키마 버전 확인 `/version`
 
@@ -147,7 +147,7 @@ Authorization: Bearer <발급받은 MCP 키>
 | `create_issue`, `list_issues`, `get_issue` | 질의·이슈 등록·목록(상태·담당자·검색어 필터)·상세 |
 | `answer_issue`, `comment_issue`, `update_issue` | 답변·댓글·해결/닫기/다시 열기, 질의응답 지식 문서화(`publish_answer`) |
 | `import_github_issues` | GitHub 저장소 이슈를 질의·이슈로 가져오기(단방향, 다시 가져오면 갱신). 서버 `GITHUB_TOKEN`(선택)·`GITHUB_API_URL`(선택, GitHub Enterprise). 이후 변경은 웹 콘솔의 GitHub 웹훅(`/api/github/webhooks/<id>`, `WEBHOOK_ENCRYPTION_KEY`)으로 자동 반영 |
-| `get_usage_stats` | 프로젝트 사용 통계(최근 1~365일, 기본 30일, 한국 시간 일 단위): 합계·일별 추이·종류별 증가·결과 0건 검색어·상위 도구·사용자·열람 문서·보유 현황 |
+| `get_usage_stats` | 프로젝트 사용 통계(최근 1~365일, 기본 30일, 한국 시간 일 단위): 합계·일별 추이·종류별 증가·결과 0건 검색어·검색 시간·상위 도구·사용자·열람 문서·보유 현황 |
 
 문서 종류는 `brief`, `decision`, `history`, `artifact`, `reference`입니다. 상태는 `draft`, `active`, `archived`이고 기본 검색에는 활성 문서의 최신 버전만 포함됩니다. `update_document`는 `expected_revision`과 수정 이유 `reason`이 필요합니다. 충돌하면 최신 내용을 읽고 변경을 병합해야 합니다.
 
@@ -262,7 +262,7 @@ npm --prefix .railway run setup -- --project your-team-knowledge --repo your-org
 | `REVISION_RETENTION_DAYS` | `0`(무기한). 지정 시 30~3650일. 이보다 오래된 문서 이전 버전 삭제 |
 | `REVISION_KEEP_LATEST` | `20`(1~1000). 기간이 지나도 문서마다 최신 N개 버전은 유지 |
 
-결과 0건 검색어(`search_misses`)는 위 변수와 별도로 최대 365일(감사 로그 기간이 더 짧으면 그 기간)이 지나면 매시간 정리합니다.
+결과 0건 검색어(`search_misses`)와 검색 시간 표본(`search_timings`)은 위 변수와 별도로 최대 365일(감사 로그 기간이 더 짧으면 그 기간)이 지나면 매시간 정리합니다.
 
 - 문서의 현재 버전, 최신 `REVISION_KEEP_LATEST`개 버전, 첨부 파일이 연결된 버전은 삭제하지 않습니다. 삭제된 버전을 `get_document`의 `revision`으로 조회하면 `NOT_FOUND`입니다. 오래된 `start_task` 맥락이나 history에 남은 revision 번호도 조회되지 않을 수 있습니다.
 - 정리할 때마다 `retention_purge` 감사 이벤트에 삭제 건수와 적용 정책만 남깁니다(행위자 없음).

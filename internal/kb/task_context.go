@@ -16,7 +16,7 @@ func (s *Store) taskContext(ctx context.Context, tx *sql.Tx, a Identity, in Cont
 	if in.ExcerptBudget < 1000 || in.ExcerptBudget > 20000 {
 		return TaskContext{}, problem("INVALID_INPUT", "excerpt_budget must be 1000–20000 characters.")
 	}
-	results, err := s.searchCurrentKnowledge(ctx, tx, a, SearchInput{ProjectID: in.ProjectID, Query: in.Task, Limit: 8})
+	results, err := s.searchCurrentKnowledge(ctx, tx, a, SearchInput{ProjectID: in.ProjectID, Query: in.Task, Limit: 8}, searchSourceTask)
 	if err != nil {
 		return TaskContext{}, err
 	}

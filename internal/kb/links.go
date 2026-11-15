@@ -254,14 +254,19 @@ func demoteSuperseded(ctx context.Context, tx *sql.Tx, hits []SearchHit) ([]Sear
 }
 
 // searchCurrentKnowledge is searchKnowledge with superseded documents ranked
-// after current knowledge. search_knowledge and task context use it.
-func (s *Store) searchCurrentKnowledge(ctx context.Context, tx *sql.Tx, a Identity, in SearchInput) (SearchResult, error) {
+// after current knowledge. search_knowledge and task context use it; source
+// names the caller in search_timings.
+func (s *Store) searchCurrentKnowledge(ctx context.Context, tx *sql.Tx, a Identity, in SearchInput, source string) (SearchResult, error) {
+	start := time.Now()
 	out, err := s.searchKnowledge(ctx, tx, a, in)
 	if err != nil {
 		return out, err
 	}
 	out.Hits, err = demoteSuperseded(ctx, tx, out.Hits)
 	markRecheck(out.Hits, time.Now())
+	if err == nil {
+		err = recordSearchTiming(ctx, tx, in.ProjectID, source, out, since(start))
+	}
 	if err == nil && len(out.Hits) == 0 {
 		err = recordSearchMiss(ctx, tx, in.ProjectID, in.Query, out.Retrieval)
 	}

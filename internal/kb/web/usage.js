@@ -28,7 +28,7 @@ async function usagePage(){
     const [stats,quality]=await Promise.all([tool('get_usage_stats',{project_id:current.id,days}),tool('get_retrieval_metrics',{project_id:current.id,days}).catch(()=>null)]);
     if(ticket!==generation)return;
     summary.textContent=`${current.name} · ${stats.from} ~ ${stats.to} (${stats.timezone}) · 통계를 조회한 이 요청은 집계에서 빠집니다.`;
-    body.replaceChildren(usageTiles(stats),usageTrends(stats),usageKindGrowth(stats),usageQuality(quality),usageSearchMisses(stats),usageTables(stats));
+    body.replaceChildren(usageTiles(stats),usageTrends(stats),usageKindGrowth(stats),usageQuality(quality),usageSearchMisses(stats),usageSearchLatency(stats),usageTables(stats));
   }
   await refresh();
   return root;
@@ -119,6 +119,15 @@ function usageSearchMisses(s){
   const c=card('결과 0건 검색어');
   c.append(el('p','search_knowledge에서 결과가 없던 검색어입니다. 공백·대소문자를 정리해 묶고, 검색한 사용자는 저장하지 않으며 최대 365일 보관합니다. 자주 나오면 문서를 쓰거나 용어집 동의어를 추가하세요.','small muted'));
   c.append(table(['검색어','횟수','마지막 검색'],(s.search_misses||[]).map(m=>[m.query,usageNumber(m.count),new Date(m.last_at).toLocaleString()])));
+  return c;
+}
+
+// 검색 시간: 정확(전수) 벡터 검색이 느려지는 시점을 보고 HNSW 도입을 판단한다.
+function usageSearchLatency(s){
+  const c=card('검색 시간');
+  c.append(el('p','search_knowledge와 작업 시작 맥락 검색의 단계별 시간(ms)입니다. 벡터 p95가 커지고 비교한 청크 수가 늘면 HNSW 인덱스 도입을 검토하세요. 검색어·사용자는 저장하지 않으며 결과 0건 검색어와 같은 기간 보관합니다.','small muted'));
+  const ms=v=>v==null?'—':usageNumber(v);
+  c.append(table(['검색 방식','횟수','p50','p95','최대','임베딩 평균','벡터 p95','키워드 평균','비교 청크(최대)','마지막 검색'],(s.search_latency||[]).map(l=>[l.retrieval,usageNumber(l.searches),ms(l.p50_ms),ms(l.p95_ms),ms(l.max_ms),ms(l.avg_embed_ms),ms(l.p95_vector_ms),ms(l.avg_lexical_ms),usageNumber(l.max_scanned_chunks),new Date(l.last_at).toLocaleString()])));
   return c;
 }
 
