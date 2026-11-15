@@ -4,9 +4,10 @@
 const webhookOutcomes={processed:'처리',ignored:'무시',duplicate:'중복',rejected:'거부',failed:'실패'};
 const webhookKinds={issue:'모두 이슈',question:'모두 질의',auto:'자동 — question 라벨이면 질의'};
 
-function webhookSecretDialog(hook,secretValue){
-  secret('GitHub 웹훅 연결 정보',`Payload URL: ${hook.payload_url}\nContent type: application/json\nSecret: ${secretValue}`,
-    `GitHub 저장소 ${hook.repository}의 Settings → Webhooks → Add webhook에 붙여 넣으세요. 이벤트는 "Let me select individual events"에서 Issues와 Pull requests를 고릅니다. Secret은 지금 한 번만 표시됩니다.`);
+// r is set_github_webhook's answer: webhook_id, payload_url and secret.
+function webhookSecretDialog(r){
+  secret('GitHub 웹훅 연결 정보',`Webhook ID: ${r.webhook_id}\nPayload URL: ${r.payload_url}\nContent type: application/json\nSecret: ${r.secret}`,
+    `GitHub 저장소 ${r.webhook.repository}의 Settings → Webhooks → Add webhook에 Payload URL과 Secret을 붙여 넣으세요. 이벤트는 "Let me select individual events"에서 Issues와 Pull requests를 고릅니다. 이 정보는 "연결 정보"에서 다시 볼 수 있습니다.`);
 }
 
 async function githubWebhookCard(project,{members=[],areas=[]}={}) {
@@ -16,7 +17,6 @@ async function githubWebhookCard(project,{members=[],areas=[]}={}) {
   let data;
   try { data=await tool('list_github_webhooks',{project_id:project.id}); }
   catch(e) { c.append(el('p',e.message,'muted')); return c; }
-  if (!data.available) c.append(el('p','서버에 WEBHOOK_ENCRYPTION_KEY(또는 MFA_ENCRYPTION_KEY)가 없어 웹훅을 만들거나 받을 수 없습니다. 관리자에게 설정을 요청하세요.','pill error'));
   c.append(el('p',data.token_configured?'서버에 GITHUB_TOKEN이 설정되어 있습니다.':'서버에 GITHUB_TOKEN이 없습니다. 웹훅 수신에는 필요 없지만, 비공개 저장소의 처음 가져오기와 누락 보정 확인에는 필요합니다.','small muted'));
   const owner=project.role==='owner';
   const areaName=id=>areas.find(a=>a.id===id)?.name, memberName=id=>members.find(m=>m.user_id===id)?.name;
@@ -30,6 +30,7 @@ async function githubWebhookCard(project,{members=[],areas=[]}={}) {
     if (h.track_pull_requests) sync.push('작업 PR 병합·닫힘');
     const last=el('div');
     last.append(el('div',h.last_delivery_at?`${webhookOutcomes[h.last_outcome]||h.last_outcome||''} · ${h.last_event||''} · ${new Date(h.last_delivery_at).toLocaleString()}`:'아직 받은 이벤트 없음'));
+    if (!h.secret_set) last.append(el('div','Secret이 없습니다. Secret 재발급 후 GitHub 설정을 바꾸세요.','pill error'));
     if (h.last_error) last.append(el('div',h.last_error,'pill error'));
     if (h.recent?.length) {
       const d=el('details');d.append(el('summary','최근 10건'));
@@ -39,17 +40,17 @@ async function githubWebhookCard(project,{members=[],areas=[]}={}) {
     }
     const actions=el('div',undefined,'actions');
     if (owner) {
+      if (h.secret_set) actions.append(btn('연결 정보',async()=>webhookSecretDialog(await tool('set_github_webhook',{project_id:project.id,webhook_id:h.id,show_secret:true}))));
       actions.append(btn(h.enabled?'끄기':'켜기',async()=>{await tool('set_github_webhook',{project_id:project.id,webhook_id:h.id,enabled:!h.enabled});await reload();}));
       actions.append(btn('Secret 재발급',async()=>{
         if(!confirm('Secret을 새로 만들면 GitHub에 등록된 기존 Secret으로 보낸 이벤트는 거부됩니다. GitHub 설정도 함께 바꿔야 합니다. 계속할까요?'))return;
-        const r=await tool('set_github_webhook',{project_id:project.id,webhook_id:h.id,rotate_secret:true});webhookSecretDialog(r.webhook,r.secret);await reload();
+        const r=await tool('set_github_webhook',{project_id:project.id,webhook_id:h.id,rotate_secret:true});webhookSecretDialog(r);await reload();
       }));
       actions.append(btn('삭제',async()=>{if(!confirm(`${h.repository} 웹훅을 삭제할까요? GitHub 저장소 설정의 웹훅도 지워 주세요.`))return;await tool('set_github_webhook',{project_id:project.id,webhook_id:h.id,remove:true});notify('삭제했습니다.');await reload();},'danger'));
     }
     return [repo,sync.join(' / ')||'—',last,actions];
   })));
   if (!owner) { c.append(el('p','GitHub 웹훅은 프로젝트 소유자가 관리합니다.','small muted')); return c; }
-  if (!data.available) return c;
   const f=el('form',undefined,'issue-form-grid');
   const repo=field(f,'저장소 (owner/name 또는 GitHub 주소)','repository');repo.placeholder='octocat/hello-world';repo.maxLength=200;
   const check=(label,name)=>{const l=el('label',undefined,'check'),i=el('input');i.type='checkbox';i.name=name;i.checked=true;l.append(i,document.createTextNode(label));f.append(l);return i;};
@@ -61,14 +62,14 @@ async function githubWebhookCard(project,{members=[],areas=[]}={}) {
   check('작업 기록의 PR 병합·닫힘 반영 (finish_task의 pull_requests)','track_pull_requests');
   const sync=()=>{for(const x of [kind,area,assignee,tags])x.parentElement.hidden=!issues.checked;};
   issues.addEventListener('change',sync);sync();
-  f.append(el('p','저장하면 Payload URL과 Secret을 한 번 보여 줍니다. 이벤트는 저장 시점의 내 권한으로 처리되며, 이후 내가 편집 권한을 잃으면 거부됩니다.','small muted'));
+  f.append(el('p','저장하면 Webhook ID·Payload URL·Secret을 보여 줍니다(이후 "연결 정보"에서 다시 볼 수 있습니다). 이벤트는 저장 시점의 내 권한으로 처리되며, 이후 내가 편집 권한을 잃으면 거부됩니다.','small muted'));
   formSubmit(f,'웹훅 추가',async d=>{
     const input={project_id:project.id,repository:d.repository.trim(),import_issues:!!d.import_issues,track_pull_requests:!!d.track_pull_requests,issue_kind:d.issue_kind};
     if (d.area_id) input.area_id=d.area_id;
     if (d.assignee_id) input.assignee_id=d.assignee_id;
     const tagList=(d.tags||'').split(',').map(s=>s.trim()).filter(Boolean);if(tagList.length)input.tags=tagList;
     const r=await tool('set_github_webhook',input);
-    webhookSecretDialog(r.webhook,r.secret);await reload();
+    webhookSecretDialog(r);await reload();
   });
   // Folded once a webhook exists so the list of webhooks reads first.
   const add=el('details',undefined,'issue-setup');add.open=!data.webhooks.length;

@@ -78,9 +78,6 @@ func run() error {
 		if store.MFAKey, err = kb.ParseMFAKey(os.Getenv("MFA_ENCRYPTION_KEY")); err != nil {
 			return err
 		}
-		if store.WebhookKey, err = kb.ParseWebhookKey(os.Getenv("WEBHOOK_ENCRYPTION_KEY"), os.Getenv("MFA_ENCRYPTION_KEY")); err != nil {
-			return err
-		}
 		if store.GitHub, err = kb.NewGitHubClient(os.Getenv("GITHUB_API_URL"), os.Getenv("GITHUB_TOKEN")); err != nil {
 			return err
 		}
