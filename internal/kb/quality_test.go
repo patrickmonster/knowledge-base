@@ -303,6 +303,29 @@ func TestStaleTaskRunCleanup(t *testing.T) {
 	if len(stale) != 3 {
 		t.Fatalf("stale runs: %+v", stale)
 	}
+	// The task board listing carries names, linked pull requests and open issues.
+	if _, err := s.DB.ExecContext(ctx, `INSERT INTO task_pull_requests(task_id,project_id,repository,number,url,state) VALUES($1,$2,'acme/kb',7,'https://github.com/acme/kb/pull/7','merged')`, old2.ID, p.ID); err != nil {
+		t.Fatal(err)
+	}
+	mustCall(t, tools, editor, "create_issue", CreateIssueInput{ProjectID: p.ID, Title: "작업 질의", Body: "확인 필요", AssigneeID: admin.User.ID, TaskID: old2.ID})
+	board := mustCall(t, tools, admin, "list_task_runs", TaskListInput{ProjectID: p.ID, Status: "open", Mine: true}).([]map[string]any)
+	if len(board) != 1 || board[0]["id"] != mine.ID || board[0]["created_by_name"] == "" {
+		t.Fatalf("mine filter: %+v", board)
+	}
+	board = mustCall(t, tools, admin, "list_task_runs", TaskListInput{ProjectID: p.ID, Status: "open"}).([]map[string]any)
+	for _, r := range board {
+		prs, _ := r["pull_requests"].([]any)
+		switch r["id"] {
+		case old2.ID:
+			if len(prs) != 1 || prs[0].(map[string]any)["state"] != "merged" || r["open_issues"] != float64(1) {
+				t.Fatalf("board row with PR and issue: %+v", r)
+			}
+		default:
+			if len(prs) != 0 || r["open_issues"] != float64(0) {
+				t.Fatalf("board row without links: %+v", r)
+			}
+		}
+	}
 	// Only the creator or the owner may close a task.
 	_, err := call(t, tools, editor, "close_task_run", CloseTaskInput{ProjectID: p.ID, TaskID: mine.ID, Reason: "중단"})
 	denied(t, err, "FORBIDDEN")

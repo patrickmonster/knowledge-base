@@ -106,7 +106,7 @@ func registerWorkflowTools(t Tools, s *Store) {
 		run, err := one[TaskRun](ctx, tx, `SELECT to_jsonb(r)-'completion_hash' FROM task_runs r WHERE id=$1 AND project_id=$2`, in.TaskID, in.ProjectID)
 		return run, notFound(err)
 	})
-	add(t, s, "list_task_runs", "List project tasks to find open work or recover a task ID after an interrupted response. status: open, completed or abandoned; omitted means all. older_than_days lists tasks started at least that many days ago (with status open: long-open tasks to finish or close). Does not return context excerpts.", false, func(in TaskListInput) string { return in.ProjectID }, func(ctx context.Context, tx *sql.Tx, a Identity, in TaskListInput) (any, error) {
+	add(t, s, "list_task_runs", "List project tasks to find open work or recover a task ID after an interrupted response. status: open, completed or abandoned; omitted means all. older_than_days lists tasks started at least that many days ago (with status open: long-open tasks to finish or close); mine=true lists only your tasks. Each task includes created_by_name, pull_requests with tracked state and open_issues; context excerpts are not returned.", false, func(in TaskListInput) string { return in.ProjectID }, func(ctx context.Context, tx *sql.Tx, a Identity, in TaskListInput) (any, error) {
 		if _, err := projectAccess(ctx, tx, a.User.ID, in.ProjectID, false); err != nil {
 			return nil, err
 		}
@@ -120,11 +120,28 @@ func registerWorkflowTools(t Tools, s *Store) {
 		if in.OlderThanDays < 0 || in.OlderThanDays > 365 {
 			return nil, problem("INVALID_INPUT", "older_than_days must be 0–365.")
 		}
-		return many[map[string]any](ctx, tx, `SELECT (to_jsonb(r)-'context'-'completion_hash')||jsonb_build_object('age_days',floor(extract(epoch FROM now()-r.started_at)/86400)::int)
-		FROM task_runs r WHERE project_id=$1 AND ($2='' OR status=$2) AND ($5::int=0 OR started_at < now()-make_interval(days=>$5::int))
-		ORDER BY started_at DESC,id LIMIT $3 OFFSET $4`, in.ProjectID, in.Status, limit, in.Offset, in.OlderThanDays)
+		mine := ""
+		if in.Mine {
+			mine = a.User.ID
+		}
+		return many[map[string]any](ctx, tx, taskListSelect+` WHERE r.project_id=$1 AND ($2='' OR r.status=$2) AND ($5::int=0 OR r.started_at < now()-make_interval(days=>$5::int))
+		AND ($6='' OR r.created_by::text=$6)
+		ORDER BY r.started_at DESC,r.id LIMIT $3 OFFSET $4`, in.ProjectID, in.Status, limit, in.Offset, in.OlderThanDays, mine)
 	})
 }
+
+// taskListSelect returns each task without its context snapshot, plus the
+// names of its creator and closer, the pull requests named in finish_task with
+// their tracked state, and the number of unresolved issues linked to it, so
+// the web console's task board needs one call per page.
+const taskListSelect = `SELECT (to_jsonb(r)-'context'-'completion_hash')||jsonb_build_object(
+	'age_days',floor(extract(epoch FROM now()-r.started_at)/86400)::int,
+	'created_by_name',u.name,
+	'closed_by_name',cu.name,
+	'pull_requests',COALESCE((SELECT jsonb_agg(jsonb_build_object('repository',pr.repository,'number',pr.number,'url',pr.url,'state',pr.state) ORDER BY pr.repository,pr.number)
+		FROM task_pull_requests pr WHERE pr.task_id=r.id),'[]'::jsonb),
+	'open_issues',(SELECT count(*) FROM issues i WHERE i.task_id=r.id AND i.status IN ('open','answered')))
+	FROM task_runs r JOIN users u ON u.id=r.created_by LEFT JOIN users cu ON cu.id=r.closed_by`
 
 type TaskListInput struct {
 	ProjectID string `json:"project_id"`
@@ -133,6 +150,8 @@ type TaskListInput struct {
 	Offset    int    `json:"offset,omitempty"`
 	// OlderThanDays finds long-open tasks; 0 disables the filter.
 	OlderThanDays int `json:"older_than_days,omitempty" jsonschema:"Only tasks started at least this many days ago, 1–365"`
+	// Mine limits the list to tasks the caller started.
+	Mine bool `json:"mine,omitempty" jsonschema:"true lists only tasks you started"`
 }
 
 func (s *Store) startTask(ctx context.Context, tx *sql.Tx, a Identity, in StartTaskInput) (any, error) {
