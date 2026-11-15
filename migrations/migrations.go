@@ -49,3 +49,6 @@ var SearchMisses string
 
 //go:embed 016_mfa.sql
 var MFA string
+
+//go:embed 017_attachment_chunks.sql
+var AttachmentChunks string

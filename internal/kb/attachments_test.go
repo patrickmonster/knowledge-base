@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"net/http"
@@ -294,6 +295,132 @@ func TestAttachmentHTTPAndConcurrentSingleUse(t *testing.T) {
 	var leaked bool
 	if err = s.DB.QueryRow("SELECT EXISTS(SELECT 1 FROM audit_events WHERE details::text LIKE '%kbu\\_%')").Scan(&leaked); err != nil || leaked {
 		t.Fatalf("upload token leaked into audit log: %v", err)
+	}
+}
+
+func TestAttachmentChunkUploadThroughMCP(t *testing.T) {
+	s := testStore(t)
+	m := &memoryObjects{files: map[string][]byte{}}
+	s.Objects = m
+	tools := NewTools(s)
+	ctx := context.Background()
+	admin := loginAs(t, s, "admin@example.com")
+	owner := inviteAs(t, s, admin, "owner@example.com")
+	editor := inviteAs(t, s, admin, "editor@example.com")
+	p := mustCall(t, tools, owner, "create_project", CreateProjectInput{Slug: "chunks", Name: "Chunks"}).(Project)
+	mustCall(t, tools, owner, "set_project_member", MemberInput{ProjectID: p.ID, UserID: editor.User.ID, Role: "editor"})
+	keyResult, err := s.CreateKey(ctx, owner, KeyInput{Name: "sandbox", Access: "read_write", ProjectID: p.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyID, err := s.APIKey(ctx, keyResult.(map[string]any)["token"].(string))
+	if err != nil {
+		t.Fatal(err)
+	}
+	app, err := NewApp(s, Config{PublicURL: "http://localhost:8080"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := app.Handler()
+
+	body := bytes.Repeat([]byte("Lorely 기획서 chunk test. "), MaxAttachmentChunkBytes/16)
+	body = body[:MaxAttachmentChunkBytes+1000] // two chunks: full + remainder
+	prepared := mustCall(t, tools, keyID, "prepare_attachment_upload", PrepareAttachmentInput{ProjectID: p.ID, Filename: "기획서.md", SizeBytes: int64(len(body))}).(map[string]any)
+	f := prepared["attachment"].(Attachment)
+	link := prepared["upload_url"].(string)
+	chunk := func(actor Identity, offset int64, data []byte) (any, error) {
+		return call(t, tools, actor, "upload_attachment_chunk", UploadAttachmentChunkInput{ProjectID: p.ID, AttachmentID: f.ID, Offset: offset, DataBase64: base64.StdEncoding.EncodeToString(data)})
+	}
+	first, second := body[:MaxAttachmentChunkBytes], body[MaxAttachmentChunkBytes:]
+
+	// Invalid input, wrong uploader and out-of-order chunks are rejected.
+	_, err = call(t, tools, keyID, "upload_attachment_chunk", UploadAttachmentChunkInput{ProjectID: p.ID, AttachmentID: f.ID, DataBase64: "not base64!"})
+	denied(t, err, "INVALID_INPUT")
+	_, err = chunk(keyID, 0, append(append([]byte{}, first...), 'x'))
+	denied(t, err, "INVALID_INPUT")
+	_, err = chunk(editor, 0, first)
+	denied(t, err, "FORBIDDEN")
+	_, err = chunk(keyID, 10, second)
+	denied(t, err, "INVALID_INPUT")
+
+	out, err := chunk(keyID, 0, first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	progress := out.(chunkProgress)
+	if progress.Complete || progress.NextOffset != int64(len(first)) || progress.Attachment != nil {
+		t.Fatalf("bad progress: %+v", progress)
+	}
+	// Identical retry is safe; different data at a received offset is not.
+	if out, err = chunk(keyID, 0, first); err != nil || out.(chunkProgress).NextOffset != int64(len(first)) {
+		t.Fatalf("retry: %v %+v", err, out)
+	}
+	_, err = chunk(keyID, 0, bytes.Repeat([]byte("z"), len(first)))
+	denied(t, err, "CONFLICT")
+	// The one-time PUT link is retired once chunks start.
+	r := httptest.NewRequest("PUT", link, strings.NewReader(string(body)))
+	r.Header.Set("Content-Type", "application/octet-stream")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, r)
+	if w.Code != 401 {
+		t.Fatal("upload link still active after chunks began", w.Code)
+	}
+	// Overflowing the reservation is rejected.
+	_, err = chunk(keyID, int64(len(first)), append(append([]byte{}, second...), 'x'))
+	denied(t, err, "INVALID_INPUT")
+
+	out, err = chunk(keyID, int64(len(first)), second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	progress = out.(chunkProgress)
+	sum := fmt.Sprintf("%x", sha256.Sum256(body))
+	if !progress.Complete || progress.Attachment == nil || progress.Attachment.Status != "ready" || *progress.Attachment.SHA256 != sum {
+		t.Fatalf("not stored: %+v", progress)
+	}
+	if !bytes.Equal(m.files[attachmentKey(p.ID, f.ID)], body) {
+		t.Fatal("assembled object differs from the original")
+	}
+	var leftover int
+	if err = s.DB.QueryRow("SELECT count(*) FROM attachment_chunks").Scan(&leftover); err != nil || leftover != 0 {
+		t.Fatalf("chunks not removed: %d %v", leftover, err)
+	}
+	// Retrying the last chunk after a lost response returns the stored file without a second PUT.
+	if out, err = chunk(keyID, int64(len(first)), second); err != nil || !out.(chunkProgress).Complete || m.puts != 1 {
+		t.Fatalf("final retry: %v %+v puts=%d", err, out, m.puts)
+	}
+	_, err = chunk(keyID, 0, first)
+	denied(t, err, "CONFLICT")
+
+	// Read-only keys cannot upload; abandoned chunks go with the expired reservation.
+	readResult, err := s.CreateKey(ctx, owner, KeyInput{Name: "ro", Access: "read_only", ProjectID: p.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	readonly, err := s.APIKey(ctx, readResult.(map[string]any)["token"].(string))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f = preparedAttachment(t, tools, owner, p.ID, "abcdef")
+	_, err = chunk(readonly, 0, []byte("abc"))
+	denied(t, err, "FORBIDDEN")
+	if _, err = chunk(owner, 0, []byte("abc")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.DB.Exec("UPDATE attachments SET created_at=now()-interval '2 hours',updated_at=now()-interval '2 hours' WHERE id=$1", f.ID); err != nil {
+		t.Fatal(err)
+	}
+	_, err = chunk(owner, 3, []byte("def"))
+	denied(t, err, "CONFLICT")
+	if err = s.CleanupAttachments(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.DB.QueryRow("SELECT count(*) FROM attachment_chunks").Scan(&leftover); err != nil || leftover != 0 {
+		t.Fatalf("abandoned chunks kept: %d %v", leftover, err)
+	}
+	var leaked bool
+	if err = s.DB.QueryRow("SELECT EXISTS(SELECT 1 FROM audit_events WHERE details::text LIKE '%data_base64%' OR details::text LIKE '%Lorely%')").Scan(&leaked); err != nil || leaked {
+		t.Fatalf("chunk data leaked into audit log: %v", err)
 	}
 }
 

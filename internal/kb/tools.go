@@ -20,14 +20,19 @@ type Tool struct {
 type Tools map[string]Tool
 
 func add[I any](tools Tools, s *Store, name, description string, write bool, project func(I) string, fn func(context.Context, *sql.Tx, Identity, I) (any, error)) {
-	call := func(ctx context.Context, actor Identity, in I) (any, error) {
+	addCall(tools, name, description, write, func(ctx context.Context, actor Identity, in I) (any, error) {
 		ctx = auditInput(ctx, in)
 		id := ""
 		if project != nil {
 			id = project(in)
 		}
 		return s.Perform(ctx, actor, name, id, write, false, func(tx *sql.Tx) (any, error) { return fn(ctx, tx, actor, in) })
-	}
+	})
+}
+
+// addCall registers a tool whose handler manages its own transactions, for work that
+// must continue after the authorizing transaction commits (for example bucket uploads).
+func addCall[I any](tools Tools, name, description string, write bool, call func(context.Context, Identity, I) (any, error)) {
 	tools[name] = Tool{
 		Call: func(ctx context.Context, actor Identity, raw json.RawMessage) (any, error) {
 			var in I

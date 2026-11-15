@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -17,6 +18,10 @@ import (
 )
 
 const MaxAttachmentBytes int64 = 25 << 20
+
+// MaxAttachmentChunkBytes keeps one base64 chunk (about 683 KiB) and its JSON-RPC
+// envelope under the 1 MiB request body limit.
+const MaxAttachmentChunkBytes = 512 << 10
 
 type Attachment struct {
 	ID               string    `json:"id"`
@@ -41,6 +46,12 @@ type AttachmentInput struct {
 	ProjectID    string `json:"project_id"`
 	AttachmentID string `json:"attachment_id"`
 }
+type UploadAttachmentChunkInput struct {
+	ProjectID    string `json:"project_id"`
+	AttachmentID string `json:"attachment_id"`
+	Offset       int64  `json:"offset" jsonschema:"Byte offset of this chunk: 0 for the first chunk, then next_offset from the previous response"`
+	DataBase64   string `json:"data_base64" jsonschema:"Standard base64 of this chunk's raw bytes, at most 524288 bytes decoded"`
+}
 type ListAttachmentsInput struct {
 	ProjectID  string `json:"project_id"`
 	DocumentID string `json:"document_id,omitempty"`
@@ -55,7 +66,7 @@ func (s *Store) requireBucket() error {
 }
 func attachmentKey(projectID, id string) string { return "attachments/" + projectID + "/" + id }
 func registerAttachmentTools(t Tools, s *Store) {
-	add(t, s, "prepare_attachment_upload", "Reserve a private file (max 25 MiB) for a file the user attached or that you produced (for example an .xlsx summary). Then PUT the raw bytes with Content-Type application/octet-stream to upload_url (one-time, 1 hour, no Authorization header; e.g. curl --fail-with-body -T <file> -H 'Content-Type: application/octet-stream' '<upload_url>'), or to upload_path with the same Bearer key. Do not send file bytes through MCP. Confirm status ready with the PUT response or list_attachments. File text is not indexed: also save a knowledge document summarizing the file and pass its document_id.", true, func(in PrepareAttachmentInput) string { return in.ProjectID }, func(ctx context.Context, tx *sql.Tx, a Identity, in PrepareAttachmentInput) (any, error) {
+	add(t, s, "prepare_attachment_upload", "Reserve a private file (max 25 MiB) for a file the user attached or that you produced (for example an .xlsx summary). Then PUT the raw bytes with Content-Type application/octet-stream to upload_url (one-time, 1 hour, no Authorization header; e.g. curl --fail-with-body -T <file> -H 'Content-Type: application/octet-stream' '<upload_url>'), or to upload_path with the same Bearer key. Prefer the PUT. Only if your network cannot reach upload_url, send the bytes with upload_attachment_chunk instead (base64, costly for large files). Confirm status ready with the PUT response or list_attachments. File text is not indexed: also save a knowledge document summarizing the file and pass its document_id.", true, func(in PrepareAttachmentInput) string { return in.ProjectID }, func(ctx context.Context, tx *sql.Tx, a Identity, in PrepareAttachmentInput) (any, error) {
 		if _, err := projectAccess(ctx, tx, a.User.ID, in.ProjectID, true); err != nil {
 			return nil, err
 		}
@@ -96,13 +107,14 @@ func registerAttachmentTools(t Tools, s *Store) {
 		}
 		f, err := one[Attachment](ctx, tx, `WITH a AS (INSERT INTO attachments(id,project_id,document_id,document_revision,filename,size_bytes,object_key,created_by,upload_token_hash,upload_key_id) VALUES($1,$2,NULLIF($3,'')::uuid,$4,$5,$6,$7,$8,$9,$10::uuid) RETURNING *) SELECT to_jsonb(a)-'object_key'-'upload_token_hash'-'upload_key_id' FROM a`, id, in.ProjectID, in.DocumentID, revision, in.Filename, in.SizeBytes, attachmentKey(in.ProjectID, id), a.User.ID, tokenHash, keyID)
 		path := "/api/attachments/" + id + "/content?project_id=" + in.ProjectID
-		out := map[string]any{"id": id, "attachment": f, "upload_path": path, "method": "PUT", "content_type": "application/octet-stream", "expires_in_seconds": 3600}
+		out := map[string]any{"id": id, "attachment": f, "upload_path": path, "method": "PUT", "content_type": "application/octet-stream", "expires_in_seconds": 3600, "max_chunk_bytes": MaxAttachmentChunkBytes}
 		if uploadToken != nil {
 			out["upload_url"] = s.PublicURL + path + "&upload_token=" + uploadToken.(string)
 			out["upload_url_note"] = "One-time link for this file only, valid for 1 hour, no Authorization header needed. Do not save it in knowledge documents."
 		}
 		return out, err
 	})
+	addCall(t, "upload_attachment_chunk", "Upload a reserved file through MCP when your network cannot reach upload_url. Send the raw bytes in order as standard base64 chunks of at most 524288 bytes (decoded): offset 0 first, then next_offset from each response. The reservation's 1-hour limit still applies. When the last chunk arrives the file is scanned and stored; the response then has complete: true and the attachment with status ready and sha256. Retrying a chunk with identical data is safe. Prefer the upload_url PUT whenever it works: base64 in tool calls is slow and costly for large files.", true, s.UploadAttachmentChunk)
 	add(t, s, "get_attachment_usage", "Show the project's stored and reserved file bytes, its quota, and whether uploads are malware-scanned.", false, func(in ProjectInput) string { return in.ProjectID }, func(ctx context.Context, tx *sql.Tx, a Identity, in ProjectInput) (any, error) {
 		if _, err := projectAccess(ctx, tx, a.User.ID, in.ProjectID, false); err != nil {
 			return nil, err
@@ -235,8 +247,126 @@ func (s *Store) UploadAttachment(ctx context.Context, a Identity, in AttachmentI
 		if current.Status != "uploading" {
 			return nil, problem("CONFLICT", "Upload state changed.")
 		}
+		// Chunks from upload_attachment_chunk are no longer needed once the object is stored.
+		if _, err := tx.ExecContext(ctx, "DELETE FROM attachment_chunks WHERE attachment_id=$1", f.ID); err != nil {
+			return nil, err
+		}
 		return one[Attachment](ctx, tx, `WITH a AS (UPDATE attachments SET status='ready',sha256=$2,updated_at=now() WHERE id=$1 RETURNING *) SELECT to_jsonb(a)-'object_key' FROM a`, f.ID, digest)
 	})
+}
+
+type chunkProgress struct {
+	AttachmentID  string `json:"attachment_id"`
+	ReceivedBytes int64  `json:"received_bytes"`
+	SizeBytes     int64  `json:"size_bytes"`
+	NextOffset    int64  `json:"next_offset"`
+	Complete      bool   `json:"complete"`
+	// Set only when the file is stored (status ready).
+	Attachment *Attachment `json:"attachment,omitempty"`
+}
+
+// UploadAttachmentChunk appends one base64 chunk to a pending reservation over MCP,
+// for clients whose network cannot reach upload_url. Chunks are kept in the
+// database until the last one arrives; the assembled file then goes through
+// UploadAttachment, so size, scanning, bucket storage and SHA-256 match the PUT path.
+func (s *Store) UploadAttachmentChunk(ctx context.Context, a Identity, in UploadAttachmentChunkInput) (any, error) {
+	ctx = auditInput(ctx, in)
+	ref := AttachmentInput{ProjectID: in.ProjectID, AttachmentID: in.AttachmentID}
+	data, err := base64.StdEncoding.DecodeString(strings.Join(strings.Fields(in.DataBase64), ""))
+	if err != nil || len(data) < 1 || len(data) > MaxAttachmentChunkBytes || in.Offset < 0 {
+		return nil, problem("INVALID_INPUT", fmt.Sprintf("Send standard base64 of 1 to %d bytes and a non-negative offset.", MaxAttachmentChunkBytes))
+	}
+	out, err := s.Perform(ctx, a, "upload_attachment_chunk", in.ProjectID, true, false, func(tx *sql.Tx) (any, error) {
+		f, err := readAttachment(ctx, tx, a, ref, true)
+		if err != nil {
+			return nil, err
+		}
+		if err = s.requireBucket(); err != nil {
+			return nil, err
+		}
+		if f.CreatedBy != a.User.ID {
+			return nil, problem("FORBIDDEN", "Only the uploader can complete this upload.")
+		}
+		end := in.Offset + int64(len(data))
+		if f.Status == "ready" && end == f.SizeBytes {
+			// Retried last chunk after a lost response. Compare sha256 to confirm the content.
+			return chunkProgress{AttachmentID: f.ID, ReceivedBytes: f.SizeBytes, SizeBytes: f.SizeBytes, NextOffset: f.SizeBytes, Complete: true, Attachment: &f}, nil
+		}
+		if f.Status != "pending" || time.Since(f.CreatedAt) > time.Hour {
+			return nil, problem("CONFLICT", "Upload is finishing, used or expired. Check list_attachments; prepare a new upload if it is not ready.")
+		}
+		var received int64
+		if err = tx.QueryRowContext(ctx, "SELECT COALESCE(sum(length(data)),0) FROM attachment_chunks WHERE attachment_id=$1", f.ID).Scan(&received); err != nil {
+			return nil, err
+		}
+		progress := func(n int64) chunkProgress {
+			return chunkProgress{AttachmentID: f.ID, ReceivedBytes: n, SizeBytes: f.SizeBytes, NextOffset: n, Complete: n == f.SizeBytes}
+		}
+		if in.Offset < received {
+			var same bool
+			err = tx.QueryRowContext(ctx, "SELECT data=$3 FROM attachment_chunks WHERE attachment_id=$1 AND position=$2", f.ID, in.Offset, data).Scan(&same)
+			if errors.Is(err, sql.ErrNoRows) || (err == nil && !same) {
+				return nil, problem("CONFLICT", fmt.Sprintf("Different data was already received at this offset. Continue from offset %d or prepare a new upload.", received))
+			}
+			if err != nil {
+				return nil, err
+			}
+			return progress(received), nil
+		}
+		if in.Offset > received {
+			return nil, problem("INVALID_INPUT", fmt.Sprintf("Chunks must be sent in order. Next offset is %d.", received))
+		}
+		if end > f.SizeBytes {
+			return nil, problem("INVALID_INPUT", "Chunk exceeds the reserved file size.")
+		}
+		if _, err = tx.ExecContext(ctx, "INSERT INTO attachment_chunks(attachment_id,position,data) VALUES($1,$2,$3)", f.ID, in.Offset, data); err != nil {
+			return nil, err
+		}
+		// Bytes now arrive through MCP; retire the one-time PUT link for this file.
+		if _, err = tx.ExecContext(ctx, "UPDATE attachments SET upload_token_hash=NULL,updated_at=now() WHERE id=$1", f.ID); err != nil {
+			return nil, err
+		}
+		return progress(end), nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	p := out.(chunkProgress)
+	if !p.Complete || p.Attachment != nil {
+		return p, nil
+	}
+	stored, err := s.UploadAttachment(ctx, a, ref, &chunkReader{ctx: ctx, db: s.DB, id: p.AttachmentID})
+	if err != nil {
+		return nil, err
+	}
+	f := stored.(Attachment)
+	p.Attachment = &f
+	return p, nil
+}
+
+// chunkReader streams stored chunks in order without loading the whole file.
+type chunkReader struct {
+	ctx context.Context
+	db  *sql.DB
+	id  string
+	pos int64
+	buf []byte
+}
+
+func (r *chunkReader) Read(p []byte) (int, error) {
+	if len(r.buf) == 0 {
+		err := r.db.QueryRowContext(r.ctx, "SELECT data FROM attachment_chunks WHERE attachment_id=$1 AND position=$2", r.id, r.pos).Scan(&r.buf)
+		if errors.Is(err, sql.ErrNoRows) {
+			return 0, io.EOF
+		}
+		if err != nil {
+			return 0, err
+		}
+		r.pos += int64(len(r.buf))
+	}
+	n := copy(p, r.buf)
+	r.buf = r.buf[n:]
+	return n, nil
 }
 
 // UploadTokenIdentity resolves a one-time upload link to the API key that reserved
