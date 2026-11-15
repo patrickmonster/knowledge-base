@@ -70,3 +70,6 @@ var SearchTimings string
 
 //go:embed 023_issue_attachments.sql
 var IssueAttachments string
+
+//go:embed 024_issue_attachment_parts.sql
+var IssueAttachmentParts string

@@ -63,10 +63,13 @@ type Attachment struct {
 	DocumentID       *string `json:"document_id"`
 	DocumentRevision *int    `json:"document_revision"`
 	IssueID          *string `json:"issue_id"`
-	Filename         string  `json:"filename"`
-	SizeBytes        int64   `json:"size_bytes"`
-	SHA256           *string `json:"sha256"`
-	Status           string  `json:"status"`
+	// IssuePart is body, answer or comment for issue images; IssueCommentID names the comment.
+	IssuePart      *string `json:"issue_part,omitempty"`
+	IssueCommentID *string `json:"issue_comment_id,omitempty"`
+	Filename       string  `json:"filename"`
+	SizeBytes      int64   `json:"size_bytes"`
+	SHA256         *string `json:"sha256"`
+	Status         string  `json:"status"`
 	// TextStatus is none, extracted, empty or failed; extracted PDF/DOCX/XLSX
 	// text lives in the artifact document TextDocumentID.
 	TextStatus     string    `json:"text_status"`
@@ -78,11 +81,13 @@ type Attachment struct {
 	UpdatedAt      time.Time `json:"updated_at"`
 }
 type PrepareAttachmentInput struct {
-	ProjectID  string `json:"project_id"`
-	DocumentID string `json:"document_id,omitempty"`
-	IssueID    string `json:"issue_id,omitempty" jsonschema:"Attach an image (png, jpg, gif or webp, at most 10 MiB) to this question or issue instead of a document"`
-	Filename   string `json:"filename"`
-	SizeBytes  int64  `json:"size_bytes" jsonschema:"File size in bytes, from 1 to 26214400"`
+	ProjectID      string `json:"project_id"`
+	DocumentID     string `json:"document_id,omitempty"`
+	IssueID        string `json:"issue_id,omitempty" jsonschema:"Attach an image (png, jpg, gif or webp, at most 10 MiB) to this question or issue instead of a document"`
+	IssuePart      string `json:"issue_part,omitempty" jsonschema:"With issue_id: body (default), answer (the current answer; only its author) or comment (with issue_comment_id; only the comment's author)"`
+	IssueCommentID string `json:"issue_comment_id,omitempty" jsonschema:"With issue_part comment: the comment to attach the image to"`
+	Filename       string `json:"filename"`
+	SizeBytes      int64  `json:"size_bytes" jsonschema:"File size in bytes, from 1 to 26214400"`
 }
 type AttachmentInput struct {
 	ProjectID    string `json:"project_id"`
@@ -109,7 +114,7 @@ func (s *Store) requireBucket() error {
 }
 func attachmentKey(projectID, id string) string { return "attachments/" + projectID + "/" + id }
 func registerAttachmentTools(t Tools, s *Store) {
-	add(t, s, "prepare_attachment_upload", "Reserve a private file (max 25 MiB) for a file the user attached or that you produced (for example an .xlsx summary). Then PUT the raw bytes with Content-Type application/octet-stream to upload_url (one-time, 1 hour, no Authorization header; e.g. curl --fail-with-body -T <file> -H 'Content-Type: application/octet-stream' '<upload_url>'), or to upload_path with the same Bearer key. Prefer the PUT. Only if your network cannot reach upload_url, send the bytes with upload_attachment_chunk instead (base64, costly for large files). Confirm status ready with the PUT response or list_attachments. Text of .pdf, .docx and .xlsx files is extracted on upload into an artifact document (text_status, text_document_id) that search indexes; scanned PDFs need OCR and stay empty. Other files are not indexed. Still save a knowledge document summarizing the file's purpose and key points and pass its document_id. To attach a screenshot or photo to a question or issue, pass issue_id instead (png, jpg, gif or webp, at most 10 MiB; the content must be that image type).", true, func(in PrepareAttachmentInput) string { return in.ProjectID }, func(ctx context.Context, tx *sql.Tx, a Identity, in PrepareAttachmentInput) (any, error) {
+	add(t, s, "prepare_attachment_upload", "Reserve a private file (max 25 MiB) for a file the user attached or that you produced (for example an .xlsx summary). Then PUT the raw bytes with Content-Type application/octet-stream to upload_url (one-time, 1 hour, no Authorization header; e.g. curl --fail-with-body -T <file> -H 'Content-Type: application/octet-stream' '<upload_url>'), or to upload_path with the same Bearer key. Prefer the PUT. Only if your network cannot reach upload_url, send the bytes with upload_attachment_chunk instead (base64, costly for large files). Confirm status ready with the PUT response or list_attachments. Text of .pdf, .docx and .xlsx files is extracted on upload into an artifact document (text_status, text_document_id) that search indexes; scanned PDFs need OCR and stay empty. Other files are not indexed. Still save a knowledge document summarizing the file's purpose and key points and pass its document_id. To attach a screenshot or photo to a question or issue, pass issue_id instead (png, jpg, gif or webp, at most 10 MiB; the content must be that image type); issue_part answer or comment (with issue_comment_id) attaches it to your answer or comment.", true, func(in PrepareAttachmentInput) string { return in.ProjectID }, func(ctx context.Context, tx *sql.Tx, a Identity, in PrepareAttachmentInput) (any, error) {
 		if _, err := projectAccess(ctx, tx, a.User.ID, in.ProjectID, true); err != nil {
 			return nil, err
 		}
@@ -135,6 +140,14 @@ func registerAttachmentTools(t Tools, s *Store) {
 			if !issueImageFilename(in.Filename) || in.SizeBytes > MaxIssueImageBytes {
 				return nil, problem("INVALID_INPUT", "Issue attachments must be png, jpg, gif or webp images of at most 10 MiB.")
 			}
+			if in.IssuePart == "" {
+				in.IssuePart = "body"
+			}
+			if err := issueImageTarget(ctx, tx, a, in); err != nil {
+				return nil, err
+			}
+		} else if in.IssuePart != "" || in.IssueCommentID != "" {
+			return nil, problem("INVALID_INPUT", "issue_part and issue_comment_id need issue_id.")
 		}
 		if err := s.reserveQuota(ctx, tx, in.ProjectID, in.SizeBytes); err != nil {
 			return nil, err
@@ -159,7 +172,7 @@ func registerAttachmentTools(t Tools, s *Store) {
 			raw := "kbu_" + token()
 			uploadToken, tokenHash, keyID = raw, digest(raw), a.KeyID
 		}
-		f, err := one[Attachment](ctx, tx, `WITH a AS (INSERT INTO attachments(id,project_id,document_id,document_revision,filename,size_bytes,object_key,created_by,upload_token_hash,upload_key_id,issue_id) VALUES($1,$2,NULLIF($3,'')::uuid,$4,$5,$6,$7,$8,$9,$10::uuid,NULLIF($11,'')::uuid) RETURNING *) SELECT to_jsonb(a)-'object_key'-'upload_token_hash'-'upload_key_id' FROM a`, id, in.ProjectID, in.DocumentID, revision, in.Filename, in.SizeBytes, attachmentKey(in.ProjectID, id), a.User.ID, tokenHash, keyID, in.IssueID)
+		f, err := one[Attachment](ctx, tx, `WITH a AS (INSERT INTO attachments(id,project_id,document_id,document_revision,filename,size_bytes,object_key,created_by,upload_token_hash,upload_key_id,issue_id,issue_part,issue_comment_id) VALUES($1,$2,NULLIF($3,'')::uuid,$4,$5,$6,$7,$8,$9,$10::uuid,NULLIF($11,'')::uuid,NULLIF($12,''),NULLIF($13,'')::uuid) RETURNING *) SELECT to_jsonb(a)-'object_key'-'upload_token_hash'-'upload_key_id' FROM a`, id, in.ProjectID, in.DocumentID, revision, in.Filename, in.SizeBytes, attachmentKey(in.ProjectID, id), a.User.ID, tokenHash, keyID, in.IssueID, in.IssuePart, in.IssueCommentID)
 		path := "/api/attachments/" + id + "/content?project_id=" + in.ProjectID
 		out := map[string]any{"id": id, "attachment": f, "upload_path": path, "method": "PUT", "content_type": "application/octet-stream", "expires_in_seconds": 3600, "max_chunk_bytes": MaxAttachmentChunkBytes}
 		if uploadToken != nil {
