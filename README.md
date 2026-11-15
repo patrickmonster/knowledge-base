@@ -19,6 +19,7 @@ Go로 만든 팀 공용 지식 서버입니다. 프로젝트별 기획·결정·
 - 문서 저장·수정 시 자동 임베딩 대기열, 실패 재시도·상태 조회·소유자 재색인
 - 이슈·질의 베이스: 공통 작업 영역과 담당자, 질의·이슈 등록·답변·해결, 작업 시작 시 관련 질의 표시, 질의응답의 지식 문서화, GitHub 저장소 이슈 가져오기([안내](docs/issues.md#github-이슈-가져오기))
 - 팀 확산([안내](docs/team-rollout.md)): 이슈 담당자 알림(웹훅·Slack·이메일), 웹 문서 관계 보기·편집, 문서 버전 비교, 검토 대기 사이드바 배지, 공통 작업 영역 삭제·정리, 다른 저장소용 AGENTS.md 생성, 프로젝트 내보내기·가져오기(JSON·Markdown)
+- 작업 PR 병합·배포 자동 기록: `finish_task`에 남긴 PR을 GitHub에서 확인해 병합·배포(서버 자신의 저장소)되면 history에 상태 갱신 블록 추가, 미기록 PR은 작업 시작 맥락에 표시
 - 지식 품질과 AI 작업 흐름: 중복·충돌 결정 감지, 재확인 담당자·주기 요약, start_task 맥락 활용도 피드백과 검색 품질 지표, finish_task 결정 후보 추출, 오래 열린 작업 정리, 용어집(glossary)과 검색 동의어 확장([안내](docs/knowledge-quality.md))
 - 사용 통계 대시보드: 프로젝트별 도구 호출·활성 사용자·검색·문서 열람·작성·작업 수의 일별 추이, 문서 종류별 증가 추이, 결과 0건 검색어, 많이 쓴 도구·활동 사용자·많이 열람한 문서, 보유 현황, 검색 품질(`get_usage_stats`, 웹 '사용 통계')
 - 공식 Go MCP SDK 기반 Streamable HTTP `/mcp`
@@ -140,6 +141,7 @@ Authorization: Bearer <발급받은 MCP 키>
 | `get_task_context` | 작업에 필요한 발췌문·출처·최근 결정 탐색 정보 구성 |
 | `start_task`, `finish_task` | 작업 시작 맥락 저장·종료 결과와 문서 일괄 저장 |
 | `get_task_run`, `list_task_runs` | 작업 상태·출처·완료 문서 조회 및 중단된 작업 ID 복구 |
+| `check_task_deployments` | `finish_task`의 `pull_requests`로 남긴 PR의 병합·배포를 지금 확인하고 history에 상태 갱신 블록 추가(서버도 20분마다 자동 확인) |
 | `get_document_templates`, `create_templated_document` | 기획·결정·히스토리 양식 조회·필수 항목 검증 후 저장 |
 | `list_work_areas`, `set_work_area` | 공통 작업 영역과 담당자 조회·관리 |
 | `create_issue`, `list_issues`, `get_issue` | 질의·이슈 등록·목록(상태·담당자·검색어 필터)·상세 |
@@ -300,6 +302,7 @@ TEST_DATABASE_URL='<test-only PostgreSQL URL>' TEST_OLLAMA_URL=http://localhost:
 - `internal/kb/vector_search.go`: 질문 임베딩·권한 범위 내 의미 검색·하이브리드 순위
 - `internal/kb/issues.go`, `web/issues.js`: 이슈·질의 베이스와 작업 시작 연동
 - `internal/kb/github_issues.go`: GitHub 이슈 가져오기(`import_github_issues`)
+- `internal/kb/deployments.go`: 작업 PR의 병합·배포 확인과 history 상태 갱신 블록(`check_task_deployments`, 주기 확인)
 - `internal/kb/usage.go`, `web/usage.js`: 사용 통계 집계와 대시보드
 - `migrations/003_embeddings.sql`: 벡터 컬럼과 작업 대기열
 - `migrations/`: 버전 관리되는 DB 스키마
@@ -325,7 +328,7 @@ TEST_DATABASE_URL='<test-only PostgreSQL URL>' TEST_OLLAMA_URL=http://localhost:
 
 `start_task`로 관련 자료와 시작 시점의 문서 버전을 모으고, 작업 후 `finish_task`로 히스토리와 추가 기획·결정을 함께 저장합니다. 같은 입력 재시도는 중복 기록을 만들지 않습니다. 기획·결정은 기본 초안이고, 원문 저장과 의미 검색 준비는 구분됩니다.
 
-[호출 예시·작성 양식·AI 클라이언트 적용 규칙](docs/task-workflow.md)을 참고하세요. 작업 후에는 `finish_task`의 `used_sources`로 실제 사용한 근거를 남기면 `get_retrieval_metrics`로 검색 품질을 측정할 수 있습니다. 결정 후보·유사 결정 제안, 재확인 담당자, 오래 열린 작업 정리, 용어집은 [지식 품질 안내](docs/knowledge-quality.md)를 참고하세요. 이 저장소의 `AGENTS.md`에도 시작 조회·완료 저장 규칙을 반영했습니다. 다른 프로젝트에는 해당 클라이언트 지침에 규칙을 추가해야 하며 MCP 서버가 작업 시작·종료를 자동으로 감지하지는 않습니다. 새 도구는 새 버전과 마이그레이션을 배포한 후 제공됩니다.
+[호출 예시·작성 양식·AI 클라이언트 적용 규칙](docs/task-workflow.md)을 참고하세요. 작업 후에는 `finish_task`의 `used_sources`로 실제 사용한 근거를 남기면 `get_retrieval_metrics`로 검색 품질을 측정할 수 있습니다. `pull_requests`에 PR 링크를 남기면 서버가 GitHub에서 병합·배포를 확인해 history 제목 아래에 상태 갱신 블록을 덧붙입니다(작성 시점 본문은 그대로, [PR 병합·배포 기록](docs/task-workflow.md#pr-병합배포-기록)). 결정 후보·유사 결정 제안, 재확인 담당자, 오래 열린 작업 정리, 용어집은 [지식 품질 안내](docs/knowledge-quality.md)를 참고하세요. 이 저장소의 `AGENTS.md`에도 시작 조회·완료 저장 규칙을 반영했습니다. 다른 프로젝트에는 해당 클라이언트 지침에 규칙을 추가해야 하며 MCP 서버가 작업 시작·종료를 자동으로 감지하지는 않습니다. 새 도구는 새 버전과 마이그레이션을 배포한 후 제공됩니다.
 
 ## 첨부 파일
 

@@ -115,10 +115,7 @@ func (c *GitHubClient) client() *http.Client {
 // ListIssues returns up to limit issues (pull requests excluded) and the number
 // of pull requests skipped.
 func (c *GitHubClient) ListIssues(ctx context.Context, repo, state string, labels []string, since string, limit int) ([]githubIssue, int, error) {
-	base := strings.TrimSuffix(c.BaseURL, "/")
-	if base == "" {
-		base = defaultGitHubAPI
-	}
+	base := c.baseURL()
 	out, skipped := []githubIssue{}, 0
 	for page := 1; page <= maxGitHubPages && len(out) < limit; page++ {
 		q := url.Values{"state": {state}, "per_page": {"100"}, "page": {strconv.Itoa(page)}, "sort": {"created"}, "direction": {"asc"}}
@@ -128,37 +125,9 @@ func (c *GitHubClient) ListIssues(ctx context.Context, repo, state string, label
 		if since != "" {
 			q.Set("since", since)
 		}
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/repos/"+repo+"/issues?"+q.Encode(), nil)
-		if err != nil {
-			return nil, 0, err
-		}
-		req.Header.Set("Accept", "application/vnd.github+json")
-		req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-		req.Header.Set("User-Agent", "knowledge-base-issue-import")
-		if c.Token != "" {
-			req.Header.Set("Authorization", "Bearer "+c.Token)
-		}
-		resp, err := c.client().Do(req)
-		if err != nil {
-			if ctx.Err() != nil {
-				return nil, 0, ctx.Err()
-			}
-			return nil, 0, problem("GITHUB_UNAVAILABLE", "GitHub could not be reached. Retry later.")
-		}
-		body, err := io.ReadAll(io.LimitReader(resp.Body, maxGitHubResponseSize+1))
-		resp.Body.Close()
-		if err != nil {
-			return nil, 0, problem("GITHUB_UNAVAILABLE", "GitHub response could not be read. Retry later.")
-		}
-		if err := githubStatusError(resp, c.Token != ""); err != nil {
-			return nil, 0, err
-		}
-		if len(body) > maxGitHubResponseSize {
-			return nil, 0, problem("GITHUB_UNAVAILABLE", "GitHub response is too large.")
-		}
 		var batch []githubIssue
-		if err := json.Unmarshal(body, &batch); err != nil {
-			return nil, 0, problem("GITHUB_UNAVAILABLE", "GitHub returned an unexpected response.")
+		if err := c.getJSON(ctx, base+"/repos/"+repo+"/issues?"+q.Encode(), &batch); err != nil {
+			return nil, 0, err
 		}
 		for _, item := range batch {
 			if len(item.PullRequest) > 0 && string(item.PullRequest) != "null" {
@@ -174,6 +143,50 @@ func (c *GitHubClient) ListIssues(ctx context.Context, repo, state string, label
 		}
 	}
 	return out, skipped, nil
+}
+
+func (c *GitHubClient) baseURL() string {
+	if base := strings.TrimSuffix(c.BaseURL, "/"); base != "" {
+		return base
+	}
+	return defaultGitHubAPI
+}
+
+// getJSON reads one GitHub REST response into out. Errors are stable problem
+// codes; the token never appears in them.
+func (c *GitHubClient) getJSON(ctx context.Context, rawURL string, out any) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	req.Header.Set("User-Agent", "knowledge-base")
+	if c.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.Token)
+	}
+	resp, err := c.client().Do(req)
+	if err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return problem("GITHUB_UNAVAILABLE", "GitHub could not be reached. Retry later.")
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxGitHubResponseSize+1))
+	resp.Body.Close()
+	if err != nil {
+		return problem("GITHUB_UNAVAILABLE", "GitHub response could not be read. Retry later.")
+	}
+	if err := githubStatusError(resp, c.Token != ""); err != nil {
+		return err
+	}
+	if len(body) > maxGitHubResponseSize {
+		return problem("GITHUB_UNAVAILABLE", "GitHub response is too large.")
+	}
+	if err := json.Unmarshal(body, out); err != nil {
+		return problem("GITHUB_UNAVAILABLE", "GitHub returned an unexpected response.")
+	}
+	return nil
 }
 
 func githubStatusError(resp *http.Response, hasToken bool) error {
