@@ -149,6 +149,9 @@ func TestTeamRolloutTools(t *testing.T) {
 	if !strings.Contains(agents.Content, "`rollout`") {
 		t.Fatal("AGENTS.md does not reference the project slug")
 	}
+	if !strings.Contains(agents.Content, "`git remote get-url origin`") || !strings.Contains(agents.Content, "`repository`") {
+		t.Fatal("AGENTS.md does not pick the project by repository")
+	}
 
 	// Export, then import into another project twice: the second run skips everything.
 	export, err := s.ExportProject(ctx, editor, p.ID, true)

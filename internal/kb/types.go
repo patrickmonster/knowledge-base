@@ -39,6 +39,8 @@ type Project struct {
 	OwnerID     string `json:"owner_id"`
 	Role        string `json:"role,omitempty"`
 	CreatedAt   string `json:"created_at"`
+	// Repositories is filled by list_projects only.
+	Repositories []string `json:"repositories,omitempty"`
 }
 type Document struct {
 	ID        string   `json:"id"`
