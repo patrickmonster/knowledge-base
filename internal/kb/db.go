@@ -34,6 +34,9 @@ type Store struct {
 	// MFAKey seals TOTP secrets (ParseMFAKey). Empty disables MFA setup, and
 	// sign-in for users who already enabled MFA fails closed.
 	MFAKey []byte
+	// GitHub reads repository issues for import_github_issues; nil uses the
+	// public API without a token.
+	GitHub *GitHubClient
 }
 type Querier interface {
 	ExecContext(context.Context, string, ...any) (sql.Result, error)
@@ -56,7 +59,7 @@ func Open(ctx context.Context, dsn string) (*Store, error) {
 	return &Store{DB: db}, nil
 }
 // migrationScripts are applied in order; version N is migrationScripts[N-1].
-var migrationScripts = []string{migrations.Initial, migrations.Auth, migrations.Embeddings, migrations.PermanentKeys, migrations.TaskWorkflow, migrations.Attachments, migrations.AttachmentUploadTokens, migrations.NormalizeTags, migrations.DocumentLinks, migrations.Issues, migrations.TeamRollout, migrations.KnowledgeQuality, migrations.ProjectRules, migrations.RuleEnabled, migrations.SearchMisses, migrations.MFA, migrations.AttachmentChunks, migrations.AttachmentText}
+var migrationScripts = []string{migrations.Initial, migrations.Auth, migrations.Embeddings, migrations.PermanentKeys, migrations.TaskWorkflow, migrations.Attachments, migrations.AttachmentUploadTokens, migrations.NormalizeTags, migrations.DocumentLinks, migrations.Issues, migrations.TeamRollout, migrations.KnowledgeQuality, migrations.ProjectRules, migrations.RuleEnabled, migrations.SearchMisses, migrations.MFA, migrations.AttachmentChunks, migrations.AttachmentText, migrations.IssueSources}
 
 func (s *Store) Migrate(ctx context.Context) error {
 	return transaction(ctx, s.DB, func(tx *sql.Tx) error {

@@ -55,3 +55,6 @@ var AttachmentChunks string
 
 //go:embed 018_attachment_text.sql
 var AttachmentText string
+
+//go:embed 019_issue_sources.sql
+var IssueSources string

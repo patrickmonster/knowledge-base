@@ -21,8 +21,8 @@ async function issuesPage() {
   const query=selectQuery(filters);
   controls.append(filters);
   const summary=el('p','','small muted');summary.setAttribute('role','status');controls.append(summary);
-  const createCard=card('새 질의 · 이슈'), areaCard=card('공통 작업 영역과 담당자'), notifyCard=el('div'), list=el('div');
-  root.append(list,createCard,areaCard,notifyCard);
+  const createCard=card('새 질의 · 이슈'), importCard=card('GitHub 이슈 가져오기'), areaCard=card('공통 작업 영역과 담당자'), notifyCard=el('div'), list=el('div');
+  root.append(list,createCard,importCard,areaCard,notifyCard);
   let generation=0, members=[], areas=[];
   const current=()=>projects.find(p=>p.id===project.value);
   const canWrite=()=>['owner','admin','editor'].includes(current().role);
@@ -31,7 +31,7 @@ async function issuesPage() {
     const ticket=++generation, p=current();
     [members,areas]=await Promise.all([tool('list_project_members',{project_id:p.id}),tool('list_work_areas',{project_id:p.id})]);
     if (ticket!==generation) return;
-    renderCreate(); renderAreas(); await refresh();
+    renderCreate(); renderImport(); renderAreas(); await refresh();
     const notifications=await notificationCard(p);
     if (ticket===generation||current().id===p.id) notifyCard.replaceChildren(notifications);
   }
@@ -59,6 +59,13 @@ async function issuesPage() {
     if (i.comment_count) meta.push('댓글 '+i.comment_count);
     c.append(el('p',meta.filter(Boolean).join(' · '),'small muted'));
     if (i.tags?.length) c.append(el('p',i.tags.join(' · '),'small'));
+    if (i.source==='github') {
+      const src=el('p',undefined,'small muted');
+      if (i.source_url?.startsWith('https://')) { const a=el('a','GitHub '+i.source_key);a.href=i.source_url;a.target='_blank';a.rel='noopener noreferrer';src.append(a); }
+      else src.append(document.createTextNode('GitHub '+i.source_key));
+      src.append(document.createTextNode(' 에서 가져옴'+(i.source_updated_at?' · GitHub 수정 '+new Date(i.source_updated_at).toLocaleString():'')));
+      c.append(src);
+    }
     c.append(renderMarkdown(i.body,'vector-content'));
     if (i.answer) {
       const answer=el('div',undefined,'issue-answer');
@@ -125,6 +132,38 @@ async function issuesPage() {
       await tool('create_issue',input);f.reset();notify('등록했습니다.');await loadProject();
     });
     createCard.append(f);
+  }
+  function renderImport() {
+    importCard.replaceChildren(el('h2','GitHub 이슈 가져오기'));
+    importCard.append(el('p','GitHub 저장소의 이슈를 이 프로젝트의 이슈·질의로 가져옵니다(단방향, PR 제외). 다시 가져오면 같은 항목의 제목·본문·라벨이 갱신되고, 상태는 GitHub에서 열림·닫힘이 바뀐 경우에만 따라갑니다. 여기서 단 답변·담당자·영역은 유지됩니다.','small muted'));
+    importCard.append(el('p','비공개 저장소는 서버에 GITHUB_TOKEN이 설정되어 있어야 합니다.','small muted'));
+    if (!canWrite()) { importCard.append(el('p','편집자 이상만 가져올 수 있습니다.','small muted')); return; }
+    const f=el('form');
+    const repo=field(f,'저장소 (owner/name 또는 GitHub 주소)','repository');repo.placeholder='octocat/hello-world';repo.maxLength=200;
+    selectField(f,'상태','state',[['open','열린 이슈'],['closed','닫힌 이슈'],['all','전체']]);
+    selectField(f,'종류','kind',[['issue','모두 이슈'],['question','모두 질의'],['auto','자동 — question 라벨이면 질의']]);
+    const labels=field(f,'라벨 필터 (쉼표로 구분, 모두 포함한 이슈만, 선택)','labels');labels.required=false;
+    const limit=field(f,'최대 개수 (1–500)','limit','number','100');limit.min=1;limit.max=500;
+    selectField(f,'새 항목의 공통 작업 영역','area_id',[['','없음'],...areas.map(a=>[a.id,`${a.name} — ${a.owner_name}`])]);
+    selectField(f,'새 항목의 담당자 (비우면 영역 담당자)','assignee_id',memberOptions('자동 / 미지정'));
+    const tags=field(f,'추가 태그 (쉼표로 구분, 선택)','tags');tags.required=false;
+    const result=el('div');
+    formSubmit(f,'가져오기',async d=>{
+      const input={project_id:current().id,repository:d.repository.trim(),state:d.state,kind:d.kind,limit:Number(d.limit)||100};
+      const split=v=>(v||'').split(',').map(s=>s.trim()).filter(Boolean);
+      if (split(d.labels).length) input.labels=split(d.labels);
+      if (split(d.tags).length) input.tags=split(d.tags);
+      if (d.area_id) input.area_id=d.area_id;
+      if (d.assignee_id) input.assignee_id=d.assignee_id;
+      result.replaceChildren(el('p','GitHub에서 가져오는 중…','muted'));
+      try {
+        const r=await tool('import_github_issues',input);
+        const text=`${r.repository}: ${r.fetched}건 조회 · 새로 ${r.created} · 갱신 ${r.updated} · 변경 없음 ${r.unchanged}`+(r.skipped_pull_requests?` · PR ${r.skipped_pull_requests}건 제외`:'')+(r.authenticated?'':' · 토큰 없이 조회(공개 저장소만)');
+        result.replaceChildren(el('p',text,'small'));
+        notify('GitHub 이슈를 가져왔습니다.');await refresh();
+      } catch(e) { result.replaceChildren(); throw e; }
+    });
+    importCard.append(f,result);
   }
   function renderAreas() {
     areaCard.replaceChildren(el('h2','공통 작업 영역과 담당자'));

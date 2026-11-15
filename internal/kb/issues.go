@@ -50,6 +50,8 @@ type WorkAreaInput struct {
 	OwnerID     string `json:"owner_id" jsonschema:"User ID of the area owner (담당자); must be a project owner or editor"`
 }
 
+// Issue is a question or issue. Source* fields are set only for items
+// imported from GitHub (import_github_issues).
 type Issue struct {
 	ID                  string         `json:"id"`
 	ProjectID           string         `json:"project_id"`
@@ -72,6 +74,11 @@ type Issue struct {
 	TaskID              *string        `json:"task_id"`
 	KnowledgeDocumentID *string        `json:"knowledge_document_id"`
 	RequestKey          *string        `json:"request_key"`
+	Source              *string        `json:"source"`
+	SourceKey           *string        `json:"source_key"`
+	SourceURL           *string        `json:"source_url"`
+	SourceState         *string        `json:"source_state"`
+	SourceUpdatedAt     *string        `json:"source_updated_at"`
 	CreatedBy           string         `json:"created_by"`
 	CreatedByName       string         `json:"created_by_name"`
 	CreatedAt           string         `json:"created_at"`
