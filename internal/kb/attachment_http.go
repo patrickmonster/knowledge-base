@@ -1,9 +1,14 @@
 package kb
 
 import (
+	"bufio"
 	"context"
 	"crypto/subtle"
+	"database/sql"
+	"io"
+	"mime"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -107,4 +112,67 @@ func (a *App) attachmentUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.json(w, out)
+}
+
+// attachmentImage streams an issue image to a signed-in member so the page can
+// show it inline under img-src 'self'. Only issue images (checked as raster
+// types on upload) are served, and the type is sniffed again before sending.
+func (a *App) attachmentImage(w http.ResponseWriter, r *http.Request) {
+	cookie, err := r.Cookie("kb_session")
+	if err != nil {
+		a.fail(w, problem("UNAUTHORIZED", "Please sign in."))
+		return
+	}
+	id, err := a.Store.Session(r.Context(), cookie.Value)
+	if err != nil {
+		a.fail(w, err)
+		return
+	}
+	if err = a.Store.RateLimit(r.Context(), "image:"+id.User.ID, 600, 60); err != nil {
+		a.fail(w, err)
+		return
+	}
+	in := AttachmentInput{ProjectID: r.URL.Query().Get("project_id"), AttachmentID: r.PathValue("id")}
+	out, err := a.Store.Perform(auditInput(r.Context(), in), id, "view_issue_image", in.ProjectID, false, false, func(tx *sql.Tx) (any, error) {
+		f, err := readAttachment(r.Context(), tx, id, in, false)
+		if err != nil {
+			return nil, err
+		}
+		if err = a.Store.requireBucket(); err != nil {
+			return nil, err
+		}
+		if f.IssueID == nil {
+			return nil, problem("NOT_FOUND", "Image not found.")
+		}
+		if f.Status != "ready" {
+			return nil, problem("CONFLICT", "Image is not ready.")
+		}
+		return f, nil
+	})
+	if err != nil {
+		a.fail(w, err)
+		return
+	}
+	f := out.(Attachment)
+	body, err := a.Store.Objects.Get(r.Context(), attachmentKey(f.ProjectID, f.ID))
+	if err != nil {
+		a.fail(w, problem("STORAGE_UNAVAILABLE", "Could not read the image."))
+		return
+	}
+	defer body.Close()
+	reader := bufio.NewReaderSize(io.LimitReader(body, f.SizeBytes), 512)
+	head, _ := reader.Peek(512)
+	kind := http.DetectContentType(head)
+	if !issueImageTypes[kind] {
+		a.fail(w, problem("NOT_FOUND", "Image not found."))
+		return
+	}
+	h := w.Header()
+	h.Set("Content-Type", kind)
+	h.Set("Content-Length", strconv.FormatInt(f.SizeBytes, 10))
+	h.Set("Content-Disposition", mime.FormatMediaType("inline", map[string]string{"filename": f.Filename}))
+	h.Set("Content-Security-Policy", "default-src 'none'; sandbox")
+	// Image content never changes for an attachment ID; access is rechecked after expiry.
+	h.Set("Cache-Control", "private, max-age=300")
+	io.Copy(w, reader)
 }

@@ -20,6 +20,9 @@ type ObjectStorage interface {
 	Check(context.Context) error
 	Put(context.Context, string, string, io.ReadSeeker, int64) error
 	DownloadURL(context.Context, string, string) (string, error)
+	// Get streams an object through the app, used to show issue images inline
+	// under the page's same-origin image policy.
+	Get(context.Context, string) (io.ReadCloser, error)
 	Delete(context.Context, string) error
 }
 
@@ -69,6 +72,13 @@ func (b *railwayBucket) DownloadURL(ctx context.Context, key, filename string) (
 		return "", err
 	}
 	return out.URL, nil
+}
+func (b *railwayBucket) Get(ctx context.Context, key string) (io.ReadCloser, error) {
+	out, err := b.client.GetObject(ctx, &s3.GetObjectInput{Bucket: aws.String(b.bucket), Key: aws.String(key)})
+	if err != nil {
+		return nil, err
+	}
+	return out.Body, nil
 }
 func (b *railwayBucket) Delete(ctx context.Context, key string) error {
 	_, err := b.client.DeleteObject(ctx, &s3.DeleteObjectInput{Bucket: aws.String(b.bucket), Key: aws.String(key)})

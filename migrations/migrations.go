@@ -67,3 +67,6 @@ var GitHubWebhooks string
 
 //go:embed 022_search_timings.sql
 var SearchTimings string
+
+//go:embed 023_issue_attachments.sql
+var IssueAttachments string

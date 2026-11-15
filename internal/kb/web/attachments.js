@@ -79,7 +79,7 @@ async function attachmentsPage() {
       if(usage){const mb=n=>(n/1048576).toFixed(1)+' MB';list.append(el('p',`사용량 ${mb(usage.used_bytes)} / ${usage.quota_bytes?mb(usage.quota_bytes):'제한 없음'} · 악성 파일 검사 ${usage.malware_scanner==='none'?'없음':usage.malware_scanner}${usage.executables_blocked?' · 실행 파일 차단':''}`,'small muted'));}
       if(!items.length)list.append(el('p',offset===0?'이 프로젝트에 등록된 첨부 파일이 없습니다. 파일을 업로드하면 여기에 표시됩니다.':'마지막 페이지입니다. 이전 페이지로 돌아가 주세요.','empty'));
       if(items.length)
-      list.append(table(['파일','크기 / 상태','연결 문서','관리'],items.map(f=>{
+      list.append(table(['파일','크기 / 상태','연결 문서 · 이슈','관리'],items.map(f=>{
         const actions=el('div',undefined,'actions');
         if(f.status==='ready')actions.append(btn('다운로드',async()=>{
           const result=await tool('get_attachment_download',{project_id:projectID,attachment_id:f.id});
@@ -93,7 +93,7 @@ async function attachmentsPage() {
         const name=el('div');name.append(el('strong',f.filename),el('p',f.id,'small muted'));
         if(f.text_document_id)name.append(el('p',`본문 문서 ${f.text_document_id}`,'small muted'));
         const text={extracted:f.text_truncated?' · 본문 색인됨(앞부분만)':' · 본문 색인됨',empty:' · 추출할 본문 없음(스캔본은 OCR 필요)',failed:` · 본문 추출 실패(${f.text_error||'오류'})`}[f.text_status]||'';
-        return [name,`${(f.size_bytes/1024).toFixed(1)} KB · ${labels[f.status]||f.status}${text}`,f.document_id?`${f.document_id} · v${f.document_revision}`:'프로젝트 첨부',actions];
+        return [name,`${(f.size_bytes/1024).toFixed(1)} KB · ${labels[f.status]||f.status}${text}`,f.document_id?`${f.document_id} · v${f.document_revision}`:f.issue_id?`이슈 사진 · ${f.issue_id}`:'프로젝트 첨부',actions];
       })));
       const nav=el('div',undefined,'actions');
       const prev=btn('이전',async()=>{offset=Math.max(0,offset-25);await refresh();});prev.disabled=offset===0;
