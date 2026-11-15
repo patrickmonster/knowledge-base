@@ -15,10 +15,13 @@
 7. run.context.issues를 확인한다. 내게 배정된 질의에는 아는 사실로만 답하고, 내가 남긴 질의의 답변을 반영한다.
    답변 전 보류(blocking) 질의가 open이면 사용자에게 확인한다. 담당자가 내가 아닌 공통 영역(shared_areas, owner_is_you=false)을
    바꿔야 하면 create_issue(area_id, task_id)로 담당자에게 질의를 남긴다. 자세한 내용은 docs/issues.md.
+8. run.context.deployments가 있으면 이전 작업의 PR 병합·배포가 아직 history에 기록되지 않은 것이다.
+   서버가 자동으로 기록하며, 바로 확인하려면 check_task_deployments를 호출한다. history 본문을 고쳐 쓰지 않는다.
 
 작업을 마치기 전에:
 1. finish_task에 run.id, 실제 outcome, summary, changes, decisions, validation, remaining, references를 전달한다.
    실제로 근거로 쓴 문서 ID는 used_sources, 찾지 못한 지식은 missing_knowledge로 함께 전달한다.
+   변경을 담은 PR이 있으면 pull_requests에 링크를 전달한다. 병합·배포는 서버가 나중에 history에 기록한다.
    응답의 decision_candidates·similar_decisions는 제안이므로 사용자 확인 후에만 저장·연결한다.
 2. 추가 기획·결정 문서가 필요하면 documents에 양식별 sections를 채워 함께 저장한다. 확정된 내용만 active로 지정한다.
 3. 결과의 history 문서를 작업 이력으로 사용한다. 같은 이력을 create_document로 다시 만들지 않는다.
@@ -39,6 +42,7 @@
 | `finish_task` | 히스토리와 선택적 기획·결정을 저장하고 작업 종료 | 작업을 시작한 사용자 + 현재 편집 권한 + 쓰기 가능한 키 |
 | `get_task_run` | 작업 맥락과 완료 문서 ID·버전 조회 | 프로젝트 참여자 |
 | `list_task_runs` | 진행 중/종료 작업 목록과 ID 복구 | 프로젝트 참여자 |
+| `check_task_deployments` | finish_task에 남긴 PR의 병합·배포를 지금 확인하고 history에 상태 갱신 블록 추가 | 프로젝트 편집자 이상, 쓰기 가능한 키 |
 
 조회 전용 사용자는 `get_task_context`로 지식을 조회할 수 있지만 작업 기록 생성·종료는 할 수 없습니다. 전역 관리자도 프로젝트 참여 없이 자료를 읽지 못합니다. 사용자 ID는 인증에서 결정하며 입력으로 가장할 수 없습니다.
 
@@ -86,6 +90,16 @@
 이번 작업이 기존 결정·기획을 실행한 것이면 `implements`에 그 문서 ID를 최대 20개 넣습니다. 히스토리와 해당 문서가 `implements` 관계로 연결되어 결정 쪽에서 `get_document_links`의 `implemented_by`로 작업 기록을 찾을 수 있습니다. 새 결정이 옛 결정을 대체하면 저장 후 `link_documents(relation: supersedes, source_id: 새 결정, target_id: 옛 결정)`로 연결합니다.
 
 완료 시 문서·문서 버전·임베딩 대기열·작업 상태·감사 로그가 같은 트랜잭션에 저장됩니다. 한 문서의 검증이나 저장이 실패하면 모두 롤백합니다. 같은 완료 입력을 다시 보내면 기존 문서 ID와 최초 저장 버전을 반환하며 문서를 복제하지 않습니다. 다른 입력으로 이미 종료한 작업을 재완료하면 `CONFLICT`입니다. 보완은 기존 문서를 읽고 `update_document(expected_revision, reason)`로 처리합니다. 완료 응답은 최초 저장 영수증이므로 나중의 문서 수정이 응답을 바꾸지는 않습니다.
+
+## PR 병합·배포 기록
+
+history는 PR을 만든 시점에 저장되는 경우가 많아, 나중에 병합·배포돼도 "미병합·미배포"로 남았습니다. `finish_task`의 `pull_requests`에 변경을 담은 PR 링크(`https://github.com/owner/repo/pull/N` 또는 `owner/repo#N`, 최대 10개)를 넣으면 서버가 이후 상태를 대신 확인해 기록합니다.
+
+- **확인:** 서버가 기동 1분 뒤와 20분마다 GitHub에서 PR이 병합·닫힘인지 확인합니다. 서버 자신의 저장소(`SERVER_REPOSITORY`, Railway에서는 `RAILWAY_GIT_REPO_OWNER/NAME`)의 PR은 병합 커밋이 실행 중인 빌드에 포함됐는지(`compare` API)도 확인해 `deployed`로 표시합니다. 다른 저장소의 PR은 병합까지만 확인합니다. 열린 PR은 30일 동안 확인합니다.
+- **기록:** PR이 최종 상태(배포됨, 닫힘, 배포를 확인하지 않는 저장소에서 병합됨)가 되면 history 제목 바로 아래에 `> **상태 갱신 (… 서버 자동 확인)**` 블록을 덧붙입니다. 작성 시점 본문은 고치지 않고, 새 블록은 이전 블록 위에 쌓입니다. 문서 버전은 작업을 끝낸 사용자 이름으로 하나 늘고 감사 로그에 `deployment_recorded`가 남습니다. 그 사용자가 편집 권한을 잃었으면 기록하지 않고 `check_error: HISTORY_NOT_WRITABLE`로 남깁니다.
+- **맥락 표시:** 아직 기록되지 않은 내 PR은 `start_task`·`get_task_context`의 `context.deployments`에 나옵니다(최근 30일, 최대 10개).
+- **즉시 확인:** `check_task_deployments(project_id, task_id?)`가 바로 확인하고 기록합니다. 한 번에 최대 20개 PR을 확인합니다. 조회자·읽기 전용 키는 GitHub를 호출하기 전에 거부합니다.
+- **한계:** 이 블록은 GitHub 병합 상태와 실행 중인 빌드만 확인합니다. 운영에서 기능을 실제로 써 본 확인은 사람이 따로 남깁니다. 토큰이 없으면 공개 저장소만, 시간당 60회 한도입니다(`GITHUB_TOKEN`). 문서만 바뀐 PR처럼 배포가 일어나지 않으면 `merged`로 남습니다. `DEPLOYMENT_CHECKS=false`면 주기 확인을 끄며, 도구로는 계속 확인할 수 있습니다.
 
 ## 작성 양식
 

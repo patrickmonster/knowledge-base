@@ -58,3 +58,6 @@ var AttachmentText string
 
 //go:embed 019_issue_sources.sql
 var IssueSources string
+
+//go:embed 020_task_pull_requests.sql
+var TaskPullRequests string

@@ -81,6 +81,17 @@ func run() error {
 		if store.GitHub, err = kb.NewGitHubClient(os.Getenv("GITHUB_API_URL"), os.Getenv("GITHUB_TOKEN")); err != nil {
 			return err
 		}
+		if store.Deployment, err = kb.DetectDeploymentTarget(os.Getenv("SERVER_REPOSITORY"), os.Getenv("RAILWAY_GIT_REPO_OWNER"), os.Getenv("RAILWAY_GIT_REPO_NAME")); err != nil {
+			return err
+		}
+		if deploymentChecks := os.Getenv("DEPLOYMENT_CHECKS"); deploymentChecks != "" && deploymentChecks != "true" && deploymentChecks != "false" {
+			return errors.New("DEPLOYMENT_CHECKS must be true or false")
+		} else if deploymentChecks != "false" {
+			workerCtx, stopWorker := context.WithCancel(ctx)
+			workerDone := make(chan struct{})
+			go func() { defer close(workerDone); store.RunDeploymentChecks(workerCtx) }()
+			defer func() { stopWorker(); <-workerDone }()
+		}
 		if store.Retention, err = kb.ParseRetention(os.Getenv("AUDIT_RETENTION_DAYS"), os.Getenv("REVISION_RETENTION_DAYS"), os.Getenv("REVISION_KEEP_LATEST")); err != nil {
 			return err
 		}

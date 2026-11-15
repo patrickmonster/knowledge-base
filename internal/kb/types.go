@@ -123,6 +123,9 @@ type TaskContext struct {
 	Rechecks        *TaskRechecks    `json:"rechecks,omitempty"`
 	// Rules are the project (owner/admin) and personal commit and work rules to follow.
 	Rules *RuleSet `json:"rules,omitempty"`
+	// Deployments lists the caller's pull requests whose merge or deployment
+	// is not yet recorded in the task history.
+	Deployments *TaskDeployments `json:"deployments,omitempty"`
 }
 
 type SearchResult struct {
