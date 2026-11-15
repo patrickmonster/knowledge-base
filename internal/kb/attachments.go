@@ -24,17 +24,23 @@ const MaxAttachmentBytes int64 = 25 << 20
 const MaxAttachmentChunkBytes = 512 << 10
 
 type Attachment struct {
-	ID               string    `json:"id"`
-	ProjectID        string    `json:"project_id"`
-	DocumentID       *string   `json:"document_id"`
-	DocumentRevision *int      `json:"document_revision"`
-	Filename         string    `json:"filename"`
-	SizeBytes        int64     `json:"size_bytes"`
-	SHA256           *string   `json:"sha256"`
-	Status           string    `json:"status"`
-	CreatedBy        string    `json:"created_by"`
-	CreatedAt        time.Time `json:"created_at"`
-	UpdatedAt        time.Time `json:"updated_at"`
+	ID               string  `json:"id"`
+	ProjectID        string  `json:"project_id"`
+	DocumentID       *string `json:"document_id"`
+	DocumentRevision *int    `json:"document_revision"`
+	Filename         string  `json:"filename"`
+	SizeBytes        int64   `json:"size_bytes"`
+	SHA256           *string `json:"sha256"`
+	Status           string  `json:"status"`
+	// TextStatus is none, extracted, empty or failed; extracted PDF/DOCX/XLSX
+	// text lives in the artifact document TextDocumentID.
+	TextStatus     string    `json:"text_status"`
+	TextError      *string   `json:"text_error,omitempty"`
+	TextDocumentID *string   `json:"text_document_id,omitempty"`
+	TextTruncated  bool      `json:"text_truncated,omitempty"`
+	CreatedBy      string    `json:"created_by"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 type PrepareAttachmentInput struct {
 	ProjectID  string `json:"project_id"`
@@ -66,7 +72,7 @@ func (s *Store) requireBucket() error {
 }
 func attachmentKey(projectID, id string) string { return "attachments/" + projectID + "/" + id }
 func registerAttachmentTools(t Tools, s *Store) {
-	add(t, s, "prepare_attachment_upload", "Reserve a private file (max 25 MiB) for a file the user attached or that you produced (for example an .xlsx summary). Then PUT the raw bytes with Content-Type application/octet-stream to upload_url (one-time, 1 hour, no Authorization header; e.g. curl --fail-with-body -T <file> -H 'Content-Type: application/octet-stream' '<upload_url>'), or to upload_path with the same Bearer key. Prefer the PUT. Only if your network cannot reach upload_url, send the bytes with upload_attachment_chunk instead (base64, costly for large files). Confirm status ready with the PUT response or list_attachments. File text is not indexed: also save a knowledge document summarizing the file and pass its document_id.", true, func(in PrepareAttachmentInput) string { return in.ProjectID }, func(ctx context.Context, tx *sql.Tx, a Identity, in PrepareAttachmentInput) (any, error) {
+	add(t, s, "prepare_attachment_upload", "Reserve a private file (max 25 MiB) for a file the user attached or that you produced (for example an .xlsx summary). Then PUT the raw bytes with Content-Type application/octet-stream to upload_url (one-time, 1 hour, no Authorization header; e.g. curl --fail-with-body -T <file> -H 'Content-Type: application/octet-stream' '<upload_url>'), or to upload_path with the same Bearer key. Prefer the PUT. Only if your network cannot reach upload_url, send the bytes with upload_attachment_chunk instead (base64, costly for large files). Confirm status ready with the PUT response or list_attachments. Text of .pdf, .docx and .xlsx files is extracted on upload into an artifact document (text_status, text_document_id) that search indexes; scanned PDFs need OCR and stay empty. Other files are not indexed. Still save a knowledge document summarizing the file's purpose and key points and pass its document_id.", true, func(in PrepareAttachmentInput) string { return in.ProjectID }, func(ctx context.Context, tx *sql.Tx, a Identity, in PrepareAttachmentInput) (any, error) {
 		if _, err := projectAccess(ctx, tx, a.User.ID, in.ProjectID, true); err != nil {
 			return nil, err
 		}
@@ -153,7 +159,7 @@ func registerAttachmentTools(t Tools, s *Store) {
 		}
 		return map[string]any{"attachment": f, "url": u, "expires_in_seconds": 300}, nil
 	})
-	add(t, s, "delete_attachment", "Remove access to a file and queue its bucket object for deletion. Existing download links expire within 5 minutes.", true, func(in AttachmentInput) string { return in.ProjectID }, func(ctx context.Context, tx *sql.Tx, a Identity, in AttachmentInput) (any, error) {
+	add(t, s, "delete_attachment", "Remove access to a file and queue its bucket object for deletion. Its extracted text document, if any, is archived. Existing download links expire within 5 minutes.", true, func(in AttachmentInput) string { return in.ProjectID }, func(ctx context.Context, tx *sql.Tx, a Identity, in AttachmentInput) (any, error) {
 		f, err := readAttachment(ctx, tx, a, in, true)
 		if err != nil {
 			return nil, err
@@ -163,6 +169,9 @@ func registerAttachmentTools(t Tools, s *Store) {
 		}
 		if f.Status == "uploading" {
 			return nil, problem("CONFLICT", "Upload is in progress. Try again later.")
+		}
+		if err = archiveAttachmentText(ctx, tx, a, f); err != nil {
+			return nil, err
 		}
 		_, err = tx.ExecContext(ctx, "UPDATE attachments SET status='deleting',updated_at=now() WHERE id=$1", f.ID)
 		return map[string]any{"id": f.ID, "status": "deleting"}, err
@@ -239,6 +248,8 @@ func (s *Store) UploadAttachment(ctx context.Context, a Identity, in AttachmentI
 		return nil, problem("STORAGE_UNAVAILABLE", "Upload failed. Prepare a new upload to retry.")
 	}
 	digest := fmt.Sprintf("%x", hash.Sum(nil))
+	// The object is stored; text extraction can only add an index, never fail the upload.
+	text := s.extractAttachmentText(ctx, f, file.Name())
 	return s.Perform(ctx, a, "upload_attachment_complete", in.ProjectID, true, false, func(tx *sql.Tx) (any, error) {
 		current, err := readAttachment(ctx, tx, a, in, true)
 		if err != nil {
@@ -251,7 +262,11 @@ func (s *Store) UploadAttachment(ctx context.Context, a Identity, in AttachmentI
 		if _, err := tx.ExecContext(ctx, "DELETE FROM attachment_chunks WHERE attachment_id=$1", f.ID); err != nil {
 			return nil, err
 		}
-		return one[Attachment](ctx, tx, `WITH a AS (UPDATE attachments SET status='ready',sha256=$2,updated_at=now() WHERE id=$1 RETURNING *) SELECT to_jsonb(a)-'object_key' FROM a`, f.ID, digest)
+		textDocumentID, err := saveAttachmentText(ctx, tx, a, f, digest, text)
+		if err != nil {
+			return nil, err
+		}
+		return one[Attachment](ctx, tx, `WITH a AS (UPDATE attachments SET status='ready',sha256=$2,text_status=$3,text_error=NULLIF($4,''),text_document_id=NULLIF($5,'')::uuid,text_truncated=$6,updated_at=now() WHERE id=$1 RETURNING *) SELECT to_jsonb(a)-'object_key' FROM a`, f.ID, digest, text.status, text.code, textDocumentID, text.res.Truncated)
 	})
 }
 

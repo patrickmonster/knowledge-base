@@ -15,6 +15,10 @@ import (
 )
 
 func run() error {
+	// The extraction child runs without a database or any server secrets.
+	if len(os.Args) > 1 && os.Args[1] == "extract-text" {
+		return kb.RunExtractTextCommand(os.Args[2:], os.Stdout)
+	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	dsn := os.Getenv("DATABASE_URL")
@@ -59,6 +63,17 @@ func run() error {
 				return errors.New("CLAMAV_ADDRESS must be host:port")
 			}
 			store.Scanner = kb.ClamAV{Address: address}
+		}
+		textExtraction := os.Getenv("ATTACHMENT_TEXT_EXTRACTION")
+		if textExtraction != "" && textExtraction != "true" && textExtraction != "false" {
+			return errors.New("ATTACHMENT_TEXT_EXTRACTION must be true or false")
+		}
+		if textExtraction != "false" {
+			executable, err := os.Executable()
+			if err != nil {
+				return err
+			}
+			store.Extractor = kb.ProcessExtractor{Executable: executable}
 		}
 		if store.MFAKey, err = kb.ParseMFAKey(os.Getenv("MFA_ENCRYPTION_KEY")); err != nil {
 			return err

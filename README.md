@@ -169,7 +169,7 @@ Authorization: Bearer <발급받은 MCP 키>
 
 웹 **검토 대기** 화면은 프로젝트의 draft 문서를 모아 보여 줍니다. 소유자·편집자가 본문을 확인하고 사유와 함께 승인(`active`) 또는 반려(`archived`)하면 사유가 `검토 승인: …` / `검토 반려: …` 형식으로 버전 기록에 남고 감사 로그에 결정이 기록됩니다(사유 본문은 감사 로그에 복사하지 않음). 이 동작(`review_document`)은 로그인한 사람만 할 수 있으며 MCP 도구 목록에 노출되지 않고 MCP 키 호출은 거부됩니다. AI가 만든 미확정 지식을 같은 AI가 승격하지 않도록 하기 위한 제한입니다. 단, `update_document`로 상태를 바꾸는 기존 경로는 그대로 남아 있습니다.
 
-원본 문서는 최대 100,000자입니다. 작업 맥락은 기본 8,000자의 발췌문 예산을 사용하며 메타데이터는 예산에서 제외합니다. 기본 검색은 의미·키워드 검색을 결합합니다. 모델의 의미 판단과 검색 결과는 실제 프로젝트 자료로 평가해야 합니다. 작업물 본문·링크 외에 [Railway 버킷 첨부 파일](docs/attachments.md)을 지원합니다. 파일당 최대 25 MiB이며 PDF·Word 본문 자동 추출과 임베딩은 포함하지 않습니다.
+원본 문서는 최대 100,000자입니다. 작업 맥락은 기본 8,000자의 발췌문 예산을 사용하며 메타데이터는 예산에서 제외합니다. 기본 검색은 의미·키워드 검색을 결합합니다. 모델의 의미 판단과 검색 결과는 실제 프로젝트 자료로 평가해야 합니다. 작업물 본문·링크 외에 [Railway 버킷 첨부 파일](docs/attachments.md)을 지원합니다. 파일당 최대 25 MiB이며 PDF·DOCX·XLSX는 업로드 때 본문을 추출해 artifact 문서로 색인합니다(스캔본 OCR은 미지원).
 
 ## 로컬 임베딩 동작
 
@@ -327,4 +327,4 @@ TEST_DATABASE_URL='<test-only PostgreSQL URL>' TEST_OLLAMA_URL=http://localhost:
 
 ## 첨부 파일
 
-내부 화면 **첨부 문서**에서 버킷 연결 상태·마지막 확인 시각·연결 재확인과 프로젝트별 파일 업로드·다운로드·삭제와 지식 문서 연결을 지원합니다. MCP는 `prepare_attachment_upload`, `upload_attachment_chunk`, `list_attachments`, `get_attachment_usage`, `get_attachment_download`, `delete_attachment`를 제공합니다. 프로젝트별 총량(기본 1 GiB), 실행 파일 차단, 선택적 ClamAV 검사가 적용됩니다. 업로드 본문은 HTTP PUT으로 전송합니다. MCP 키로 예약하면 1시간 유효한 1회용 `upload_url`을 함께 받아 키 원문 없이 `curl -T`로 올릴 수 있습니다(`007_attachment_upload_tokens.sql` 필요). 네트워크가 `upload_url`에 닿지 않는 클라이언트는 `upload_attachment_chunk`로 512 KiB 이하 base64 조각을 MCP로 보낼 수 있습니다(`017_attachment_chunks.sql` 필요). 사용자가 첨부한 파일이나 엑셀 정리 결과를 AI가 버킷에 보관하는 절차는 `AGENTS.md`의 "첨부 파일과 산출 파일 보관"을 따릅니다. 기존 프로젝트 권한·키 범위·읽기 전용 제한과 감사 기록을 그대로 적용합니다. 버킷 연결 설정, 실패 복구와 검색 제한은 [첨부 안내](docs/attachments.md)를 참고하세요.
+내부 화면 **첨부 문서**에서 버킷 연결 상태·마지막 확인 시각·연결 재확인과 프로젝트별 파일 업로드·다운로드·삭제와 지식 문서 연결을 지원합니다. MCP는 `prepare_attachment_upload`, `upload_attachment_chunk`, `list_attachments`, `get_attachment_usage`, `get_attachment_download`, `delete_attachment`를 제공합니다. 프로젝트별 총량(기본 1 GiB), 실행 파일 차단, 선택적 ClamAV 검사가 적용됩니다. 업로드 본문은 HTTP PUT으로 전송합니다. MCP 키로 예약하면 1시간 유효한 1회용 `upload_url`을 함께 받아 키 원문 없이 `curl -T`로 올릴 수 있습니다(`007_attachment_upload_tokens.sql` 필요). 네트워크가 `upload_url`에 닿지 않는 클라이언트는 `upload_attachment_chunk`로 512 KiB 이하 base64 조각을 MCP로 보낼 수 있습니다(`017_attachment_chunks.sql` 필요). `.pdf`·`.docx`·`.xlsx` 파일은 저장 직후 별도 자식 프로세스에서 본문을 추출해 `첨부 본문: <파일명>` artifact 문서로 만들고 기존 청크·임베딩·검색 경로로 색인합니다(`018_attachment_text.sql` 필요, `ATTACHMENT_TEXT_EXTRACTION=false`로 끔). 사용자가 첨부한 파일이나 엑셀 정리 결과를 AI가 버킷에 보관하는 절차는 `AGENTS.md`의 "첨부 파일과 산출 파일 보관"을 따릅니다. 기존 프로젝트 권한·키 범위·읽기 전용 제한과 감사 기록을 그대로 적용합니다. 버킷 연결 설정, 실패 복구와 검색 제한은 [첨부 안내](docs/attachments.md)를 참고하세요.
