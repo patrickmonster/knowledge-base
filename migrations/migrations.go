@@ -82,3 +82,6 @@ var TodoTaskLink string
 
 //go:embed 027_issue_todo_link.sql
 var IssueTodoLink string
+
+//go:embed 028_webhook_plain_secret.sql
+var WebhookPlainSecret string

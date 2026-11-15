@@ -120,7 +120,7 @@ open / answered ──update_issue──▶ closed(닫힘: 취소·불필요)
 가져오기는 누를 때만 반영됩니다. 이후 변경을 계속 따라가려면 프로젝트 소유자가 웹 **이슈 · 질의 → GitHub 웹훅**에서 저장소를 등록합니다. GitHub가 이벤트가 생길 때만 이 서버로 알려 주므로 GitHub API 호출 한도를 거의 쓰지 않고, 비공개 저장소의 새 이벤트도 `GITHUB_TOKEN` 없이 받습니다.
 
 1. 웹에서 저장소(`owner/name`)와 동기화 범위(이슈, 작업 PR 병합·닫힘)를 정해 **웹훅 추가**를 누릅니다. 이슈는 가져오기와 같은 종류·영역·담당자·추가 태그를 씁니다.
-2. 표시되는 **Payload URL**(`/api/github/webhooks/<id>`)과 **Secret**을 GitHub 저장소 **Settings → Webhooks → Add webhook**에 붙여 넣습니다. Content type은 `application/json`, 이벤트는 *Let me select individual events*에서 **Issues**와 **Pull requests**를 고릅니다. Secret은 이때 한 번만 표시되며 잃어버리면 **Secret 재발급** 후 GitHub 설정도 바꿉니다.
+2. 표시되는 **Webhook ID**, **Payload URL**(`/api/github/webhooks/<Webhook ID>`)과 **Secret** 중 Payload URL과 Secret을 GitHub 저장소 **Settings → Webhooks → Add webhook**에 붙여 넣습니다. Content type은 `application/json`, 이벤트는 *Let me select individual events*에서 **Issues**와 **Pull requests**를 고릅니다. 같은 정보는 웹훅 목록의 **연결 정보**에서 소유자가 다시 볼 수 있습니다. Secret이 새어 나갔다고 의심되면 **Secret 재발급** 후 GitHub 설정도 바꿉니다.
 3. GitHub가 보내는 `ping`이 웹 화면의 최근 수신에 `처리`로 보이면 연결된 것입니다. GitHub의 *Recent Deliveries*에서도 응답을 볼 수 있습니다.
 4. 기존 이슈는 위의 가져오기로 한 번 가져옵니다(웹훅은 등록 이후 이벤트만 보냅니다).
 
@@ -136,7 +136,7 @@ open / answered ──update_issue──▶ closed(닫힘: 취소·불필요)
 보안과 동작:
 
 - 모든 요청은 `X-Hub-Signature-256`(HMAC-SHA256) 서명이 맞아야 하고, payload의 저장소가 등록한 저장소와 같아야 합니다. `X-GitHub-Delivery`로 같은 전달을 한 번만 처리합니다. 처리에 실패한 전달은 기록하지 않으므로 GitHub에서 **Redeliver**하면 다시 처리됩니다. 본문은 2 MiB까지 받습니다.
-- Secret은 서버의 `WEBHOOK_ENCRYPTION_KEY`(없으면 `MFA_ENCRYPTION_KEY`에서 별도 라벨로 유도한 키)로 AES-GCM 암호화해 저장합니다. 둘 다 없으면 웹훅을 만들거나 받을 수 없습니다. 키를 바꾸면 기존 웹훅은 Secret 재발급이 필요합니다.
+- Secret은 서버가 만들어 발급한 그대로 DB에 저장합니다(이 서버가 받는 쪽이라 HMAC 검증에 원문이 필요하고, 별도 서버 키 설정이 필요 없습니다). 목록 응답에는 들어가지 않으며 소유자만 **연결 정보**(`set_github_webhook`의 `show_secret`)로 볼 수 있습니다. 028 마이그레이션 이전에 만든 웹훅은 Secret이 비어 수신을 거부하므로 **Secret 재발급** 후 GitHub 설정을 바꿉니다.
 - 이벤트는 웹훅을 마지막으로 저장한 소유자 이름으로 처리되고(이슈 작성자, 감사 로그 `github_webhook`), 그 사람이 편집 권한을 잃으면 거부됩니다. 소유자가 웹훅을 다시 저장하면 됩니다.
 - 웹훅 설정·조회는 웹 콘솔 전용이며 MCP 키로는 쓸 수 없습니다. 수신 기록은 30일 뒤 지웁니다.
 - 웹훅이 걸린 저장소의 열린 PR은 주기 확인을 20분 대신 6시간마다 합니다(서버 재시작 중 놓친 이벤트 보정).
