@@ -70,6 +70,37 @@ open / answered ──update_issue──▶ closed(닫힘: 취소·불필요)
 
 **이슈 · 질의** 화면에서 프로젝트별로 질의를 보고(전체 / 내게 배정 / 내가 남긴, 상태·검색어 필터), 답변·댓글·해결·닫기·다시 열기·보류 표시를 하고, 해결할 때 질의응답을 지식 문서로 저장할 수 있습니다. 같은 화면 아래에서 새 질의를 등록하고 공통 작업 영역과 담당자를 관리합니다. 조회자는 읽기만 할 수 있습니다.
 
+## GitHub 이슈 가져오기
+
+`import_github_issues`(웹: **이슈 · 질의 → GitHub 이슈 가져오기**)는 GitHub 저장소의 이슈를 이 프로젝트의 질의·이슈로 가져옵니다. 편집자 이상만 쓸 수 있고, 권한을 확인한 뒤에 GitHub를 호출합니다.
+
+| 입력 | 내용 |
+| --- | --- |
+| `repository` | `owner/name` 또는 `https://github.com/owner/name` |
+| `state` | `open`(기본) · `closed` · `all` |
+| `labels`, `since` | GitHub 필터: 모든 라벨을 가진 이슈만, 이 시각(RFC3339) 이후 수정된 이슈만 |
+| `limit` | 1~500, 기본 100. PR은 건너뛰고 `skipped_pull_requests`로 셉니다 |
+| `kind` | `issue`(기본) · `question` · `auto`(`question` 라벨이면 질의) |
+| `area_id`, `assignee_id`, `tags` | 새로 만드는 항목의 영역·담당자(생략하면 영역 담당자)·추가 태그 |
+
+동작:
+
+- 항목은 `source: github`, `source_key: owner/repo#번호`(소문자 저장소)로 프로젝트마다 하나만 만듭니다. 다시 가져오면 GitHub 수정 시각이 바뀐 항목만 제목·본문·라벨을 갱신합니다(`created`·`updated`·`unchanged` 집계). 본문 맨 위에 GitHub 링크·작성자·라벨·댓글 수를 적고, 본문은 20,000자, 제목은 200자에서 자릅니다.
+- 상태는 GitHub의 열림·닫힘이 지난 가져오기 이후 바뀐 경우에만 따라갑니다: 열림 → `open`, 닫힘(completed) → `resolved`, 닫힘(not_planned·duplicate) → `closed`. 그래서 여기서 단 답변(`answered`)·해결은 GitHub 상태가 그대로면 유지됩니다.
+- 여기서 붙인 태그, 답변, 댓글, 영역, 담당자는 다시 가져와도 유지됩니다. 반대로 여기서 고친 제목·본문은 GitHub에서 이슈가 수정되면 GitHub 내용으로 덮어씁니다.
+- 단방향입니다. GitHub에 답변·상태를 다시 쓰지 않습니다. GitHub 댓글은 가져오지 않고 댓글 수만 본문에 표시합니다.
+- 가져오기로 만든 항목은 담당자 알림을 보내지 않습니다(대량 발송 방지). 필요하면 담당자에게 직접 알립니다.
+- 가져온 본문은 외부 텍스트이므로 다른 질의와 같이 참고 자료로만 취급합니다.
+
+서버 설정:
+
+| 변수 | 내용 |
+| --- | --- |
+| `GITHUB_TOKEN` | 선택. 없으면 공개 저장소만, 서버 주소당 시간당 60회 제한. 비공개 저장소는 Issues 읽기 권한이 있는 fine-grained 토큰을 지정합니다. 응답·로그·문서에 남기지 않습니다 |
+| `GITHUB_API_URL` | 선택. GitHub Enterprise Server용 `https://<host>/api/v3`. https만 허용 |
+
+오류 코드: `NOT_FOUND`(저장소 없음·권한 없음·이슈 비활성), `GITHUB_UNAUTHORIZED`(토큰 거부), `GITHUB_RATE_LIMITED`(한도 초과, 재설정 시각 포함), `GITHUB_UNAVAILABLE`(연결 실패·5xx).
+
 ## 현재 제약
 
 - 담당자 알림은 프로젝트별 알림 채널(웹훅·Slack·이메일)로 보냅니다([안내](team-rollout.md#이슈-담당자-알림)). 채널이 없으면 작업 시작 맥락이나 웹 화면에서 확인합니다.

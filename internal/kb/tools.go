@@ -261,6 +261,7 @@ func NewTools(s *Store) Tools {
 	registerReviewTools(t, s)
 	registerOwnershipTools(t, s)
 	registerIssueTools(t, s)
+	registerGitHubIssueTools(t, s)
 	registerNotificationTools(t, s)
 	registerAgentsTools(t, s)
 	registerQualityTools(t, s)
