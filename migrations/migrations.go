@@ -61,3 +61,6 @@ var IssueSources string
 
 //go:embed 020_task_pull_requests.sql
 var TaskPullRequests string
+
+//go:embed 021_github_webhooks.sql
+var GitHubWebhooks string

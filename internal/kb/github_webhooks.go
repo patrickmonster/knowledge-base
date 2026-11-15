@@ -1,0 +1,592 @@
+package kb
+
+import (
+	"context"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/hmac"
+	"crypto/rand"
+	"crypto/sha256"
+	"database/sql"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log/slog"
+	"strings"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+)
+
+// GitHub webhooks (GitHub 웹훅 수신).
+//
+// A project owner registers a repository in the web console and pastes the
+// payload URL and secret into the repository's webhook settings on GitHub.
+// GitHub then pushes events as they happen, so issue sync and pull request
+// merge tracking no longer depend on polling the GitHub API (60 requests per
+// hour without GITHUB_TOKEN):
+//
+//   - issues: opened, edited, closed, reopened, labeled, unlabeled → the same
+//     upsert as import_github_issues, keyed by owner/repo#number.
+//   - pull_request: closed (merged or not) and reopened → task_pull_requests
+//     state, then the history status block.
+//   - ping: connection check.
+//
+// Every delivery must carry a valid X-Hub-Signature-256 for the webhook's
+// secret, must name the registered repository, and is processed once per
+// X-GitHub-Delivery. Work is done as the person who created the webhook and
+// is refused when that person can no longer edit the project.
+//
+// Webhooks only report events after they are set up and can be missed while
+// the server restarts, so import_github_issues stays for the initial import
+// and the periodic pull request check stays as a slower safety net.
+
+const (
+	webhookDeliveryRetentionDays = 30
+	webhookCoveredRecheck        = 6 * time.Hour
+	maxWebhookBody               = 2 << 20
+	maxWebhooksPerProject        = 20
+)
+
+// ParseWebhookKey derives the key that seals webhook secrets from
+// WEBHOOK_ENCRYPTION_KEY, or, when that is empty, from MFA_ENCRYPTION_KEY
+// with a separate label. Both empty disables webhooks.
+func ParseWebhookKey(webhookRaw, mfaRaw string) ([]byte, error) {
+	if webhookRaw != "" {
+		if len(webhookRaw) < 32 {
+			return nil, errors.New("WEBHOOK_ENCRYPTION_KEY must have at least 32 characters")
+		}
+		sum := sha256.Sum256([]byte("kb-github-webhook-key-v1\x00" + webhookRaw))
+		return sum[:], nil
+	}
+	if len(mfaRaw) >= 32 {
+		sum := sha256.Sum256([]byte("kb-github-webhook-from-mfa-key-v1\x00" + mfaRaw))
+		return sum[:], nil
+	}
+	return nil, nil
+}
+
+func (s *Store) webhookCipher() (cipher.AEAD, error) {
+	if len(s.WebhookKey) != 32 {
+		return nil, problem("WEBHOOK_UNAVAILABLE", "GitHub webhooks are not configured on this server (WEBHOOK_ENCRYPTION_KEY or MFA_ENCRYPTION_KEY).")
+	}
+	block, err := aes.NewCipher(s.WebhookKey)
+	if err != nil {
+		return nil, err
+	}
+	return cipher.NewGCM(block)
+}
+
+func (s *Store) sealWebhookSecret(webhookID, secret string) (string, error) {
+	aead, err := s.webhookCipher()
+	if err != nil {
+		return "", err
+	}
+	nonce := make([]byte, aead.NonceSize())
+	if _, err := rand.Read(nonce); err != nil {
+		return "", err
+	}
+	sealed := aead.Seal(nonce, nonce, []byte(secret), []byte("kb-github-webhook-v1:"+webhookID))
+	return "v1:" + base64.RawStdEncoding.EncodeToString(sealed), nil
+}
+
+func (s *Store) openWebhookSecret(webhookID, sealed string) ([]byte, error) {
+	aead, err := s.webhookCipher()
+	if err != nil {
+		return nil, err
+	}
+	raw, ok := strings.CutPrefix(sealed, "v1:")
+	data, derr := base64.RawStdEncoding.DecodeString(raw)
+	if !ok || derr != nil || len(data) < aead.NonceSize() {
+		return nil, problem("WEBHOOK_UNAVAILABLE", "The webhook secret cannot be read. Rotate the secret in the web console.")
+	}
+	secret, err := aead.Open(nil, data[:aead.NonceSize()], data[aead.NonceSize():], []byte("kb-github-webhook-v1:"+webhookID))
+	if err != nil {
+		// Usually a changed encryption key.
+		return nil, problem("WEBHOOK_UNAVAILABLE", "The webhook secret cannot be read. Rotate the secret in the web console.")
+	}
+	return secret, nil
+}
+
+func newWebhookSecret() string {
+	var b [32]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		panic(err)
+	}
+	return hex.EncodeToString(b[:])
+}
+
+// validWebhookSignature checks GitHub's X-Hub-Signature-256 header
+// ("sha256=" + hex HMAC-SHA256 of the raw body) in constant time.
+func validWebhookSignature(secret, body []byte, header string) bool {
+	got, ok := strings.CutPrefix(strings.TrimSpace(header), "sha256=")
+	if !ok {
+		return false
+	}
+	sig, err := hex.DecodeString(got)
+	if err != nil || len(sig) != sha256.Size {
+		return false
+	}
+	m := hmac.New(sha256.New, secret)
+	m.Write(body)
+	return hmac.Equal(sig, m.Sum(nil))
+}
+
+// GitHubWebhook is a webhook as shown in the web console; the secret is never
+// included.
+type GitHubWebhook struct {
+	ID                string            `json:"id"`
+	ProjectID         string            `json:"project_id"`
+	Repository        string            `json:"repository"`
+	ImportIssues      bool              `json:"import_issues"`
+	IssueKind         string            `json:"issue_kind"`
+	AreaID            *string           `json:"area_id"`
+	AssigneeID        *string           `json:"assignee_id"`
+	Tags              []string          `json:"tags"`
+	TrackPullRequests bool              `json:"track_pull_requests"`
+	Enabled           bool              `json:"enabled"`
+	CreatedBy         string            `json:"created_by"`
+	CreatedByName     string            `json:"created_by_name,omitempty"`
+	CreatedAt         string            `json:"created_at"`
+	UpdatedAt         string            `json:"updated_at"`
+	LastDeliveryAt    *string           `json:"last_delivery_at"`
+	LastEvent         *string           `json:"last_event"`
+	LastOutcome       *string           `json:"last_outcome"`
+	LastError         *string           `json:"last_error"`
+	PayloadURL        string            `json:"payload_url"`
+	Recent            []WebhookDelivery `json:"recent"`
+}
+
+type WebhookDelivery struct {
+	DeliveryID string  `json:"delivery_id"`
+	Event      string  `json:"event"`
+	Outcome    string  `json:"outcome"`
+	Detail     *string `json:"detail"`
+	ReceivedAt string  `json:"received_at"`
+}
+
+type GitHubWebhookList struct {
+	Webhooks []GitHubWebhook `json:"webhooks"`
+	// Available is false when the server has no key to seal secrets.
+	Available bool `json:"available"`
+	// TokenConfigured tells whether GITHUB_TOKEN is set (initial imports of
+	// private repositories and the safety-net checks need it).
+	TokenConfigured bool `json:"token_configured"`
+}
+
+type GitHubWebhookInput struct {
+	ProjectID         string   `json:"project_id"`
+	WebhookID         string   `json:"webhook_id,omitempty" jsonschema:"Existing webhook to update or remove; omit to create"`
+	Repository        string   `json:"repository,omitempty" jsonschema:"owner/name or https://github.com/owner/name; required when creating, cannot change"`
+	ImportIssues      *bool    `json:"import_issues,omitempty"`
+	IssueKind         string   `json:"issue_kind,omitempty" jsonschema:"issue (default), question, or auto"`
+	AreaID            *string  `json:"area_id,omitempty" jsonschema:"Work area for new items; empty clears"`
+	AssigneeID        *string  `json:"assignee_id,omitempty" jsonschema:"Assignee for new items; empty clears (the area owner is used when an area is set)"`
+	Tags              []string `json:"tags,omitempty"`
+	TrackPullRequests *bool    `json:"track_pull_requests,omitempty"`
+	Enabled           *bool    `json:"enabled,omitempty"`
+	RotateSecret      bool     `json:"rotate_secret,omitempty"`
+	Remove            bool     `json:"remove,omitempty"`
+}
+
+type GitHubWebhookSaved struct {
+	Webhook *GitHubWebhook `json:"webhook,omitempty"`
+	// Secret is returned only when the webhook is created or its secret rotated.
+	Secret  string `json:"secret,omitempty"`
+	Removed bool   `json:"removed,omitempty"`
+}
+
+func registerGitHubWebhookTools(t Tools, s *Store) {
+	add(t, s, "list_github_webhooks", "Web console only: list a project's GitHub webhooks (secrets never shown) with recent deliveries.", false, func(in ProjectInput) string { return in.ProjectID }, s.listGitHubWebhooks)
+	add(t, s, "set_github_webhook", "Web console only, project owner: create, update, rotate the secret of, or remove a GitHub webhook that syncs issues and pull request merges.", true, func(in GitHubWebhookInput) string { return in.ProjectID }, s.setGitHubWebhook)
+	// Inbound secrets are handled by people, never by an AI client's key.
+	for _, name := range []string{"list_github_webhooks", "set_github_webhook"} {
+		tool := t[name]
+		tool.Register = func(*mcp.Server, Identity) {}
+		t[name] = tool
+	}
+}
+
+const webhookSelect = `SELECT (to_jsonb(w)-'secret_sealed')||jsonb_build_object('created_by_name',u.name,
+	'recent',coalesce((SELECT jsonb_agg(to_jsonb(d)-'webhook_id' ORDER BY d.received_at DESC) FROM (SELECT * FROM github_webhook_deliveries
+		WHERE webhook_id=w.id ORDER BY received_at DESC LIMIT 10) d),'[]'::jsonb))
+	FROM github_webhooks w JOIN users u ON u.id=w.created_by`
+
+func (s *Store) webhookPayloadURL(id string) string {
+	return s.PublicURL + "/api/github/webhooks/" + id
+}
+
+func (s *Store) listGitHubWebhooks(ctx context.Context, tx *sql.Tx, a Identity, in ProjectInput) (any, error) {
+	if err := webOnly(a); err != nil {
+		return nil, err
+	}
+	if _, err := projectAccess(ctx, tx, a.User.ID, in.ProjectID, false); err != nil {
+		return nil, err
+	}
+	items, err := many[GitHubWebhook](ctx, tx, webhookSelect+` WHERE w.project_id=$1 ORDER BY w.created_at,w.id`, in.ProjectID)
+	if err != nil {
+		return nil, err
+	}
+	for i := range items {
+		items[i].PayloadURL = s.webhookPayloadURL(items[i].ID)
+	}
+	return GitHubWebhookList{Webhooks: items, Available: len(s.WebhookKey) == 32, TokenConfigured: s.GitHub != nil && s.GitHub.Token != ""}, nil
+}
+
+func (s *Store) setGitHubWebhook(ctx context.Context, tx *sql.Tx, a Identity, in GitHubWebhookInput) (any, error) {
+	if err := webOnly(a); err != nil {
+		return nil, err
+	}
+	p, err := projectAccess(ctx, tx, a.User.ID, in.ProjectID, true)
+	if err != nil {
+		return nil, err
+	}
+	if p.OwnerID != a.User.ID {
+		return nil, problem("FORBIDDEN", "Only the project owner can manage GitHub webhooks.")
+	}
+	var current GitHubWebhook
+	secret := ""
+	if in.WebhookID != "" {
+		if err := validID(in.WebhookID); err != nil {
+			return nil, err
+		}
+		current, err = one[GitHubWebhook](ctx, tx, `SELECT to_jsonb(w)-'secret_sealed' FROM github_webhooks w WHERE id=$1 AND project_id=$2 FOR UPDATE`, in.WebhookID, in.ProjectID)
+		if err != nil {
+			return nil, notFound(err)
+		}
+		if in.Remove {
+			if _, err := tx.ExecContext(ctx, `DELETE FROM github_webhooks WHERE id=$1`, in.WebhookID); err != nil {
+				return nil, err
+			}
+			return GitHubWebhookSaved{Removed: true}, nil
+		}
+		if in.Repository != "" {
+			repo, err := parseGitHubRepository(in.Repository)
+			if err != nil {
+				return nil, err
+			}
+			if strings.ToLower(repo) != current.Repository {
+				return nil, problem("INVALID_INPUT", "A webhook's repository cannot change; remove it and create a new one.")
+			}
+		}
+	} else {
+		if in.Remove || in.RotateSecret {
+			return nil, problem("INVALID_INPUT", "webhook_id is required to remove a webhook or rotate its secret.")
+		}
+		repo, err := parseGitHubRepository(in.Repository)
+		if err != nil {
+			return nil, err
+		}
+		var count int
+		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM github_webhooks WHERE project_id=$1`, in.ProjectID).Scan(&count); err != nil {
+			return nil, err
+		}
+		if count >= maxWebhooksPerProject {
+			return nil, problem("INVALID_INPUT", fmt.Sprintf("A project can have at most %d GitHub webhooks.", maxWebhooksPerProject))
+		}
+		current = GitHubWebhook{ID: uuid.NewString(), ProjectID: in.ProjectID, Repository: strings.ToLower(repo), ImportIssues: true, IssueKind: "issue", Tags: []string{}, TrackPullRequests: true, Enabled: true}
+	}
+	if in.ImportIssues != nil {
+		current.ImportIssues = *in.ImportIssues
+	}
+	if in.TrackPullRequests != nil {
+		current.TrackPullRequests = *in.TrackPullRequests
+	}
+	if in.Enabled != nil {
+		current.Enabled = *in.Enabled
+	}
+	if in.IssueKind != "" {
+		if in.IssueKind != "issue" && in.IssueKind != "question" && in.IssueKind != "auto" {
+			return nil, problem("INVALID_INPUT", "issue_kind must be issue, question, or auto.")
+		}
+		current.IssueKind = in.IssueKind
+	}
+	if in.AreaID != nil {
+		current.AreaID = nil
+		if *in.AreaID != "" {
+			if _, err := areaOwner(ctx, tx, in.ProjectID, *in.AreaID); err != nil {
+				return nil, err
+			}
+			current.AreaID = in.AreaID
+		}
+	}
+	if in.AssigneeID != nil {
+		current.AssigneeID = nil
+		if *in.AssigneeID != "" {
+			if err := projectEditor(ctx, tx, in.ProjectID, *in.AssigneeID, "assignee_id"); err != nil {
+				return nil, err
+			}
+			current.AssigneeID = in.AssigneeID
+		}
+	}
+	if in.Tags != nil {
+		tags, err := validateIssueTags(in.Tags)
+		if err != nil {
+			return nil, err
+		}
+		current.Tags = tags
+	}
+	if !current.ImportIssues && !current.TrackPullRequests {
+		return nil, problem("INVALID_INPUT", "Turn on issue sync, pull request tracking, or both.")
+	}
+	if in.WebhookID == "" {
+		secret = newWebhookSecret()
+		sealed, err := s.sealWebhookSecret(current.ID, secret)
+		if err != nil {
+			return nil, err
+		}
+		_, err = tx.ExecContext(ctx, `INSERT INTO github_webhooks(id,project_id,repository,secret_sealed,import_issues,issue_kind,area_id,assignee_id,tags,track_pull_requests,enabled,created_by)
+			VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`, current.ID, in.ProjectID, current.Repository, sealed, current.ImportIssues, current.IssueKind,
+			current.AreaID, current.AssigneeID, current.Tags, current.TrackPullRequests, current.Enabled, a.User.ID)
+		if isUniqueViolation(err) {
+			return nil, problem("CONFLICT", "This repository already has a webhook in this project.")
+		}
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		// Saving settings makes the editor the person the webhook acts as.
+		_, err = tx.ExecContext(ctx, `UPDATE github_webhooks SET import_issues=$2,issue_kind=$3,area_id=$4,assignee_id=$5,tags=$6,track_pull_requests=$7,enabled=$8,
+			created_by=$9,updated_at=now() WHERE id=$1`, current.ID, current.ImportIssues, current.IssueKind, current.AreaID, current.AssigneeID, current.Tags,
+			current.TrackPullRequests, current.Enabled, a.User.ID)
+		if err != nil {
+			return nil, err
+		}
+		if in.RotateSecret {
+			secret = newWebhookSecret()
+			sealed, err := s.sealWebhookSecret(current.ID, secret)
+			if err != nil {
+				return nil, err
+			}
+			if _, err := tx.ExecContext(ctx, `UPDATE github_webhooks SET secret_sealed=$2 WHERE id=$1`, current.ID, sealed); err != nil {
+				return nil, err
+			}
+		}
+	}
+	saved, err := one[GitHubWebhook](ctx, tx, webhookSelect+` WHERE w.id=$1`, current.ID)
+	if err != nil {
+		return nil, err
+	}
+	saved.PayloadURL = s.webhookPayloadURL(saved.ID)
+	return GitHubWebhookSaved{Webhook: &saved, Secret: secret}, nil
+}
+
+// --- receiving ---------------------------------------------------------------
+
+type webhookRow struct {
+	ID                string   `json:"id"`
+	ProjectID         string   `json:"project_id"`
+	Repository        string   `json:"repository"`
+	SecretSealed      string   `json:"secret_sealed"`
+	ImportIssues      bool     `json:"import_issues"`
+	IssueKind         string   `json:"issue_kind"`
+	AreaID            *string  `json:"area_id"`
+	AssigneeID        *string  `json:"assignee_id"`
+	Tags              []string `json:"tags"`
+	TrackPullRequests bool     `json:"track_pull_requests"`
+	Enabled           bool     `json:"enabled"`
+	CreatedBy         string   `json:"created_by"`
+}
+
+// WebhookDelivery input as received over HTTP.
+type WebhookRequest struct {
+	WebhookID   string
+	Event       string
+	DeliveryID  string
+	Signature   string
+	ContentType string
+	Body        []byte
+}
+
+// WebhookResult is returned to GitHub (visible in its "Recent Deliveries").
+type WebhookResult struct {
+	Outcome string `json:"outcome"`
+	Detail  string `json:"detail,omitempty"`
+}
+
+var webhookIssueActions = map[string]bool{"opened": true, "edited": true, "closed": true, "reopened": true, "labeled": true, "unlabeled": true}
+
+type webhookEnvelope struct {
+	Action     string `json:"action"`
+	Repository *struct {
+		FullName string `json:"full_name"`
+	} `json:"repository"`
+	Issue       *githubIssue `json:"issue"`
+	PullRequest *struct {
+		Number         int     `json:"number"`
+		State          string  `json:"state"`
+		Merged         bool    `json:"merged"`
+		MergeCommitSHA *string `json:"merge_commit_sha"`
+		MergedAt       *string `json:"merged_at"`
+	} `json:"pull_request"`
+}
+
+// ReceiveGitHubWebhook verifies and processes one delivery.
+func (s *Store) ReceiveGitHubWebhook(ctx context.Context, req WebhookRequest) (WebhookResult, error) {
+	if err := validID(req.WebhookID); err != nil {
+		return WebhookResult{}, problem("NOT_FOUND", "Webhook not found.")
+	}
+	hook, err := one[webhookRow](ctx, s.DB, `SELECT to_jsonb(w) FROM github_webhooks w WHERE id=$1`, req.WebhookID)
+	if err != nil {
+		return WebhookResult{}, problem("NOT_FOUND", "Webhook not found.")
+	}
+	secret, err := s.openWebhookSecret(hook.ID, hook.SecretSealed)
+	if err != nil {
+		s.markWebhook(ctx, hook.ID, req.Event, "failed", errorCode(err))
+		return WebhookResult{}, err
+	}
+	// Nothing about the request is trusted before the signature checks out.
+	if !validWebhookSignature(secret, req.Body, req.Signature) {
+		s.markWebhook(ctx, hook.ID, "", "rejected", "INVALID_SIGNATURE")
+		return WebhookResult{}, problem("UNAUTHORIZED", "Invalid webhook signature.")
+	}
+	event := clipRunes(strings.TrimSpace(req.Event), 60)
+	delivery := strings.TrimSpace(req.DeliveryID)
+	reject := func(code, message string) (WebhookResult, error) {
+		s.markWebhook(ctx, hook.ID, event, "rejected", code)
+		return WebhookResult{}, problem("INVALID_INPUT", message)
+	}
+	if media := strings.TrimSpace(strings.Split(req.ContentType, ";")[0]); media != "application/json" {
+		return reject("UNSUPPORTED_CONTENT_TYPE", "Set the webhook content type to application/json on GitHub.")
+	}
+	if event == "" || delivery == "" || len(delivery) > 100 {
+		return reject("MISSING_HEADERS", "X-GitHub-Event and X-GitHub-Delivery are required.")
+	}
+	if !hook.Enabled {
+		s.markWebhook(ctx, hook.ID, event, "ignored", "DISABLED")
+		return WebhookResult{Outcome: "ignored", Detail: "webhook is turned off"}, nil
+	}
+	var env webhookEnvelope
+	if err := json.Unmarshal(req.Body, &env); err != nil {
+		return reject("INVALID_PAYLOAD", "The payload is not valid JSON.")
+	}
+	if env.Repository == nil || strings.ToLower(env.Repository.FullName) != hook.Repository {
+		return reject("REPOSITORY_MISMATCH", "The payload is for a different repository than this webhook.")
+	}
+	var result WebhookResult
+	recordPRs := false
+	err = transaction(ctx, s.DB, func(tx *sql.Tx) error {
+		res, err := tx.ExecContext(ctx, `INSERT INTO github_webhook_deliveries(webhook_id,delivery_id,event,outcome) VALUES($1,$2,$3,'processed') ON CONFLICT DO NOTHING`, hook.ID, delivery, event)
+		if err != nil {
+			return err
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			result = WebhookResult{Outcome: "duplicate", Detail: "delivery already received"}
+			return nil
+		}
+		result, err = s.processWebhookEvent(ctx, tx, hook, event, env)
+		if err != nil {
+			return err
+		}
+		recordPRs = event == "pull_request" && result.Outcome == "processed"
+		if _, err := tx.ExecContext(ctx, `UPDATE github_webhook_deliveries SET outcome=$3,detail=NULLIF($4,'') WHERE webhook_id=$1 AND delivery_id=$2`,
+			hook.ID, delivery, result.Outcome, clipRunes(result.Detail, 200)); err != nil {
+			return err
+		}
+		return audit(ctx, tx, Event{ActorID: hook.CreatedBy, Action: "github_webhook", ProjectID: hook.ProjectID, TargetID: hook.ID, Outcome: "success",
+			RequestID: uuid.NewString(), Details: map[string]any{"event": event, "action": clipRunes(env.Action, 40), "outcome": result.Outcome}})
+	})
+	if err != nil {
+		// Nothing was stored for this delivery, so GitHub's redelivery is processed.
+		code := errorCode(err)
+		s.markWebhook(ctx, hook.ID, event, "failed", code)
+		var e *Error
+		if errors.As(err, &e) {
+			return WebhookResult{}, err
+		}
+		return WebhookResult{}, problem("WEBHOOK_FAILED", "The delivery could not be processed. Redeliver it from GitHub.")
+	}
+	s.markWebhook(ctx, hook.ID, event, result.Outcome, "")
+	if recordPRs {
+		if _, err := s.recordDeployments(ctx, hook.ProjectID, ""); err != nil && ctx.Err() == nil {
+			slog.Error("deployment record after webhook failed", "error", err)
+		}
+	}
+	return result, nil
+}
+
+func (s *Store) markWebhook(ctx context.Context, id, event, outcome, code string) {
+	if _, err := s.DB.ExecContext(ctx, `UPDATE github_webhooks SET last_delivery_at=now(),last_event=NULLIF($2,''),last_outcome=$3,last_error=NULLIF($4,'') WHERE id=$1`,
+		id, clipRunes(event, 60), outcome, clipRunes(code, 60)); err != nil && ctx.Err() == nil {
+		slog.Error("webhook status update failed", "error", err)
+	}
+}
+
+func (s *Store) processWebhookEvent(ctx context.Context, tx *sql.Tx, hook webhookRow, event string, env webhookEnvelope) (WebhookResult, error) {
+	switch event {
+	case "ping":
+		return WebhookResult{Outcome: "processed", Detail: "ping"}, nil
+	case "issues":
+		if !hook.ImportIssues {
+			return WebhookResult{Outcome: "ignored", Detail: "issue sync is off"}, nil
+		}
+		if !webhookIssueActions[env.Action] || env.Issue == nil {
+			return WebhookResult{Outcome: "ignored", Detail: "action " + clipRunes(env.Action, 40) + " is not synced"}, nil
+		}
+		if len(env.Issue.PullRequest) > 0 && string(env.Issue.PullRequest) != "null" {
+			return WebhookResult{Outcome: "ignored", Detail: "pull request"}, nil
+		}
+		actor := Identity{User: User{ID: hook.CreatedBy}}
+		in := ImportGitHubIssuesInput{ProjectID: hook.ProjectID, Repository: hook.Repository, Kind: hook.IssueKind, Tags: hook.Tags}
+		if hook.AreaID != nil {
+			in.AreaID = *hook.AreaID
+		}
+		if hook.AssigneeID != nil {
+			in.AssigneeID = *hook.AssigneeID
+		}
+		plan, err := validateGitHubImport(in)
+		if err != nil {
+			return WebhookResult{}, err
+		}
+		if err := checkGitHubImportTargets(ctx, tx, actor, &plan.in); err != nil {
+			if errorCode(err) == "NOT_FOUND" || errorCode(err) == "FORBIDDEN" {
+				return WebhookResult{}, problem("FORBIDDEN", "The person who set up this webhook can no longer edit the project. The owner should save the webhook again.")
+			}
+			return WebhookResult{}, err
+		}
+		item, err := upsertGitHubIssue(ctx, tx, actor, plan, *env.Issue)
+		if err != nil {
+			return WebhookResult{}, err
+		}
+		return WebhookResult{Outcome: "processed", Detail: fmt.Sprintf("%s %s", item.SourceKey, item.Action)}, nil
+	case "pull_request":
+		if !hook.TrackPullRequests {
+			return WebhookResult{Outcome: "ignored", Detail: "pull request tracking is off"}, nil
+		}
+		pr := env.PullRequest
+		if pr == nil || pr.Number <= 0 || (env.Action != "closed" && env.Action != "reopened") {
+			return WebhookResult{Outcome: "ignored", Detail: "action " + clipRunes(env.Action, 40) + " is not tracked"}, nil
+		}
+		state, mergeCommit, mergedAt := "open", (*string)(nil), (*string)(nil)
+		switch {
+		case env.Action == "closed" && pr.Merged:
+			state = "merged"
+			if pr.MergeCommitSHA != nil && shaPattern.MatchString(*pr.MergeCommitSHA) {
+				mergeCommit = pr.MergeCommitSHA
+			}
+			if pr.MergedAt != nil {
+				if _, err := time.Parse(time.RFC3339, *pr.MergedAt); err == nil {
+					mergedAt = pr.MergedAt
+				}
+			}
+		case env.Action == "closed":
+			state = "closed"
+		}
+		// Deployment ("deployed") is still decided by the server comparing its
+		// own build, after the next restart.
+		res, err := tx.ExecContext(ctx, `UPDATE task_pull_requests SET state=$4,merge_commit=$5,merged_at=$6::timestamptz,deployed_commit=NULL,checked_at=now(),check_error=NULL
+			WHERE project_id=$1 AND repository=$2 AND number=$3 AND state<>'deployed'`, hook.ProjectID, hook.Repository, pr.Number, state, mergeCommit, mergedAt)
+		if err != nil {
+			return WebhookResult{}, err
+		}
+		n, _ := res.RowsAffected()
+		if n == 0 {
+			return WebhookResult{Outcome: "ignored", Detail: fmt.Sprintf("#%d is not tracked by a task", pr.Number)}, nil
+		}
+		return WebhookResult{Outcome: "processed", Detail: fmt.Sprintf("#%d %s (%d task)", pr.Number, state, n)}, nil
+	}
+	return WebhookResult{Outcome: "ignored", Detail: "event " + event + " is not used"}, nil
+}

@@ -511,7 +511,9 @@ func upsertGitHubIssue(ctx context.Context, tx *sql.Tx, a Identity, plan githubI
 	if err != nil {
 		return ImportedIssue{}, err
 	}
-	if prevUpdated.Valid && prevUpdated.Time.Equal(updatedAt) && prevState == sourceState {
+	// An older copy (a late webhook delivery, or a list read before a
+	// webhook) never overwrites a newer one.
+	if prevUpdated.Valid && (prevUpdated.Time.After(updatedAt) || prevUpdated.Time.Equal(updatedAt) && prevState == sourceState) {
 		return ImportedIssue{ID: id, SourceKey: key, SourceURL: sourceURL, Title: title, Status: currentStatus, Action: "unchanged"}, nil
 	}
 	newStatus := currentStatus

@@ -146,7 +146,7 @@ Authorization: Bearer <발급받은 MCP 키>
 | `list_work_areas`, `set_work_area` | 공통 작업 영역과 담당자 조회·관리 |
 | `create_issue`, `list_issues`, `get_issue` | 질의·이슈 등록·목록(상태·담당자·검색어 필터)·상세 |
 | `answer_issue`, `comment_issue`, `update_issue` | 답변·댓글·해결/닫기/다시 열기, 질의응답 지식 문서화(`publish_answer`) |
-| `import_github_issues` | GitHub 저장소 이슈를 질의·이슈로 가져오기(단방향, 다시 가져오면 갱신). 서버 `GITHUB_TOKEN`(선택)·`GITHUB_API_URL`(선택, GitHub Enterprise) |
+| `import_github_issues` | GitHub 저장소 이슈를 질의·이슈로 가져오기(단방향, 다시 가져오면 갱신). 서버 `GITHUB_TOKEN`(선택)·`GITHUB_API_URL`(선택, GitHub Enterprise). 이후 변경은 웹 콘솔의 GitHub 웹훅(`/api/github/webhooks/<id>`, `WEBHOOK_ENCRYPTION_KEY`)으로 자동 반영 |
 | `get_usage_stats` | 프로젝트 사용 통계(최근 1~365일, 기본 30일, 한국 시간 일 단위): 합계·일별 추이·종류별 증가·결과 0건 검색어·상위 도구·사용자·열람 문서·보유 현황 |
 
 문서 종류는 `brief`, `decision`, `history`, `artifact`, `reference`입니다. 상태는 `draft`, `active`, `archived`이고 기본 검색에는 활성 문서의 최신 버전만 포함됩니다. `update_document`는 `expected_revision`과 수정 이유 `reason`이 필요합니다. 충돌하면 최신 내용을 읽고 변경을 병합해야 합니다.
@@ -304,6 +304,7 @@ TEST_DATABASE_URL='<test-only PostgreSQL URL>' TEST_OLLAMA_URL=http://localhost:
 - `internal/kb/vector_search.go`: 질문 임베딩·권한 범위 내 의미 검색·하이브리드 순위
 - `internal/kb/issues.go`, `web/issues.js`: 이슈·질의 베이스와 작업 시작 연동
 - `internal/kb/github_issues.go`: GitHub 이슈 가져오기(`import_github_issues`)
+- `internal/kb/github_webhooks.go`: GitHub 웹훅 설정(웹 전용)과 수신·서명 검증, 이슈·PR 이벤트 반영
 - `internal/kb/deployments.go`: 작업 PR의 병합·배포 확인과 history 상태 갱신 블록(`check_task_deployments`, 주기 확인)
 - `internal/kb/usage.go`, `web/usage.js`: 사용 통계 집계와 대시보드
 - `migrations/003_embeddings.sql`: 벡터 컬럼과 작업 대기열
