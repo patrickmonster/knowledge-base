@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"strings"
 	"time"
 
@@ -407,8 +408,9 @@ func (s *Store) ReceiveGitHubWebhook(ctx context.Context, req WebhookRequest) (W
 		s.markWebhook(ctx, hook.ID, event, "rejected", code)
 		return WebhookResult{}, problem("INVALID_INPUT", message)
 	}
-	if media := strings.TrimSpace(strings.Split(req.ContentType, ";")[0]); media != "application/json" {
-		return reject("UNSUPPORTED_CONTENT_TYPE", "Set the webhook content type to application/json on GitHub.")
+	payload, code := webhookPayload(req.ContentType, req.Body)
+	if code == "UNSUPPORTED_CONTENT_TYPE" {
+		return reject(code, "Set the webhook content type to application/json or application/x-www-form-urlencoded on GitHub.")
 	}
 	if event == "" || delivery == "" || len(delivery) > 100 {
 		return reject("MISSING_HEADERS", "X-GitHub-Event and X-GitHub-Delivery are required.")
@@ -418,7 +420,7 @@ func (s *Store) ReceiveGitHubWebhook(ctx context.Context, req WebhookRequest) (W
 		return WebhookResult{Outcome: "ignored", Detail: "webhook is turned off"}, nil
 	}
 	var env webhookEnvelope
-	if err := json.Unmarshal(req.Body, &env); err != nil {
+	if code != "" || json.Unmarshal(payload, &env) != nil {
 		return reject("INVALID_PAYLOAD", "The payload is not valid JSON.")
 	}
 	if env.Repository == nil || strings.ToLower(env.Repository.FullName) != hook.Repository {
@@ -464,6 +466,25 @@ func (s *Store) ReceiveGitHubWebhook(ctx context.Context, req WebhookRequest) (W
 		}
 	}
 	return result, nil
+}
+
+// webhookPayload returns the JSON document of a delivery. GitHub sends it as
+// the body for application/json and, for its default
+// application/x-www-form-urlencoded, as the "payload" form field. The
+// signature always covers the raw body, so this runs after the check. The
+// code is UNSUPPORTED_CONTENT_TYPE or INVALID_PAYLOAD when there is none.
+func webhookPayload(contentType string, body []byte) ([]byte, string) {
+	switch strings.ToLower(strings.TrimSpace(strings.Split(contentType, ";")[0])) {
+	case "application/json":
+		return body, ""
+	case "application/x-www-form-urlencoded":
+		form, err := url.ParseQuery(string(body))
+		if err != nil || len(form["payload"]) != 1 {
+			return nil, "INVALID_PAYLOAD"
+		}
+		return []byte(form.Get("payload")), ""
+	}
+	return nil, "UNSUPPORTED_CONTENT_TYPE"
 }
 
 func (s *Store) markWebhook(ctx context.Context, id, event, outcome, code string) {

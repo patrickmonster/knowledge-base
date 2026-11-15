@@ -6,7 +6,7 @@ const webhookKinds={issue:'모두 이슈',question:'모두 질의',auto:'자동 
 
 // r is set_github_webhook's answer: webhook_id, payload_url and secret.
 function webhookSecretDialog(r){
-  secret('GitHub 웹훅 연결 정보',`Webhook ID: ${r.webhook_id}\nPayload URL: ${r.payload_url}\nContent type: application/json\nSecret: ${r.secret}`,
+  secret('GitHub 웹훅 연결 정보',`Webhook ID: ${r.webhook_id}\nPayload URL: ${r.payload_url}\nContent type: application/json (권장, form도 받음)\nSecret: ${r.secret}`,
     `GitHub 저장소 ${r.webhook.repository}의 Settings → Webhooks → Add webhook에 Payload URL과 Secret을 붙여 넣으세요. 이벤트는 "Let me select individual events"에서 Issues와 Pull requests를 고릅니다. 이 정보는 "연결 정보"에서 다시 볼 수 있습니다.`);
 }
 
