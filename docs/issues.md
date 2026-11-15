@@ -75,10 +75,11 @@ open / answered ──update_issue──▶ closed(닫힘: 취소·불필요)
 질의·이슈에 스크린샷이나 사진을 붙일 수 있습니다. 첨부 원본은 [Railway 버킷 첨부](attachments.md)와 같은 경로(총량 제한, 실행 파일 차단, ClamAV 검사, 정리 작업)로 저장됩니다.
 
 - **새 질의 · 이슈** 폼의 **사진 선택** 또는 내용 칸에 붙여 넣기(Ctrl+V)로 최대 5장을 미리 보고 등록합니다. 질의가 먼저 등록되고 사진은 이어서 올라가며, 실패한 사진은 카드의 **사진 추가**로 다시 올립니다.
-- 카드에 썸네일이 표시되고 누르면 원본을 새 탭에서 엽니다. 편집자 이상은 **사진 추가**와 사진의 **×**(삭제)를 쓸 수 있습니다.
+- 카드에 썸네일이 표시되고 누르면 원본을 새 탭에서 엽니다. 편집자 이상은 **질문에 사진 추가**와 사진의 **×**(삭제)를 쓸 수 있습니다.
+- **답변·댓글 사진:** 카드의 답변·댓글 입력란 아래 **사진 선택** 또는 입력란에 붙여 넣기로 고른 뒤 **답변 등록 / 답변 수정 / 댓글**을 누르면, 글이 먼저 저장되고 사진이 그 답변·댓글에 붙습니다. 사진은 답변 상자와 각 댓글 아래에 표시됩니다. 답변·댓글 사진은 그 글을 쓴 사람만 붙일 수 있습니다. 답변을 수정하면 이전 답변은 `[이전 답변]` 댓글로 남고 그 사진도 함께 옮겨집니다.
 - 형식: PNG·JPG·GIF·WEBP, 장당 10 MiB. 파일명 확장자와 실제 내용(시그니처)을 모두 확인하며 SVG는 받지 않습니다.
 - 화면 표시는 로그인 세션 전용 `GET /api/attachments/{id}/image?project_id=…`로 앱이 버킷에서 읽어 보냅니다(프로젝트 읽기 권한 확인, 내용 형식 재확인, `nosniff`·`sandbox`, 5분 비공개 캐시). 문서용 일반 첨부는 이 경로로 열리지 않습니다.
-- MCP: `prepare_attachment_upload`에 `issue_id`를 주면 해당 질의의 사진으로 예약됩니다(`document_id`와 함께 쓸 수 없음). `get_issue`는 `attachments`(저장 완료된 사진)를, `list_issues`는 `attachment_count`를 돌려줍니다. 원본은 `get_attachment_download`, 목록은 `list_attachments(issue_id)`.
+- MCP: `prepare_attachment_upload`에 `issue_id`를 주면 해당 질의의 사진으로 예약됩니다(`document_id`와 함께 쓸 수 없음). `issue_part`로 위치를 정합니다: `body`(기본, 질문), `answer`(현재 답변, 답변 작성자만), `comment`(`issue_comment_id` 필수, 댓글 작성자만). `comment_issue` 응답의 `created_comment_id`로 방금 쓴 댓글에 붙입니다. `get_issue`는 `attachments`(질문), `answer_attachments`(답변), `comments[].attachments`(댓글)를, `list_issues`는 전체 `attachment_count`를 돌려줍니다. 원본은 `get_attachment_download`, 목록은 `list_attachments(issue_id)`.
 - 사진은 본문 추출·임베딩 대상이 아닙니다. 지식으로 남길 내용은 질의 본문이나 답변에 글로 적습니다.
 
 ## GitHub 이슈 가져오기

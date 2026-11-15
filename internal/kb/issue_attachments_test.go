@@ -128,3 +128,87 @@ func TestIssueImageAttachments(t *testing.T) {
 		t.Fatalf("deleted image served: %d", w.Code)
 	}
 }
+
+func TestIssueAnswerAndCommentImages(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	s.Objects = &memoryObjects{files: map[string][]byte{}}
+	tools := NewTools(s)
+	admin := loginAs(t, s, "admin@example.com")
+	asker := inviteAs(t, s, admin, "asker@example.com")
+	owner := inviteAs(t, s, admin, "owner@example.com")
+	p := mustCall(t, tools, asker, "create_project", CreateProjectInput{Slug: "parts", Name: "Parts"}).(Project)
+	mustCall(t, tools, asker, "set_project_member", MemberInput{ProjectID: p.ID, UserID: owner.User.ID, Role: "editor"})
+	issue := mustCall(t, tools, asker, "create_issue", CreateIssueInput{ProjectID: p.ID, Title: "배포 오류", Body: "로그 확인 부탁"}).(Issue)
+	png := "\x89PNG\r\n\x1a\n" + strings.Repeat("\x01", 30)
+	upload := func(who Identity, in PrepareAttachmentInput) (Attachment, error) {
+		in.ProjectID, in.IssueID, in.Filename, in.SizeBytes = p.ID, issue.ID, "shot.png", int64(len(png))
+		out, err := call(t, tools, who, "prepare_attachment_upload", in)
+		if err != nil {
+			return Attachment{}, err
+		}
+		f := out.(map[string]any)["attachment"].(Attachment)
+		stored, err := s.UploadAttachment(ctx, who, AttachmentInput{p.ID, f.ID}, strings.NewReader(png))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return stored.(Attachment), nil
+	}
+
+	// No answer yet; bad part names and stray comment IDs are rejected.
+	_, err := upload(owner, PrepareAttachmentInput{IssuePart: "answer"})
+	denied(t, err, "CONFLICT")
+	_, err = upload(owner, PrepareAttachmentInput{IssuePart: "title"})
+	denied(t, err, "INVALID_INPUT")
+	_, err = upload(owner, PrepareAttachmentInput{IssuePart: "comment"})
+	denied(t, err, "INVALID_INPUT")
+	_, err = call(t, tools, owner, "prepare_attachment_upload", PrepareAttachmentInput{ProjectID: p.ID, IssuePart: "body", Filename: "a.png", SizeBytes: 10})
+	denied(t, err, "INVALID_INPUT")
+
+	mustCall(t, tools, owner, "answer_issue", AnswerIssueInput{ProjectID: p.ID, IssueID: issue.ID, Answer: "첫 답변"})
+	_, err = upload(asker, PrepareAttachmentInput{IssuePart: "answer"})
+	denied(t, err, "FORBIDDEN")
+	answerImg, err := upload(owner, PrepareAttachmentInput{IssuePart: "answer"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	commented := mustCall(t, tools, asker, "comment_issue", CommentIssueInput{ProjectID: p.ID, IssueID: issue.ID, Body: "추가 로그"}).(Issue)
+	if commented.CreatedCommentID == "" {
+		t.Fatal("comment_issue did not return created_comment_id")
+	}
+	_, err = upload(owner, PrepareAttachmentInput{IssuePart: "comment", IssueCommentID: commented.CreatedCommentID})
+	denied(t, err, "FORBIDDEN")
+	commentImg, err := upload(asker, PrepareAttachmentInput{IssuePart: "comment", IssueCommentID: commented.CreatedCommentID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bodyImg, err := upload(owner, PrepareAttachmentInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	full := mustCall(t, tools, asker, "get_issue", IssueRef{ProjectID: p.ID, IssueID: issue.ID}).(Issue)
+	if full.AttachmentCount != 3 || len(full.Attachments) != 1 || full.Attachments[0].ID != bodyImg.ID ||
+		len(full.AnswerAttachments) != 1 || full.AnswerAttachments[0].ID != answerImg.ID {
+		t.Fatalf("parts not split: body %+v answer %+v", full.Attachments, full.AnswerAttachments)
+	}
+	if len(full.Comments) != 1 || len(full.Comments[0].Attachments) != 1 || full.Comments[0].Attachments[0].ID != commentImg.ID {
+		t.Fatalf("comment images: %+v", full.Comments)
+	}
+
+	// Replacing the answer moves its images to the comment that keeps the old text.
+	mustCall(t, tools, owner, "answer_issue", AnswerIssueInput{ProjectID: p.ID, IssueID: issue.ID, Answer: "수정한 답변"})
+	full = mustCall(t, tools, asker, "get_issue", IssueRef{ProjectID: p.ID, IssueID: issue.ID}).(Issue)
+	if len(full.AnswerAttachments) != 0 {
+		t.Fatal("old answer images stayed on the new answer")
+	}
+	moved := false
+	for _, c := range full.Comments {
+		if strings.HasPrefix(c.Body, "[이전 답변]") && len(c.Attachments) == 1 && c.Attachments[0].ID == answerImg.ID {
+			moved = true
+		}
+	}
+	if !moved {
+		t.Fatalf("answer image did not follow the previous answer: %+v", full.Comments)
+	}
+}
