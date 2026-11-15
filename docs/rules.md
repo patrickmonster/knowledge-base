@@ -36,8 +36,8 @@ AI가 프로젝트에서 커밋하거나 작업할 때 따를 규칙을 저장�
 ### 규칙 전달 경로
 규칙은 서버가 밀어 넣지 않고 AI가 `start_task`·`get_task_context`·`list_rules`를 호출할 때만 전달된다. 이미 진행 중인 세션은 그 뒤에 추가된 규칙을 모르므로 아래 세 곳에서 다시 읽도록 안내한다.
 
-- **MCP 서버 instructions**(`internal/kb/instructions.go`): 연결 시(initialize) 모든 클라이언트에 "변경 작업마다, 같은 세션의 후속 요청이라도 `start_task`를 새로 호출하거나 `list_rules`를 읽으라"고 알린다. AGENTS.md가 없는 저장소에도 적용된다.
-- **AGENTS.md / `get_agents_template`**: 후속 요청도 새 작업으로 보고 시작 순서를 처음부터 따르며, `start_task`를 하지 않았으면 브랜치·파일 수정 전에 `list_rules`를 읽는다. Claude Code용으로 `CLAUDE.md`에서 `@AGENTS.md`를 불러온다.
+- **MCP 서버 instructions**(`internal/kb/instructions.go`): 연결 시(initialize) 모든 클라이언트에 "변경 작업마다, 같은 세션의 후속 요청이라도 `start_task`를 새로 호출하거나 `list_rules`를 읽으라"고 알린다. 프로젝트 선택(`resolve_project`, 일치하지 않는 서버는 건너뜀)과 저장소에 흔적을 남기지 않는 규칙도 여기 있어 AGENTS.md가 없는 저장소에서도 전체 절차가 동작한다.
+- **사용자 수준 지침 / `get_agents_template`**(선택): 같은 절차를 서버·프로젝트 이름 없이 Markdown으로 준다. 저장소에 커밋하지 않고 `~/.claude/CLAUDE.md` 등 사용자 수준 지침에 둔다.
 - **Claude Code 훅**(`.claude/settings.json` UserPromptSubmit): 매 메시지마다 `[rules-first]` 리마인더를 주입한다.
 
 모두 안내일 뿐 호출을 강제하지는 않는다.

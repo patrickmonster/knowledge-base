@@ -2,6 +2,7 @@ package kb
 
 import (
 	"context"
+	"strings"
 	"testing"
 )
 
@@ -99,10 +100,33 @@ func TestProjectRepositories(t *testing.T) {
 		t.Fatalf("outsider: %+v", out)
 	}
 
+	// resolve_project: one match is used; no match tells the agent to leave
+	// this server alone (another connected server may own the repository).
+	one := mustCall(t, tools, editor, "resolve_project", ResolveProjectInput{Repository: "git@github.com:owner/app.git"}).(ResolvedProject)
+	if !one.Matched || one.Project == nil || one.Project.ID != a.ID || one.Project.Role != "editor" || one.Repository != "github.com/owner/app" || one.Guidance != resolveMatch {
+		t.Fatalf("resolve one: %+v", one)
+	}
+	for _, who := range []Identity{owner, outsider} {
+		repo := "owner/unknown"
+		if who.User.ID == outsider.User.ID {
+			repo = "owner/app" // registered, but not in a project the caller can see
+		}
+		none := mustCall(t, tools, who, "resolve_project", ResolveProjectInput{Repository: repo}).(ResolvedProject)
+		if none.Matched || none.Project != nil || len(none.Candidates) != 0 || none.Guidance != resolveNoMatch {
+			t.Fatalf("resolve none (%s): %+v", repo, none)
+		}
+	}
+	_, err = call(t, tools, owner, "resolve_project", ResolveProjectInput{Repository: "nope"})
+	denied(t, err, "INVALID_INPUT")
+
 	// The same repository in two projects returns both; agents must ask.
 	mustCall(t, tools, owner, "add_project_repository", ProjectRepositoryInput{ProjectID: b.ID, Repository: "owner/app"})
 	if both := mustCall(t, tools, owner, "list_projects", ListProjectsInput{Repository: "owner/app"}).([]Project); len(both) != 2 {
 		t.Fatalf("both: %+v", both)
+	}
+	several := mustCall(t, tools, owner, "resolve_project", ResolveProjectInput{Repository: "owner/app"}).(ResolvedProject)
+	if several.Matched || several.Project != nil || len(several.Candidates) != 2 || several.Guidance != resolveSeveral {
+		t.Fatalf("resolve several: %+v", several)
 	}
 
 	// A project-scoped key sees and manages only its project.
@@ -116,6 +140,11 @@ func TestProjectRepositories(t *testing.T) {
 	}
 	if only := mustCall(t, tools, scoped, "list_projects", ListProjectsInput{Repository: "owner/app"}).([]Project); len(only) != 1 || only[0].ID != a.ID {
 		t.Fatalf("scoped: %+v", only)
+	}
+	// A project-scoped key resolves only within its project, so the repository
+	// registered in two projects is not ambiguous for it.
+	if r := mustCall(t, tools, scoped, "resolve_project", ResolveProjectInput{Repository: "owner/app"}).(ResolvedProject); !r.Matched || r.Project.ID != a.ID {
+		t.Fatalf("scoped resolve: %+v", r)
 	}
 	_, err = call(t, tools, scoped, "add_project_repository", ProjectRepositoryInput{ProjectID: b.ID, Repository: "owner/x"})
 	denied(t, err, "FORBIDDEN")
@@ -135,4 +164,14 @@ func TestProjectRepositories(t *testing.T) {
 	}
 	_, err = call(t, tools, owner, "add_project_repository", ProjectRepositoryInput{ProjectID: a.ID, Repository: "owner/one-too-many"})
 	denied(t, err, "INVALID_INPUT")
+}
+
+// The server instructions carry the whole workflow, so a repository needs no
+// AGENTS.md, and they tell an unrelated server among several to stay out.
+func TestServerInstructionsPickProjectByRepository(t *testing.T) {
+	for _, want := range []string{"resolve_project", "matched=false", "do not ask the user", "without any file in the repository", "Leave no trace of this server in the repository"} {
+		if !strings.Contains(serverInstructions, want) {
+			t.Errorf("server instructions miss %q", want)
+		}
+	}
 }

@@ -6,7 +6,7 @@
 
 ```text
 프로젝트 변경 작업을 시작하기 전에:
-1. list_projects에 저장소의 git remote(`repository`)를 넘겨 이 저장소에 등록된 프로젝트를 확인한다. 결과가 하나가 아니면 이름으로 추측하지 말고 사용자에게 확인한다. 프로젝트가 없으면 다른 프로젝트에 대신 저장하지 않는다.
+1. 연결된 knowledge 서버마다 resolve_project에 저장소의 git remote(`repository`)를 넘긴다. matched=true인 서버의 프로젝트를 쓰고, matched=false인 서버는 사용자에게 묻지 않고 건너뛴다. candidates가 오면 이름으로 추측하지 말고 사용자에게 확인한다. 어느 서버에도 없으면 knowledge 없이 작업하고 다른 프로젝트에 대신 저장하지 않는다.
 2. start_task에 프로젝트 ID, 작업별 고유 request_key, title, task를 전달하고 run.id를 보관한다.
 3. run.status가 completed이면 기존 결과를 확인하고 같은 작업을 재실행하지 않는다.
 4. run.context의 retrieval/warning/unindexed_chunks를 확인하고, 관련 문서 및 최근 결정을 get_document로 읽는다.
