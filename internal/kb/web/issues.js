@@ -21,8 +21,8 @@ async function issuesPage() {
   const query=selectQuery(filters);
   controls.append(filters);
   const summary=el('p','','small muted');summary.setAttribute('role','status');controls.append(summary);
-  const createCard=card('새 질의 · 이슈'), importCard=card('GitHub 이슈 가져오기'), areaCard=card('공통 작업 영역과 담당자'), notifyCard=el('div'), list=el('div');
-  root.append(list,createCard,importCard,areaCard,notifyCard);
+  const createCard=card('새 질의 · 이슈'), importCard=card('GitHub 이슈 가져오기'), webhookCard=el('div'), areaCard=card('공통 작업 영역과 담당자'), notifyCard=el('div'), list=el('div');
+  root.append(list,createCard,importCard,webhookCard,areaCard,notifyCard);
   let generation=0, members=[], areas=[];
   const current=()=>projects.find(p=>p.id===project.value);
   const canWrite=()=>['owner','admin','editor'].includes(current().role);
@@ -32,6 +32,8 @@ async function issuesPage() {
     [members,areas]=await Promise.all([tool('list_project_members',{project_id:p.id}),tool('list_work_areas',{project_id:p.id})]);
     if (ticket!==generation) return;
     renderCreate(); renderImport(); renderAreas(); await refresh();
+    const webhooks=await githubWebhookCard(p,{members,areas});
+    if (ticket===generation||current().id===p.id) webhookCard.replaceChildren(webhooks);
     const notifications=await notificationCard(p);
     if (ticket===generation||current().id===p.id) notifyCard.replaceChildren(notifications);
   }
@@ -136,7 +138,7 @@ async function issuesPage() {
   function renderImport() {
     importCard.replaceChildren(el('h2','GitHub 이슈 가져오기'));
     importCard.append(el('p','GitHub 저장소의 이슈를 이 프로젝트의 이슈·질의로 가져옵니다(단방향, PR 제외). 다시 가져오면 같은 항목의 제목·본문·라벨이 갱신되고, 상태는 GitHub에서 열림·닫힘이 바뀐 경우에만 따라갑니다. 여기서 단 답변·담당자·영역은 유지됩니다.','small muted'));
-    importCard.append(el('p','비공개 저장소는 서버에 GITHUB_TOKEN이 설정되어 있어야 합니다.','small muted'));
+    importCard.append(el('p','처음 한 번 기존 이슈를 가져올 때 씁니다. 이후 변경은 아래 GitHub 웹훅으로 자동 반영할 수 있습니다. 비공개 저장소를 가져오려면 서버에 GITHUB_TOKEN이 설정되어 있어야 합니다.','small muted'));
     if (!canWrite()) { importCard.append(el('p','편집자 이상만 가져올 수 있습니다.','small muted')); return; }
     const f=el('form');
     const repo=field(f,'저장소 (owner/name 또는 GitHub 주소)','repository');repo.placeholder='octocat/hello-world';repo.maxLength=200;

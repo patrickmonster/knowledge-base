@@ -257,6 +257,7 @@ func NewTools(s *Store) Tools {
 	})
 	registerWorkflowTools(t, s)
 	registerDeploymentTools(t, s)
+	registerGitHubWebhookTools(t, s)
 	registerAttachmentTools(t, s)
 	registerLinkTools(t, s)
 	registerReviewTools(t, s)

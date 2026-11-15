@@ -52,6 +52,7 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("GET /api/projects/{id}/export", a.projectExport)
 	mux.HandleFunc("POST /api/projects/{id}/import", a.projectImport)
 	mux.HandleFunc("GET /api/projects/{id}/agents.md", a.agentsDownload)
+	mux.HandleFunc("POST /api/github/webhooks/{id}", a.githubWebhook)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 		defer cancel()
@@ -316,6 +317,9 @@ func (a *App) Handler() http.Handler {
 		if r.Method == "PUT" && strings.HasPrefix(r.URL.Path, "/api/attachments/") && strings.HasSuffix(r.URL.Path, "/content") {
 			limit, timeout = MaxAttachmentBytes+1, 120*time.Second
 		}
+		if r.Method == "POST" && strings.HasPrefix(r.URL.Path, "/api/github/webhooks/") {
+			limit = maxWebhookBody
+		}
 		if strings.HasPrefix(r.URL.Path, "/api/projects/") {
 			switch {
 			case r.Method == "POST" && strings.HasSuffix(r.URL.Path, "/import"):
@@ -463,7 +467,7 @@ func (a *App) fail(w http.ResponseWriter, err error) {
 	case "RATE_LIMITED":
 		status = 429
 		w.Header().Set("Retry-After", "900")
-	case "STORAGE_UNAVAILABLE", "SCAN_UNAVAILABLE", "MFA_UNAVAILABLE":
+	case "STORAGE_UNAVAILABLE", "SCAN_UNAVAILABLE", "MFA_UNAVAILABLE", "WEBHOOK_UNAVAILABLE":
 		status = 503
 	case "QUOTA_EXCEEDED":
 		status = 413
@@ -476,4 +480,33 @@ func (a *App) fail(w http.ResponseWriter, err error) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(map[string]any{"error": map[string]any{"code": code, "message": PublicError(err)}})
+}
+
+// githubWebhook receives a GitHub webhook delivery. It is public: the
+// delivery is trusted only after its HMAC signature matches the secret of the
+// webhook named in the path.
+func (a *App) githubWebhook(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if validID(id) != nil {
+		a.fail(w, problem("NOT_FOUND", "Webhook not found."))
+		return
+	}
+	if err := a.Store.RateLimit(r.Context(), "github-webhook:"+id, 600, 60); err != nil {
+		a.fail(w, err)
+		return
+	}
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(http.StatusRequestEntityTooLarge)
+		json.NewEncoder(w).Encode(map[string]any{"error": map[string]any{"code": "INVALID_INPUT", "message": "The payload is too large."}})
+		return
+	}
+	out, err := a.Store.ReceiveGitHubWebhook(r.Context(), WebhookRequest{WebhookID: id, Event: r.Header.Get("X-GitHub-Event"), DeliveryID: r.Header.Get("X-GitHub-Delivery"),
+		Signature: r.Header.Get("X-Hub-Signature-256"), ContentType: r.Header.Get("Content-Type"), Body: body})
+	if err != nil {
+		a.fail(w, err)
+		return
+	}
+	a.json(w, out)
 }

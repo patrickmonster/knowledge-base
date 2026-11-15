@@ -211,7 +211,9 @@ func (s *Store) checkDeployments(ctx context.Context, scope deploymentScope) (in
 	if s.Deployment.Repository != "" && s.Deployment.Commit != "" {
 		tracked = s.Deployment.Repository
 	}
-	// open/unknown rows are rechecked every deploymentRecheckAge; merged rows
+	// open/unknown rows are rechecked every deploymentRecheckAge, or every
+	// webhookCoveredRecheck when a GitHub webhook reports the repository's pull
+	// requests (the check then only catches missed deliveries); merged rows
 	// in the server's repository only need one check per running build
 	// (the deployed commit changes only when the server restarts).
 	rows, err := many[TrackedPullRequest](ctx, s.DB, `SELECT to_jsonb(p) FROM task_pull_requests p
@@ -221,9 +223,11 @@ func (s *Store) checkDeployments(ctx context.Context, scope deploymentScope) (in
 		AND (p.state<>'merged' OR ($3<>'' AND p.repository=$3))
 		AND ($4 OR (p.created_at>now()-make_interval(days=>$7) AND CASE WHEN p.state='merged'
 			THEN p.checked_at IS NULL OR p.checked_at<$5
-			ELSE p.checked_at IS NULL OR p.checked_at<now()-make_interval(mins=>$6) END))
+			ELSE p.checked_at IS NULL OR p.checked_at<now()-make_interval(mins=>CASE WHEN EXISTS(SELECT 1 FROM github_webhooks w
+				WHERE w.project_id=p.project_id AND w.repository=p.repository AND w.enabled AND w.track_pull_requests) THEN $10 ELSE $6 END) END))
 		ORDER BY p.checked_at NULLS FIRST, p.created_at LIMIT $8`,
-		scope.ProjectID, scope.TaskID, tracked, scope.Force, processStarted, int(deploymentRecheckAge/time.Minute), deploymentWatchDays, scope.Limit, scope.UserID)
+		scope.ProjectID, scope.TaskID, tracked, scope.Force, processStarted, int(deploymentRecheckAge/time.Minute), deploymentWatchDays, scope.Limit, scope.UserID,
+		int(webhookCoveredRecheck/time.Minute))
 	if err != nil {
 		return 0, err
 	}
@@ -456,7 +460,7 @@ func (s *Store) taskDeployments(ctx context.Context, tx *sql.Tx, userID, project
 	if err != nil || len(rows) == 0 {
 		return nil, err
 	}
-	return &TaskDeployments{Pending: rows, Server: s.Deployment, Guidance: "Pull requests from your earlier tasks whose merge or deployment is not yet recorded in their history. The server checks GitHub periodically and prepends a status block to the history when a pull request is merged, deployed, or closed; call check_task_deployments to check now. Do not rewrite the original history body."}, nil
+	return &TaskDeployments{Pending: rows, Server: s.Deployment, Guidance: "Pull requests from your earlier tasks whose merge or deployment is not yet recorded in their history. The server learns of merges from a GitHub webhook when one is set up, otherwise checks GitHub periodically, and prepends a status block to the history when a pull request is merged, deployed, or closed; call check_task_deployments to check now. Do not rewrite the original history body."}, nil
 }
 
 // RunDeploymentChecks checks unsettled pull requests shortly after start

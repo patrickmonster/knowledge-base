@@ -95,6 +95,7 @@
 
 history는 PR을 만든 시점에 저장되는 경우가 많아, 나중에 병합·배포돼도 "미병합·미배포"로 남았습니다. `finish_task`의 `pull_requests`에 변경을 담은 PR 링크(`https://github.com/owner/repo/pull/N` 또는 `owner/repo#N`, 최대 10개)를 넣으면 서버가 이후 상태를 대신 확인해 기록합니다.
 
+- **웹훅:** 프로젝트에 해당 저장소의 GitHub 웹훅이 있으면 병합·닫힘을 이벤트가 생길 때 바로 반영합니다([설정](issues.md#github-웹훅-자동-동기화)). 이때 아래 주기 확인은 6시간 간격의 누락 보정으로만 동작합니다.
 - **확인:** 서버가 기동 1분 뒤와 20분마다 GitHub에서 PR이 병합·닫힘인지 확인합니다. 서버 자신의 저장소(`SERVER_REPOSITORY`, Railway에서는 `RAILWAY_GIT_REPO_OWNER/NAME`)의 PR은 병합 커밋이 실행 중인 빌드에 포함됐는지(`compare` API)도 확인해 `deployed`로 표시합니다. 다른 저장소의 PR은 병합까지만 확인합니다. 열린 PR은 30일 동안 확인합니다.
 - **기록:** PR이 최종 상태(배포됨, 닫힘, 배포를 확인하지 않는 저장소에서 병합됨)가 되면 history 제목 바로 아래에 `> **상태 갱신 (… 서버 자동 확인)**` 블록을 덧붙입니다. 작성 시점 본문은 고치지 않고, 새 블록은 이전 블록 위에 쌓입니다. 문서 버전은 작업을 끝낸 사용자 이름으로 하나 늘고 감사 로그에 `deployment_recorded`가 남습니다. 그 사용자가 편집 권한을 잃었으면 기록하지 않고 `check_error: HISTORY_NOT_WRITABLE`로 남깁니다.
 - **맥락 표시:** 아직 기록되지 않은 내 PR은 `start_task`·`get_task_context`의 `context.deployments`에 나옵니다(최근 30일, 최대 10개).

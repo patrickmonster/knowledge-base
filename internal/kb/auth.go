@@ -290,6 +290,7 @@ func (s *Store) Cleanup(ctx context.Context) error {
 		DELETE FROM rate_limits WHERE window_start<now()-interval '1 day';
 		DELETE FROM invitations WHERE expires_at<now()-interval '7 days';
 		DELETE FROM mfa_challenges WHERE expires_at<now();
-		DELETE FROM user_mfa WHERE enabled_at IS NULL AND created_at<now()-interval '1 day'`)
+		DELETE FROM user_mfa WHERE enabled_at IS NULL AND created_at<now()-interval '1 day';
+		DELETE FROM github_webhook_deliveries WHERE received_at<now()-interval '30 days'`)
 	return err
 }
