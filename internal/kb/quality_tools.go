@@ -1,5 +1,10 @@
 package kb
 
+import (
+	"context"
+	"database/sql"
+)
+
 // registerQualityTools adds the knowledge-quality and AI workflow tools:
 // duplicate/conflicting decision detection, recheck owners and digests,
 // context usage feedback and retrieval metrics, and long-open task cleanup.
@@ -22,8 +27,10 @@ func registerQualityTools(t Tools, s *Store) {
 		func(in ContextFeedbackInput) string { return in.ProjectID }, s.recordContextFeedbackTool)
 	add(t, s, "get_retrieval_metrics", "Retrieval quality from context feedback over the last days: precision (offered sources used), coverage (used evidence that was offered), hit rate, MRR, most used, offered-but-never-used and misleading documents, and recent missing-knowledge notes.", false,
 		func(in RetrievalMetricsInput) string { return in.ProjectID }, retrievalMetrics)
-	add(t, s, "get_usage_stats", "Project usage statistics over the last days (1–365, default 30, Asia/Seoul days): tool calls, denied/errors, active users, searches, document reads and writes, tasks started/completed/abandoned, a zero-filled daily series, top actions, top users, most read documents, and the current inventory (documents by kind/status, open tasks and issues, attachments, members, embeddings).", false,
-		func(in UsageStatsInput) string { return in.ProjectID }, usageStats)
+	add(t, s, "get_usage_stats", "Project usage statistics over the last days (1–365, default 30, Asia/Seoul days): tool calls, denied/errors, active users, searches, document reads and writes, tasks started/completed/abandoned, a zero-filled daily series, top actions, top users, most read documents, the current inventory (documents by kind/status, open tasks and issues, attachments, members, embeddings), search times per retrieval path and hnsw_review (vector search times against the project's HNSW review thresholds).", false,
+		func(in UsageStatsInput) string { return in.ProjectID }, func(ctx context.Context, tx *sql.Tx, a Identity, in UsageStatsInput) (any, error) {
+			return usageStats(ctx, tx, a, in, s.hnswDefaults())
+		})
 
 	add(t, s, "close_task_run", "Close an open task that will not be finished (interrupted or abandoned) with a reason; it becomes abandoned and can no longer be finished. Only its creator or the project owner. Use finish_task instead when work was done.", true,
 		func(in CloseTaskInput) string { return in.ProjectID }, closeTaskRun)

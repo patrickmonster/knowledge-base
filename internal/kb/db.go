@@ -40,6 +40,9 @@ type Store struct {
 	// Deployment is the repository and commit of the running build, used to
 	// tell when a task's pull request is deployed.
 	Deployment DeploymentTarget
+	// HNSWReview holds the server default HNSW review thresholds; zero fields
+	// use DefaultHNSWThresholds. Projects may override them.
+	HNSWReview HNSWThresholds
 }
 type Querier interface {
 	ExecContext(context.Context, string, ...any) (sql.Result, error)
@@ -62,7 +65,7 @@ func Open(ctx context.Context, dsn string) (*Store, error) {
 	return &Store{DB: db}, nil
 }
 // migrationScripts are applied in order; version N is migrationScripts[N-1].
-var migrationScripts = []string{migrations.Initial, migrations.Auth, migrations.Embeddings, migrations.PermanentKeys, migrations.TaskWorkflow, migrations.Attachments, migrations.AttachmentUploadTokens, migrations.NormalizeTags, migrations.DocumentLinks, migrations.Issues, migrations.TeamRollout, migrations.KnowledgeQuality, migrations.ProjectRules, migrations.RuleEnabled, migrations.SearchMisses, migrations.MFA, migrations.AttachmentChunks, migrations.AttachmentText, migrations.IssueSources, migrations.TaskPullRequests, migrations.GitHubWebhooks, migrations.SearchTimings, migrations.IssueAttachments, migrations.IssueAttachmentParts, migrations.Todos, migrations.TodoTaskLink, migrations.IssueTodoLink, migrations.WebhookPlainSecret, migrations.ProjectRepositories}
+var migrationScripts = []string{migrations.Initial, migrations.Auth, migrations.Embeddings, migrations.PermanentKeys, migrations.TaskWorkflow, migrations.Attachments, migrations.AttachmentUploadTokens, migrations.NormalizeTags, migrations.DocumentLinks, migrations.Issues, migrations.TeamRollout, migrations.KnowledgeQuality, migrations.ProjectRules, migrations.RuleEnabled, migrations.SearchMisses, migrations.MFA, migrations.AttachmentChunks, migrations.AttachmentText, migrations.IssueSources, migrations.TaskPullRequests, migrations.GitHubWebhooks, migrations.SearchTimings, migrations.IssueAttachments, migrations.IssueAttachmentParts, migrations.Todos, migrations.TodoTaskLink, migrations.IssueTodoLink, migrations.WebhookPlainSecret, migrations.ProjectRepositories, migrations.SearchThresholds}
 
 func (s *Store) Migrate(ctx context.Context) error {
 	return transaction(ctx, s.DB, func(tx *sql.Tx) error {

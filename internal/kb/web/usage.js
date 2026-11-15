@@ -28,7 +28,7 @@ async function usagePage(){
     const [stats,quality]=await Promise.all([tool('get_usage_stats',{project_id:current.id,days}),tool('get_retrieval_metrics',{project_id:current.id,days}).catch(()=>null)]);
     if(ticket!==generation)return;
     summary.textContent=`${current.name} · ${stats.from} ~ ${stats.to} (${stats.timezone}) · 통계를 조회한 이 요청은 집계에서 빠집니다.`;
-    body.replaceChildren(usageTiles(stats),usageTrends(stats),usageKindGrowth(stats),usageQuality(quality),usageSearchMisses(stats),usageSearchLatency(stats),usageTables(stats));
+    body.replaceChildren(usageTiles(stats),usageTrends(stats),usageKindGrowth(stats),usageQuality(quality),usageSearchMisses(stats),usageSearchLatency(stats,current,refresh),usageTables(stats));
   }
   await refresh();
   return root;
@@ -123,12 +123,35 @@ function usageSearchMisses(s){
 }
 
 // 검색 시간: 정확(전수) 벡터 검색이 느려지는 시점을 보고 HNSW 도입을 판단한다.
-function usageSearchLatency(s){
+function usageSearchLatency(s,project,refresh){
   const c=card('검색 시간');
   c.append(el('p','search_knowledge와 작업 시작 맥락 검색의 단계별 시간(ms)입니다. 벡터 p95가 커지고 비교한 청크 수가 늘면 HNSW 인덱스 도입을 검토하세요. 검색어·사용자는 저장하지 않으며 결과 0건 검색어와 같은 기간 보관합니다.','small muted'));
   const ms=v=>v==null?'—':usageNumber(v);
   c.append(table(['검색 방식','횟수','p50','p95','최대','임베딩 평균','벡터 p95','키워드 평균','비교 청크(최대)','마지막 검색'],(s.search_latency||[]).map(l=>[l.retrieval,usageNumber(l.searches),ms(l.p50_ms),ms(l.p95_ms),ms(l.max_ms),ms(l.avg_embed_ms),ms(l.p95_vector_ms),ms(l.avg_lexical_ms),usageNumber(l.max_scanned_chunks),new Date(l.last_at).toLocaleString()])));
+  if(s.hnsw_review)c.append(usageHNSWReview(s.hnsw_review,project,refresh));
   return c;
+}
+
+// HNSW 검토 기준: 서버 기본값(HNSW_REVIEW_*)을 프로젝트별로 덮어쓸 수 있다(set_search_thresholds).
+const hnswStatusLabels={review:'HNSW 검토 필요',ok:'기준 이내',insufficient_data:'표본 부족'};
+function usageHNSWReview(r,project,refresh){
+  const box=el('div',undefined,'hnsw-box'),t=r.thresholds,src=v=>v==='project'?'프로젝트 설정':'서버 기본값',ms=v=>v==null?'—':usageNumber(v)+' ms';
+  box.append(el('h3','HNSW 도입 검토 기준'));
+  const status=el('p',undefined,'hnsw-status');status.append(el('span',hnswStatusLabels[r.status]||r.status,'pill hnsw-'+r.status),el('span',` 벡터 검색 ${usageNumber(r.vector_searches)}회 기준`,'small muted'));box.append(status);
+  box.append(table(['항목','기준값','출처','이 기간 측정값','도달'],[
+    ['벡터 검색 p95',usageNumber(t.vector_p95_ms)+' ms',src(t.vector_p95_ms_source),ms(r.p95_vector_ms),r.vector_exceeded?'도달':'—'],
+    ['비교 청크 수(최대)',usageNumber(t.scanned_chunks),src(t.scanned_chunks_source),usageNumber(r.max_scanned_chunks),r.chunks_exceeded?'도달':'—']
+  ]));
+  box.append(el('p',`청크 수 기준은 한 번만 넘어도 검토 필요로 표시합니다. 벡터 p95 기준은 벡터 검색이 ${r.min_samples}회 이상 쌓였을 때만 판정합니다. 서버 기본값: ${usageNumber(t.server_default.vector_p95_ms)} ms · ${usageNumber(t.server_default.scanned_chunks)}개.`,'small muted'));
+  if(project.role!=='owner'&&project.role!=='admin'){box.append(el('p','기준값 변경은 프로젝트 소유자·관리자만 할 수 있습니다.','small muted'));return box;}
+  const f=el('form',undefined,'hnsw-form');
+  const num=(label,name,value,min,max)=>{const i=field(f,label,name,'number',value);i.required=false;i.min=min;i.max=max;i.step=1;i.placeholder='비우면 서버 기본값';return i;};
+  num('벡터 검색 p95 (ms, 1~60000)','vector_p95_ms',t.vector_p95_ms_source==='project'?t.vector_p95_ms:'',1,60000);
+  num('비교 청크 수 (100~100000000)','scanned_chunks',t.scanned_chunks_source==='project'?t.scanned_chunks:'',100,100000000);
+  formSubmit(f,'기준값 저장',async d=>{await tool('set_search_thresholds',{project_id:project.id,vector_p95_ms:Number(d.vector_p95_ms)||0,scanned_chunks:Number(d.scanned_chunks)||0});notify('HNSW 검토 기준을 저장했습니다.');await refresh();});
+  const reset=btn('서버 기본값으로',async()=>{await tool('set_search_thresholds',{project_id:project.id});notify('서버 기본값을 사용합니다.');await refresh();},'secondary');reset.type='button';f.append(reset);
+  box.append(f);
+  return box;
 }
 
 function usageQuality(q){

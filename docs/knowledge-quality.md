@@ -70,11 +70,19 @@ MCP 도구와 기존 작업 흐름(`start_task`·`finish_task`)에 붙는 품질
   - 목적: HNSW 같은 근사 벡터 인덱스 도입 시점을 측정으로 정합니다. 현재 의미 검색은 범위 안의 준비된 청크를 모두 비교하는 정확 검색이라 `p95_vector_ms`가 `max_scanned_chunks`에 비례해 커집니다.
   - 저장 범위: `search_knowledge`와 `start_task`·`get_task_context`의 맥락 검색 1회마다 `search_timings`에 출처(`source`), 요청·실제 검색 방식, 단계별 시간, 비교 청크 수, 결과 수, 시각만 저장합니다. 검색어와 사용자는 저장하지 않습니다. `search_across_projects`는 기록하지 않습니다. 오류로 끝난 검색은 트랜잭션과 함께 취소되어 남지 않습니다.
   - 보관: `search_misses`와 같습니다(최대 365일 또는 더 짧은 `AUDIT_RETENTION_DAYS`, 매시간 정리).
+- `hnsw_review`: 기간 안의 벡터 검색 전체(검색 방식 구분 없이 `vector_ms`가 있는 검색)를 HNSW 검토 기준과 비교한 판정입니다.
+  - 값: `thresholds`(적용 기준값과 출처 `project`·`server`, `server_default`), `vector_searches`, `p95_vector_ms`, `max_scanned_chunks`, `vector_exceeded`, `chunks_exceeded`, `status`, `min_samples`(20).
+  - `status`: 비교 청크 수가 기준 이상이거나, 벡터 검색이 20회 이상이면서 p95가 기준 이상이면 `review`. 그 밖에 벡터 검색이 20회 미만이면 `insufficient_data`, 아니면 `ok`. 청크 수는 측정 잡음이 없어 한 번만 넘어도 판정합니다.
+  - 기준값: 서버 기본값은 `HNSW_REVIEW_VECTOR_P95_MS`(기본 100 ms), `HNSW_REVIEW_SCANNED_CHUNKS`(기본 20,000개). 프로젝트 소유자·관리자가 `set_search_thresholds(project_id, vector_p95_ms, scanned_chunks)`로 프로젝트별로 덮어씁니다. 호출마다 두 값을 함께 바꾸며 0이나 생략은 서버 기본값입니다. 웹 '사용 통계' → '검색 시간' 카드에서도 바꿀 수 있습니다.
+  - 기본값 근거: 2026-11 운영(청크 약 320개)에서 벡터 p95는 13~18 ms였고 hybrid 검색 시간의 대부분은 질의 임베딩이었습니다. 100 ms는 벡터 검색이 체감 지연의 주요 원인이 되기 시작하는 선, 20,000개는 1,024차원 정확 검색이 그 시간에 가까워지는 규모로 잡은 출발점입니다. 운영 측정으로 조정합니다.
+  - `review`는 HNSW 작업을 검토하라는 신호일 뿐 인덱스를 자동으로 만들지 않습니다. 인덱스만 추가해서는 현재 쿼리(`vector_search.go`)가 쓰지 않으므로 쿼리 재작성이 함께 필요합니다.
 - `inventory`: 현재 문서 수(종류·상태별), 열린 작업·이슈, 준비된 첨부 수·용량, 참여자, 임베딩 준비·실패 청크 수.
 - 호출·검색·열람·활성 사용자는 감사 로그 기준이라 `AUDIT_RETENTION_DAYS`가 남긴 기록만 집계됩니다. 작성·수정은 문서 버전(revisions) 기준이며 `REVISION_RETENTION_DAYS`로 정리된 버전은 빠집니다. 통계를 조회한 그 요청은 집계에 들어가지 않습니다.
 - 웹 '사용 통계' 화면은 이 도구와 `get_retrieval_metrics`를 함께 보여 줍니다. 기간은 7·30·90일·1년이며 90일을 넘으면 차트를 주 단위로 묶습니다(활성 사용자는 주 중 일 최대값). 일별 추이 카드의 '표로 보기'로 일별 값을 확인할 수 있습니다.
 
 ## 마이그레이션
+
+`030_search_thresholds.sql`은 프로젝트별 HNSW 검토 기준 테이블 `project_search_settings`를 추가합니다(스키마 버전 30). 값이 없거나 NULL이면 서버 기본값을 씁니다.
 
 `022_search_timings.sql`은 검색 시간 표본 테이블 `search_timings`를 추가합니다(스키마 버전 22).
 
