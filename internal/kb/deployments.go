@@ -224,7 +224,7 @@ func (s *Store) checkDeployments(ctx context.Context, scope deploymentScope) (in
 		AND ($4 OR (p.created_at>now()-make_interval(days=>$7) AND CASE WHEN p.state='merged'
 			THEN p.checked_at IS NULL OR p.checked_at<$5
 			ELSE p.checked_at IS NULL OR p.checked_at<now()-make_interval(mins=>CASE WHEN EXISTS(SELECT 1 FROM github_webhooks w
-				WHERE w.project_id=p.project_id AND w.repository=p.repository AND w.enabled AND w.track_pull_requests) THEN $10 ELSE $6 END) END))
+				WHERE w.project_id=p.project_id AND w.repository=p.repository AND w.enabled AND w.track_pull_requests) THEN $10::int ELSE $6::int END) END))
 		ORDER BY p.checked_at NULLS FIRST, p.created_at LIMIT $8`,
 		scope.ProjectID, scope.TaskID, tracked, scope.Force, processStarted, int(deploymentRecheckAge/time.Minute), deploymentWatchDays, scope.Limit, scope.UserID,
 		int(webhookCoveredRecheck/time.Minute))
