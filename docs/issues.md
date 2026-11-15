@@ -120,7 +120,7 @@ open / answered ──update_issue──▶ closed(닫힘: 취소·불필요)
 가져오기는 누를 때만 반영됩니다. 이후 변경을 계속 따라가려면 프로젝트 소유자가 웹 **이슈 · 질의 → GitHub 연동 탭 → GitHub 웹훅**에서 저장소를 등록합니다. GitHub가 이벤트가 생길 때만 이 서버로 알려 주므로 GitHub API 호출 한도를 거의 쓰지 않고, 비공개 저장소의 새 이벤트도 `GITHUB_TOKEN` 없이 받습니다.
 
 1. 웹에서 저장소(`owner/name`)와 동기화 범위(이슈, 작업 PR 병합·닫힘)를 정해 **웹훅 추가**를 누릅니다. 이슈는 가져오기와 같은 종류·영역·담당자·추가 태그를 씁니다.
-2. 표시되는 **Webhook ID**, **Payload URL**(`/api/github/webhooks/<Webhook ID>`)과 **Secret** 중 Payload URL과 Secret을 GitHub 저장소 **Settings → Webhooks → Add webhook**에 붙여 넣습니다. Content type은 `application/json`, 이벤트는 *Let me select individual events*에서 **Issues**와 **Pull requests**를 고릅니다. 같은 정보는 웹훅 목록의 **연결 정보**에서 소유자가 다시 볼 수 있습니다. Secret이 새어 나갔다고 의심되면 **Secret 재발급** 후 GitHub 설정도 바꿉니다.
+2. 표시되는 **Webhook ID**, **Payload URL**(`/api/github/webhooks/<Webhook ID>`)과 **Secret** 중 Payload URL과 Secret을 GitHub 저장소 **Settings → Webhooks → Add webhook**에 붙여 넣습니다. Content type은 `application/json`을 권장합니다(GitHub 기본값 `application/x-www-form-urlencoded`도 받습니다). 이벤트는 *Let me select individual events*에서 **Issues**와 **Pull requests**를 고릅니다. 같은 정보는 웹훅 목록의 **연결 정보**에서 소유자가 다시 볼 수 있습니다. Secret이 새어 나갔다고 의심되면 **Secret 재발급** 후 GitHub 설정도 바꿉니다.
 3. GitHub가 보내는 `ping`이 웹 화면의 최근 수신에 `처리`로 보이면 연결된 것입니다. GitHub의 *Recent Deliveries*에서도 응답을 볼 수 있습니다.
 4. 기존 이슈는 위의 가져오기로 한 번 가져옵니다(웹훅은 등록 이후 이벤트만 보냅니다).
 

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -31,6 +32,25 @@ func TestValidWebhookSignature(t *testing.T) {
 	}
 	if validWebhookSignature([]byte("s3cret"), []byte(`{"zen":"y"}`), good) {
 		t.Fatal("signature must cover the body")
+	}
+}
+
+func TestWebhookPayload(t *testing.T) {
+	doc := `{"zen":"a&b=c","repository":{"full_name":"o/r"}}`
+	if got, code := webhookPayload("application/json; charset=utf-8", []byte(doc)); code != "" || string(got) != doc {
+		t.Fatalf("json: %q %q", got, code)
+	}
+	form := "payload=" + url.QueryEscape(doc)
+	if got, code := webhookPayload("Application/X-WWW-Form-Urlencoded", []byte(form)); code != "" || string(got) != doc {
+		t.Fatalf("form: %q %q", got, code)
+	}
+	for _, bad := range []string{"", "other=1", "payload=1&payload=2", "payload=%zz"} {
+		if _, code := webhookPayload("application/x-www-form-urlencoded", []byte(bad)); code != "INVALID_PAYLOAD" {
+			t.Fatalf("form %q: %q", bad, code)
+		}
+	}
+	if _, code := webhookPayload("text/plain", []byte(doc)); code != "UNSUPPORTED_CONTENT_TYPE" {
+		t.Fatalf("text/plain: %q", code)
 	}
 }
 
@@ -74,10 +94,11 @@ func TestGitHubWebhooks(t *testing.T) {
 	denied(t, err, "FORBIDDEN")
 	hookID, secret := saved.Webhook.ID, saved.Secret
 
+	contentType := "application/json"
 	deliver := func(event, delivery, body, sig string) (int, map[string]any) {
 		t.Helper()
 		req := httptest.NewRequest("POST", "/api/github/webhooks/"+hookID, strings.NewReader(body))
-		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Content-Type", contentType)
 		req.Header.Set("X-GitHub-Event", event)
 		req.Header.Set("X-GitHub-Delivery", delivery)
 		req.Header.Set("X-Hub-Signature-256", sig)
@@ -101,6 +122,16 @@ func TestGitHubWebhooks(t *testing.T) {
 	if code, _ := send("ping", "d-2", `{"repository":{"full_name":"o/other"}}`); code != 400 {
 		t.Fatalf("repository mismatch: %d", code)
 	}
+	// GitHub's default form encoding carries the same document in "payload".
+	contentType = "application/x-www-form-urlencoded"
+	if code, out := send("ping", "d-form", "payload="+url.QueryEscape(ping)); code != 200 || out["data"].(map[string]any)["outcome"] != "processed" {
+		t.Fatalf("form ping: %d %v", code, out)
+	}
+	contentType = "text/plain"
+	if code, _ := send("ping", "d-text", ping); code != 400 {
+		t.Fatalf("unsupported content type: %d", code)
+	}
+	contentType = "application/json"
 
 	issue := func(action, state, updated, title string) string {
 		b, _ := json.Marshal(map[string]any{"action": action, "repository": map[string]any{"full_name": "O/r"}, "issue": map[string]any{
