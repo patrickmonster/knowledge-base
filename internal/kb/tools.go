@@ -134,13 +134,23 @@ func NewTools(s *Store) Tools {
 		}
 		return p, nil
 	})
-	add(t, s, "list_projects", "List projects the authenticated user can access.", false, nil, func(ctx context.Context, tx *sql.Tx, a Identity, in PageInput) (any, error) {
+	add(t, s, "list_projects", "List projects the authenticated user can access, each with its registered source repositories. Pass repository (the checkout's git remote, e.g. the output of `git remote get-url origin`) to get only the projects registered for that repository: use the project when exactly one is returned, and ask the user when none or several are.", false, nil, func(ctx context.Context, tx *sql.Tx, a Identity, in ListProjectsInput) (any, error) {
 		limit, err := pagination(in.Limit, in.Offset)
 		if err != nil {
 			return nil, err
 		}
-		return many[Project](ctx, tx, `SELECT to_jsonb(p)||jsonb_build_object('role',m.role) FROM projects p JOIN project_members m ON m.project_id=p.id
-		WHERE m.user_id=$1 AND ($4='' OR p.id=NULLIF($4,'')::uuid) ORDER BY p.created_at DESC,p.id LIMIT $2 OFFSET $3`, a.User.ID, limit, in.Offset, a.ProjectID)
+		repo := ""
+		if in.Repository != "" {
+			if repo, err = normalizeRepository(in.Repository); err != nil {
+				return nil, err
+			}
+		}
+		return many[Project](ctx, tx, `SELECT to_jsonb(p)||jsonb_build_object('role',m.role,
+			'repositories',COALESCE((SELECT jsonb_agg(r.repository ORDER BY r.repository) FROM project_repositories r WHERE r.project_id=p.id),'[]'::jsonb))
+		FROM projects p JOIN project_members m ON m.project_id=p.id
+		WHERE m.user_id=$1 AND ($4='' OR p.id=NULLIF($4,'')::uuid)
+		AND ($5='' OR EXISTS(SELECT 1 FROM project_repositories r WHERE r.project_id=p.id AND r.repository=$5))
+		ORDER BY p.created_at DESC,p.id LIMIT $2 OFFSET $3`, a.User.ID, limit, in.Offset, a.ProjectID, repo)
 	})
 	add(t, s, "set_project_member", "Owner only: grant admin/editor/viewer access or remove a project member. admin is editor access plus managing project rules.", true, func(in MemberInput) string { return in.ProjectID }, func(ctx context.Context, tx *sql.Tx, a Identity, in MemberInput) (any, error) {
 		p, err := projectAccess(ctx, tx, a.User.ID, in.ProjectID, true)
@@ -266,6 +276,7 @@ func NewTools(s *Store) Tools {
 	registerGitHubIssueTools(t, s)
 	registerNotificationTools(t, s)
 	registerAgentsTools(t, s)
+	registerRepositoryTools(t, s)
 	registerQualityTools(t, s)
 	registerRuleTools(t, s)
 	registerTodoTools(t, s)

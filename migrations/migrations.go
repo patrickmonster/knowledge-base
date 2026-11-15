@@ -85,3 +85,6 @@ var IssueTodoLink string
 
 //go:embed 028_webhook_plain_secret.sql
 var WebhookPlainSecret string
+
+//go:embed 029_project_repositories.sql
+var ProjectRepositories string

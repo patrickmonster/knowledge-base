@@ -129,7 +129,8 @@ Authorization: Bearer <발급받은 MCP 키>
 | --- | --- |
 | `whoami` | 인증된 사용자 확인 |
 | `get_server_version` | 실행 중인 배포 커밋과 DB 스키마 버전(적용/기대 마이그레이션 수) 확인 |
-| `create_project`, `list_projects` | 프로젝트 생성·조회 |
+| `create_project`, `list_projects` | 프로젝트 생성·조회. `list_projects`는 프로젝트별 `repositories`를 함께 내려주고, `repository`(git remote)를 넘기면 그 저장소에 등록된 프로젝트만 돌려준다 | |
+| `add_project_repository`, `remove_project_repository` | 소유자·관리자: 프로젝트의 소스 저장소 등록·해제. `host/owner/name` 소문자로 정규화해 저장(인증 정보·포트 제거), 프로젝트당 20개. GitHub 웹훅이 걸린 저장소는 마이그레이션 029에서 자동 등록 |
 | `set_project_member`, `list_project_members` | 참여자 권한 관리 |
 | `create_document`, `update_document` | 지식 추가·버전 기반 수정 |
 | `get_document`, `list_documents` | 본문 조회, 종류·상태·태그·기간·작성자 필터 목록과 재확인 필요 표시 |
