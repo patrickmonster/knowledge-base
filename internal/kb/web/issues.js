@@ -224,13 +224,14 @@ async function issuesPage() {
     const thread=el('details'), threadBody=el('div');
     thread.append(el('summary','댓글'+(i.comment_count?` ${i.comment_count}개`:'')),threadBody);
     function drawThread(full) {
-      threadBody.replaceChildren(...full.comments.map(cm=>{
+      const comments=full.comments||[];
+      threadBody.replaceChildren(...comments.map(cm=>{
         const n=el('div',undefined,'issue-comment'), images=el('div',undefined,'issue-images');
         drawGallery(images,cm.attachments||[]);
         n.append(el('p',`${cm.author_name} · ${new Date(cm.created_at).toLocaleString()}`,'small muted'),renderMarkdown(cm.body,'vector-content'),images);
         return n;
       }));
-      if (!full.comments.length) threadBody.append(el('p','댓글이 없습니다.','small muted'));
+      if (!comments.length) threadBody.append(el('p','댓글이 없습니다.','small muted'));
     }
     thread.addEventListener('toggle',async()=>{
       if (!thread.open||threadBody.childElementCount) return;
