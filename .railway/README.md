@@ -1,6 +1,6 @@
 # Railway 설치와 운영
 
-현재 서버는 `production` / `main`을 사용합니다. 기존 `development`의 앱·DB·Ollama 서버는 제거했고, 데이터 손실 방지를 위해 분리된 DB·모델 볼륨은 보관합니다. 볼륨을 보관하는 동안 저장 비용이 남을 수 있습니다. 배포 설정은 폐기한 `development`에 다시 적용하지 못하도록 차단합니다. 로컬 Compose와 테스트 DB는 계속 사용할 수 있습니다.
+현재 서버는 `production` / `main`을 사용합니다. 기존 `development`의 앱·DB·Ollama 서버는 제거했습니다. 분리돼 남아 있던 DB 볼륨은 데이터를 백업한 뒤 삭제했고, 모델 볼륨은 `ollama-start.sh`가 다시 내려받을 수 있어 백업 없이 삭제했습니다. 따라서 development 볼륨 보관 비용은 더 이상 발생하지 않습니다. 배포 설정은 폐기한 `development`에 다시 적용하지 못하도록 차단합니다. 로컬 Compose와 테스트 DB는 계속 사용할 수 있습니다.
 
 ## 나중에 별도 프로젝트 설치하기
 

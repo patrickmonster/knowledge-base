@@ -224,7 +224,7 @@ Authorization: Bearer <발급받은 MCP 키>
 
 ## Railway 배포
 
-현재는 `production` / `main` 단일 서버로 운영합니다. 기존 개발 앱·DB·Ollama 서버는 제거하고 데이터 볼륨은 보관합니다. 로컬 Compose와 자동 테스트는 계속 사용할 수 있습니다.
+현재는 `production` / `main` 단일 서버로 운영합니다. 기존 개발 앱·DB·Ollama 서버는 제거했고, 개발 DB 볼륨은 백업한 뒤 삭제했으며 모델 볼륨도 삭제했습니다. 로컬 Compose와 자동 테스트는 계속 사용할 수 있습니다.
 
 [설치·운영 안내](.railway/README.md)와 [배포 설정](.railway/railway.ts)에 앱·DB·Ollama·첨부 버킷 구성이 포함되어 있습니다. 나중에 다른 Railway 프로젝트에 설치할 때 새 체크아웃에서 아래 명령으로 로컬 설정만 준비할 수 있습니다. 현재 서버를 복제하거나 새 프로젝트를 즉시 생성하지 않습니다.
 
