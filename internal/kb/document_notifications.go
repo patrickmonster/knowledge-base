@@ -95,6 +95,8 @@ func notificationRoute(p notificationPayload) string {
 			return "/#reviews"
 		}
 		return "/#documents"
+	case eventRecheckDigest:
+		return "/#documents"
 	}
 	return "/#issues"
 }

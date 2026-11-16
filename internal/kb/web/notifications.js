@@ -2,7 +2,7 @@
 
 // Issue notification channels (webhook · Slack · email) for one project.
 const notificationKinds={webhook:'웹훅',slack:'Slack',email:'이메일'};
-const notificationEventNames={issue_assigned:'담당 배정',issue_answered:'답변 등록',issue_commented:'댓글',issue_status:'상태 변경 (해결·닫기·다시 열기)',document_created:'새 문서 생성',document_promoted:'문서 승격 (draft → active)'};
+const notificationEventNames={issue_assigned:'담당 배정',issue_answered:'답변 등록',issue_commented:'댓글',issue_status:'상태 변경 (해결·닫기·다시 열기)',document_created:'새 문서 생성',document_promoted:'문서 승격 (draft → active)',recheck_digest:'재확인 기한이 지난 문서 요약 (주기 발송)'};
 const documentKindNames={brief:'개요',decision:'결정',reference:'참고',glossary:'용어',history:'작업 이력',artifact:'산출물'};
 const defaultNotifyDocumentKinds=['brief','decision','reference','glossary'];
 const notificationStatus={pending:'대기',processing:'발송 중',sent:'발송됨',failed:'실패'};
@@ -33,7 +33,7 @@ async function notificationCard(project) {
   const target=field(f,'주소 (HTTPS)','target','url');target.maxLength=2000;target.placeholder='https://hooks.slack.com/services/…';
   const events=el('fieldset',undefined,'search-scope');events.append(el('legend','보낼 알림'));
   for (const [value,label] of Object.entries(notificationEventNames)) {
-    const l=el('label',undefined,'check'),i=el('input');i.type='checkbox';i.name='events';i.value=value;i.checked=!value.startsWith('document_');l.append(i,document.createTextNode(label));events.append(l);
+    const l=el('label',undefined,'check'),i=el('input');i.type='checkbox';i.name='events';i.value=value;i.checked=value!=='recheck_digest'&&!value.startsWith('document_');l.append(i,document.createTextNode(label));events.append(l);
   }
   f.append(events);
   const kinds=el('fieldset',undefined,'search-scope');kinds.append(el('legend','알릴 문서 종류 (문서 알림을 고른 경우)'));

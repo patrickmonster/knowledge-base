@@ -114,6 +114,7 @@ type notificationPayload struct {
 	Recipients  []notificationRecipient `json:"recipients"`
 	CreatedAt   string                  `json:"created_at"`
 	URL         string                  `json:"url,omitempty"`
+	Digest      *recheckDigestBody      `json:"digest,omitempty"`
 }
 
 func registerNotificationTools(t Tools, s *Store) {
@@ -215,12 +216,12 @@ func normalizeEvents(events []string) ([]string, error) {
 	seen := map[string]bool{}
 	out := []string{}
 	for _, e := range events {
-		valid := false
+		valid := e == eventRecheckDigest // opt-in: not part of the default set
 		for _, known := range append(append([]string{}, notificationEvents...), documentEvents...) {
 			valid = valid || e == known
 		}
 		if !valid {
-			return nil, problem("INVALID_INPUT", "events must be issue_assigned, issue_answered, issue_commented, issue_status, document_created, or document_promoted.")
+			return nil, problem("INVALID_INPUT", "events must be issue_assigned, issue_answered, issue_commented, issue_status, document_created, document_promoted, or recheck_digest.")
 		}
 		if !seen[e] {
 			seen[e] = true
@@ -438,6 +439,7 @@ type SMTPConfig struct {
 type Notifier struct {
 	HTTP     *http.Client
 	SMTP     *SMTPConfig
+	Digest   RecheckDigestSchedule
 	sendMail func(addr string, auth smtp.Auth, from string, to []string, msg []byte) error
 }
 
@@ -645,7 +647,7 @@ func (s *Store) ProcessNotificationBatch(ctx context.Context) (int, error) {
 func (s *Store) RunNotificationWorker(ctx context.Context) {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
-	var cleaned time.Time
+	var cleaned, digestChecked time.Time
 	for {
 		for {
 			batchCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
@@ -660,6 +662,10 @@ func (s *Store) RunNotificationWorker(ctx context.Context) {
 			if n == 0 {
 				break
 			}
+		}
+		if time.Since(digestChecked) >= time.Minute {
+			digestChecked = time.Now()
+			s.runRecheckDigestSchedule(ctx)
 		}
 		select {
 		case <-ctx.Done():
@@ -813,6 +819,12 @@ func notificationSubject(p notificationPayload) string {
 	switch p.Event {
 	case eventTest:
 		return "알림 채널 테스트"
+	case eventRecheckDigest:
+		total := 0
+		if p.Digest != nil {
+			total = p.Digest.Total
+		}
+		return fmt.Sprintf("재확인 필요 문서 %d건", total)
 	case eventIssueAssigned:
 		return fmt.Sprintf("%s 담당 배정: %s", kind, p.IssueTitle)
 	case eventIssueAnswered:
@@ -834,6 +846,9 @@ func issueStatusLabel(status string) string {
 
 // notificationText is the plain message used by Slack and email.
 func notificationText(p notificationPayload) string {
+	if p.Event == eventRecheckDigest {
+		return recheckDigestText(p)
+	}
 	names := make([]string, len(p.Recipients))
 	for i, r := range p.Recipients {
 		names[i] = r.Name

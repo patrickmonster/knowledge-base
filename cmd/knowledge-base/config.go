@@ -21,9 +21,15 @@ func notifierConfig() (*kb.Notifier, error) {
 	if enabled == "false" {
 		return nil, nil
 	}
+	digest, err := recheckDigestConfig()
+	if err != nil {
+		return nil, err
+	}
 	host := os.Getenv("SMTP_HOST")
 	if host == "" {
-		return kb.NewNotifier(nil), nil
+		n := kb.NewNotifier(nil)
+		n.Digest = digest
+		return n, nil
 	}
 	port := 587
 	if raw := os.Getenv("SMTP_PORT"); raw != "" {
@@ -40,7 +46,33 @@ func notifierConfig() (*kb.Notifier, error) {
 	if (os.Getenv("SMTP_USERNAME") == "") != (os.Getenv("SMTP_PASSWORD") == "") {
 		return nil, errors.New("set SMTP_USERNAME and SMTP_PASSWORD together")
 	}
-	return kb.NewNotifier(&kb.SMTPConfig{Host: host, Port: port, Username: os.Getenv("SMTP_USERNAME"), Password: os.Getenv("SMTP_PASSWORD"), From: from}), nil
+	n := kb.NewNotifier(&kb.SMTPConfig{Host: host, Port: port, Username: os.Getenv("SMTP_USERNAME"), Password: os.Getenv("SMTP_PASSWORD"), From: from})
+	n.Digest = digest
+	return n, nil
+}
+
+// recheckDigestConfig reads RECHECK_DIGEST_SCHEDULE (off, daily or weekly;
+// default weekly) and RECHECK_DIGEST_HOUR (0-23, Asia/Seoul; default 9). A
+// digest is only sent to projects with a channel subscribed to recheck_digest.
+func recheckDigestConfig() (kb.RecheckDigestSchedule, error) {
+	c := kb.RecheckDigestSchedule{Frequency: "weekly", Hour: 9}
+	if raw := os.Getenv("RECHECK_DIGEST_SCHEDULE"); raw != "" {
+		if raw != "off" && raw != "daily" && raw != "weekly" {
+			return c, errors.New("RECHECK_DIGEST_SCHEDULE must be off, daily, or weekly")
+		}
+		c.Frequency = raw
+	}
+	if c.Frequency == "off" {
+		c.Frequency = ""
+	}
+	if raw := os.Getenv("RECHECK_DIGEST_HOUR"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 0 || n > 23 {
+			return c, errors.New("RECHECK_DIGEST_HOUR must be between 0 and 23")
+		}
+		c.Hour = n
+	}
+	return c, nil
 }
 
 func serveConfig() (string, kb.Config, error) {

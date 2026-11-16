@@ -100,3 +100,6 @@ var TaskScope string
 
 //go:embed 033_document_notifications.sql
 var DocumentNotifications string
+
+//go:embed 034_recheck_digest_runs.sql
+var RecheckDigestRuns string
