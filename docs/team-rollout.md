@@ -59,7 +59,7 @@
 
 1. 소유자·관리자가 대상 저장소의 git remote를 프로젝트에 등록합니다(`add_project_repository`).
 2. 그 저장소에서 쓰는 AI 도구에 이 서버의 MCP(`/mcp`)와 해당 프로젝트에 접근 가능한 키를 **사용자 수준 설정**으로 연결합니다(예: `claude mcp add --scope user`). 커밋되는 `.mcp.json` 같은 프로젝트 설정에는 두지 않습니다.
-3. AI는 연결 시 서버 지침(`internal/kb/instructions.go`)을 받아, 연결된 knowledge 서버마다 `resolve_project(git remote)`를 부릅니다. `matched: true`인 서버의 프로젝트로 `start_task`·`finish_task`를 하고, `matched: false`인 서버는 사용자에게 묻지 않고 건너뜁니다. 서버가 여러 대 연결돼 있어도 등록된 서버만 기록하고, 어디에도 등록되지 않은 저장소에서는 knowledge 없이 평소대로 작업합니다.
+3. AI는 연결 시 서버 지침(`internal/kb/instructions.go`)을 받아, 연결된 knowledge 서버마다 `resolve_project(git remote)`를 부릅니다. `matched: true`인 서버의 프로젝트로 `start_task`·`finish_task`를 하고 응답에 함께 온 작업 규칙(`rules`)을 따르며, `matched: false`인 서버는 사용자에게 묻지 않고 건너뜁니다. 서버가 여러 대 연결돼 있어도 등록된 서버만 기록하고, 어디에도 등록되지 않은 저장소에서는 knowledge 없이 평소대로 작업합니다.
 
 웹 **백업 · 이전** 화면과 `get_agents_template`는 같은 지침을 서버·프로젝트 이름 없이 Markdown으로 줍니다. 선택 사항이며, 쓰려면 사용자 수준 지침(`~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md` 등)에 넣고 저장소에는 커밋하지 않습니다.
 

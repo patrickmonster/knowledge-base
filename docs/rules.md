@@ -29,14 +29,15 @@ AI가 프로젝트에서 커밋하거나 작업할 때 따를 규칙을 저장�
 웹 **프로젝트 만들기**의 "소유자 규칙" 칸에 한 줄에 하나씩 쓴다. `커밋:`/`작업:`/`기타:` 접두사로 종류를 정한다(생략 시 작업). MCP `create_project`의 `rules`는 웹 세션에서만 허용한다.
 
 ## AI 사용
+- `resolve_project`가 `matched: true`이면 응답의 `rules`에 같은 내용이 담긴다(규칙이 없으면 생략). 프로젝트를 찾는 첫 호출에서 규칙을 받으므로 `start_task` 전에 브랜치를 만들거나 커밋해도 규칙을 본 상태가 된다.
 - `start_task`/`get_task_context`의 `context.rules`에 `project_rules`, `personal_rules`, `guidance`가 담긴다(규칙이 없으면 생략).
 - `list_rules`: 현재 사용 중인 규칙 다시 읽기. `save_rule`, `delete_rule`, `set_rule_enabled`: 개별 규칙 관리(소유자 규칙은 웹 화면에서).
 - 규칙은 권한 있는 참여자가 쓴 지시이므로 검색 결과(sources)와 달리 따른다. 규칙이 불명확하거나 작업을 막으면 사용자에게 묻는다.
 
 ### 규칙 전달 경로
-규칙은 서버가 밀어 넣지 않고 AI가 `start_task`·`get_task_context`·`list_rules`를 호출할 때만 전달된다. 이미 진행 중인 세션은 그 뒤에 추가된 규칙을 모르므로 아래 세 곳에서 다시 읽도록 안내한다.
+규칙은 서버가 밀어 넣지 않고 AI가 `resolve_project`·`start_task`·`get_task_context`·`list_rules`를 호출할 때만 전달된다. 이미 진행 중인 세션은 그 뒤에 추가된 규칙을 모르므로 아래 세 곳에서 다시 읽도록 안내한다.
 
-- **MCP 서버 instructions**(`internal/kb/instructions.go`): 연결 시(initialize) 모든 클라이언트에 "변경 작업마다, 같은 세션의 후속 요청이라도 `start_task`를 새로 호출하거나 `list_rules`를 읽으라"고 알린다. 프로젝트 선택(`resolve_project`, 일치하지 않는 서버는 건너뜀)과 저장소에 흔적을 남기지 않는 규칙도 여기 있어 AGENTS.md가 없는 저장소에서도 전체 절차가 동작한다.
+- **MCP 서버 instructions**(`internal/kb/instructions.go`): 연결 시(initialize) 모든 클라이언트에 "변경 작업마다, 같은 세션의 후속 요청이라도 `start_task`를 새로 호출하거나 `list_rules`를 읽으라"고 알린다. 커밋·push·PR·브랜치 생성만 하는 요청도 변경 작업이므로 실행 전에 규칙을 읽으라고 명시한다. 프로젝트 선택(`resolve_project`, 일치하지 않는 서버는 건너뜀)과 저장소에 흔적을 남기지 않는 규칙도 여기 있어 AGENTS.md가 없는 저장소에서도 전체 절차가 동작한다.
 - **사용자 수준 지침 / `get_agents_template`**(선택): 같은 절차를 서버·프로젝트 이름 없이 Markdown으로 준다. 저장소에 커밋하지 않고 `~/.claude/CLAUDE.md` 등 사용자 수준 지침에 둔다.
 - **Claude Code 훅**(`.claude/settings.json` UserPromptSubmit): 매 메시지마다 `[rules-first]` 리마인더를 주입한다.
 
