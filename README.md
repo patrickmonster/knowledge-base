@@ -133,6 +133,7 @@ Authorization: Bearer <발급받은 MCP 키>
 | `get_server_version` | 실행 중인 배포 커밋과 DB 스키마 버전(적용/기대 마이그레이션 수) 확인 |
 | `create_project`, `list_projects` | 프로젝트 생성·조회. `list_projects`는 프로젝트별 `repositories`를 함께 내려주고, `repository`(git remote)를 넘기면 그 저장소에 등록된 프로젝트만 돌려준다 | |
 | `resolve_project` | git remote로 이 서버에서 저장소가 등록된 프로젝트를 찾는다. `matched: true`면 `project`와 작업 규칙 `rules`(`list_rules`와 같은 내용, 없으면 생략), 여러 개면 `candidates`, 없으면 `matched: false`(이 서버는 건너뛰라는 `guidance`). 읽기 전용이라 연결된 모든 knowledge 서버에 불러도 안전하다 | |
+| `list_project_upstreams`, `request_project_upstream`, `remove_project_upstream` | 상위 프로젝트(디자인 시안·기획·공통 명세) 연결 조회·요청·해제. 하위 소유자·관리자가 요청하고 상위 소유자·관리자가 웹에서 승인(`approve_project_upstream`, 웹 전용)한다. 연결된 하위 참여자는 상위를 읽기 전용으로 참조하고 이슈만 올린다([상위 프로젝트](docs/upstreams.md)) |
 | `add_project_repository`, `remove_project_repository` | 소유자·관리자: 프로젝트의 소스 저장소 등록·해제. `host/owner/name` 소문자로 정규화해 저장(인증 정보·포트 제거), 프로젝트당 20개. GitHub 웹훅이 걸린 저장소는 마이그레이션 029에서 자동 등록 |
 | `set_project_member`, `list_project_members` | 참여자 권한 관리 |
 | `create_document`, `update_document` | 지식 추가·버전 기반 수정 |
@@ -235,6 +236,7 @@ Authorization: Bearer <발급받은 MCP 키>
 - 참여하지 않은 프로젝트를 지정하면 단일 프로젝트 검색과 같이 `NOT_FOUND`로 거부하고 다른 프로젝트도 검색하지 않습니다.
 - 특정 프로젝트로 제한된 MCP 키는 그 프로젝트만 검색합니다. 다른 프로젝트를 지정하면 `FORBIDDEN`입니다.
 - 웹 **지식 검색** 화면에서 프로젝트를 골라(기본: 전체) 같은 검색을 실행하고 결과 본문을 바로 열람합니다.
+- 승인된 상위 프로젝트가 있으면 `start_task`·`get_task_context`가 상위의 active 자료를 `upstream_sources`로 자동으로 함께 돌려줍니다([상위 프로젝트](docs/upstreams.md)).
 - `start_task`·`get_task_context`에 `related_project_ids`(최대 5개)를 넘기면 같은 권한 검사로 관련 프로젝트를 함께 조회해 `related_sources`에 프로젝트 이름과 함께 따로 담습니다([작업 흐름](docs/task-workflow.md#관련-프로젝트-자료-related_sources)).
 
 모델 준비 후 MCP에서 문서를 저장하고 `get_embedding_status`의 `ready` 증가를 확인한 다음, `search_knowledge`에 `mode: "semantic"`을 지정해 검사합니다. `/healthz`는 DB 연결 상태만 검사하며 모델 준비 여부를 보장하지 않습니다.

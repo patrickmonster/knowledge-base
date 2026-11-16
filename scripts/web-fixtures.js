@@ -18,8 +18,10 @@ const recheck={needs_recheck:true,days_since_update:120,stale_after_days:90,mess
 const rule=(id,scope,over={})=>({id,project_id:PROJECT.id,scope,category:'work',title:'작업마다 개별 브랜치',body:'최신 main에서 새 브랜치를 만든다.',enabled:true,revision:1,created_by:ME.id,updated_by:ME.id,created_at:T,updated_at:T,...over});
 const pull=(state='merged')=>({repository:'example/demo',number:12,url:'https://github.com/example/demo/pull/12',state});
 const todo=(id,status,priority,over={})=>({id,project_id:PROJECT.id,title:'할 일 '+id,body:'본문',status,priority,category:'Work',progress:null,position:1024,revision:1,created_by:ME.id,created_by_name:ME.name,updated_by:ME.id,created_at:T,updated_at:T,task_count:0,open_task_count:0,open_issue_count:0,blocking_issue_count:0,pull_requests:[],...over});
-const issue=(id,over={})=>({id,project_id:PROJECT.id,kind:'question',title:'질의 '+id,body:'질문 본문',status:'open',blocking:false,area_id:null,area_name:null,assignee_id:null,assignee_name:null,tags:[],answer:'',answered_by:null,answered_by_name:null,answered_at:null,resolution:'',document_id:null,task_id:null,todo_id:null,knowledge_document_id:null,request_key:null,source:null,source_key:null,source_url:null,source_state:null,source_updated_at:null,created_by:ME.id,created_by_name:ME.name,created_at:T,updated_at:T,comment_count:0,attachment_count:0,citation:'kb://'+PROJECT.id+'/issues/'+id,...over});
-const answeredIssue=()=>issue('issue-2',{kind:'issue',status:'answered',blocking:true,area_id:'area-1',area_name:'배포',assignee_id:OTHER.id,assignee_name:OTHER.name,tags:['배포','github'],answer:'답변 본문',answered_by:OTHER.id,answered_by_name:OTHER.name,answered_at:T,todo_id:'todo-1',todo:{id:'todo-1',title:'할 일 todo-1',status:'in_progress'},knowledge_document_id:'doc-1',source:'github',source_key:'example/demo#7',source_url:'https://github.com/example/demo/issues/7',source_state:'open',source_updated_at:T,comment_count:2,attachment_count:1});
+const issue=(id,over={})=>({id,project_id:PROJECT.id,kind:'question',title:'질의 '+id,body:'질문 본문',status:'open',blocking:false,area_id:null,area_name:null,assignee_id:null,assignee_name:null,tags:[],answer:'',answered_by:null,answered_by_name:null,answered_at:null,resolution:'',document_id:null,task_id:null,todo_id:null,origin_project_id:null,knowledge_document_id:null,request_key:null,source:null,source_key:null,source_url:null,source_state:null,source_updated_at:null,created_by:ME.id,created_by_name:ME.name,created_at:T,updated_at:T,comment_count:0,attachment_count:0,citation:'kb://'+PROJECT.id+'/issues/'+id,...over});
+const answeredIssue=()=>issue('issue-2',{kind:'issue',origin_project_id:'project-3',origin_project_name:'서비스 앱',status:'answered',blocking:true,area_id:'area-1',area_name:'배포',assignee_id:OTHER.id,assignee_name:OTHER.name,tags:['배포','github'],answer:'답변 본문',answered_by:OTHER.id,answered_by_name:OTHER.name,answered_at:T,todo_id:'todo-1',todo:{id:'todo-1',title:'할 일 todo-1',status:'in_progress'},knowledge_document_id:'doc-1',source:'github',source_key:'example/demo#7',source_url:'https://github.com/example/demo/issues/7',source_state:'open',source_updated_at:T,comment_count:2,attachment_count:1});
+const upstream=(over={})=>({project_id:PROJECT.id,project_slug:PROJECT.slug,project_name:PROJECT.name,upstream_project_id:'project-2',upstream_project_slug:'design',upstream_project_name:'디자인 시안',status:'approved',requested_by:ME.id,requested_by_name:ME.name,requested_at:T,approved_by:OTHER.id,approved_by_name:OTHER.name,approved_at:T,...over});
+const upstreams=full=>({project_id:PROJECT.id,upstreams:full?[upstream()]:[],downstreams:full?[upstream({project_id:'project-3',project_slug:'app',project_name:'서비스 앱',upstream_project_id:PROJECT.id,upstream_project_slug:PROJECT.slug,upstream_project_name:PROJECT.name,status:'pending',requested_by:null,requested_by_name:null,approved_by:null,approved_by_name:null,approved_at:null})]:[],guidance:'안내'});
 const comment=(id,over={})=>({id,issue_id:'issue-2',author_id:ME.id,author_name:ME.name,body:'댓글 '+id,created_at:T,...over});
 const hit=(over={})=>({document_id:'doc-1',project_id:PROJECT.id,title:'시스템 구조',kind:'reference',status:'active',revision:2,updated_by:ME.id,updated_at:T,source_url:null,position:0,excerpt:'발췌 본문 '.repeat(60),score:0.0312,citation:'kb://'+PROJECT.id+'/documents/doc-1?revision=2#chunk-0',project_slug:PROJECT.slug,project_name:PROJECT.name,...over});
 const ruleSet=full=>({project_rules:full?[rule('rule-1','project'),rule('rule-2','project',{category:'commit',enabled:false})]:[],personal_rules:full?[rule('rule-3','personal',{user_id:ME.id})]:[],can_manage_project_rules:true,guidance:'안내'});
@@ -57,6 +59,7 @@ function mockAPI(variant){
   const tools={
     list_projects:b=>b.offset?[]:[PROJECT],
     count_documents:()=>({count:full?3:0}),
+    list_project_upstreams:()=>upstreams(full),
     list_project_members:()=>[{user_id:ME.id,name:ME.name,role:'owner',disabled:false},...list([{user_id:OTHER.id,name:OTHER.name,role:'editor',disabled:false},{user_id:'user-3',name:'퇴사자',role:'viewer',disabled:true}])],
     list_rules:()=>ruleSet(full),
     list_documents:b=>b.offset?[]:list([{...document(),content:undefined,needs_recheck:true,days_since_update:120,stale_after_days:90},{...document({id:'doc-2',title:'이전 결정',kind:'decision',status:b.status||'draft',tags:[],source_url:null,revision:1}),content:undefined,needs_recheck:false,days_since_update:1,stale_after_days:90}]),
@@ -84,6 +87,9 @@ function mockAPI(variant){
     create_project:()=>PROJECT,
     add_project_repository:()=>({project_id:PROJECT.id,repositories:PROJECT.repositories,changed:true}),
     remove_project_repository:()=>({project_id:PROJECT.id,repositories:[],changed:true}),
+    request_project_upstream:()=>upstream({status:'pending',approved_by:null,approved_by_name:null,approved_at:null}),
+    approve_project_upstream:()=>upstream(),
+    remove_project_upstream:b=>({project_id:b.project_id,other_project_id:b.other_project_id,removed:true}),
     set_project_member:()=>({}),
     transfer_project_owner:()=>({}),
     save_rule:()=>rule('rule-9','personal'),

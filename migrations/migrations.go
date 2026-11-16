@@ -124,3 +124,6 @@ var BackfillUsedImplements string
 
 //go:embed 041_issue_chunks.sql
 var IssueChunks string
+
+//go:embed 042_project_upstreams.sql
+var ProjectUpstreams string
