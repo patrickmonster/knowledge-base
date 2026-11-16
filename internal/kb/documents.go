@@ -54,7 +54,11 @@ func createDocument(ctx context.Context, tx *sql.Tx, actor Identity, in Document
 	if err != nil {
 		return nil, err
 	}
-	return d, indexDocument(ctx, tx, d, "Document created")
+	if err := indexDocument(ctx, tx, d, "Document created"); err != nil {
+		return d, err
+	}
+	notifyDocumentBestEffort(ctx, tx, actor, d, eventDocumentCreated)
+	return d, nil
 }
 
 type DocumentRef struct {
@@ -135,12 +139,19 @@ func updateDocument(ctx context.Context, tx *sql.Tx, actor Identity, in UpdateIn
 	if err := validateDocument(&input); err != nil {
 		return nil, err
 	}
+	previousStatus := d.Status
 	d, err = one[Document](ctx, tx, `WITH changed AS (UPDATE documents SET title=$1,kind=$2,content=$3,tags=$4,status=$5,source_url=NULLIF($6,''),
 	revision=revision+1,updated_by=$7,updated_at=clock_timestamp() WHERE id=$8 RETURNING *) SELECT to_jsonb(changed) FROM changed`, input.Title, input.Kind, input.Content, input.Tags, input.Status, input.SourceURL, actor.User.ID, d.ID)
 	if err != nil {
 		return nil, err
 	}
-	return d, indexDocument(ctx, tx, d, in.Reason)
+	if err := indexDocument(ctx, tx, d, in.Reason); err != nil {
+		return d, err
+	}
+	if previousStatus == "draft" && d.Status == "active" {
+		notifyDocumentBestEffort(ctx, tx, actor, d, eventDocumentPromoted)
+	}
+	return d, nil
 }
 
 type ListInput struct {

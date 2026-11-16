@@ -97,3 +97,6 @@ var TodoImport string
 
 //go:embed 032_task_scope.sql
 var TaskScope string
+
+//go:embed 033_document_notifications.sql
+var DocumentNotifications string
