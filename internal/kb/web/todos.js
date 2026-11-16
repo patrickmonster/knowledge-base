@@ -2,8 +2,12 @@
 
 // 할 일 보드: project to-dos in status columns × priority rows. Cards drag
 // between cells (move_todo) with the mouse or, after a long press, a finger,
-// and open an edit dialog (save_todo/delete_todo).
+// and open an edit dialog (save_todo/delete_todo). Completed to-dos are not
+// on the board; they have their own page (todosDonePage).
 const todoStatuses=[['not_started','시작 전'],['in_progress','진행 중'],['in_review','검토대기'],['completed','완료'],['idea','아이디어']];
+const todoBoardStatuses=todoStatuses.filter(([s])=>s!=='completed');
+// Only work under way can be ticked off from its card.
+const todoCheckable=new Set(['in_progress','in_review']);
 const todoPriorities=[['high','높음'],['medium','보통'],['low','낮음']];
 const todoStatusLabel=Object.fromEntries(todoStatuses), todoPriorityLabel=Object.fromEntries(todoPriorities);
 const todoCollapseKey='kb.todo.collapsed';
@@ -36,16 +40,20 @@ async function todosPage(){
   hideWrap.append(hideBtn,hideMenu);
   filters.append(category,mineLabel,hideWrap,summary);
   bar.append(filters);
-  if(canWrite)bar.append(btn('+ 새 할 일',()=>todoDialog(root,project,ctx,{status:'not_started',priority:'medium'}),'primary'));
+  const barActions=el('div',undefined,'todo-bar-actions');
+  const doneLink=btn('완료된 할 일',()=>render('todosDone'),'secondary todo-done-link');
+  barActions.append(doneLink);
+  if(canWrite)barActions.append(btn('+ 새 할 일',()=>todoDialog(root,project,ctx,{status:'not_started',priority:'medium'}),'primary'));
+  bar.append(barActions);
   const board=el('div',undefined,'todo-board');
   const issuePanel=el('section',undefined,'todo-issues');
   root.append(bar,board,issuePanel);
   const ctx={todos:[],members:[],reload:refresh};
   let generation=0;
   const collapsed=todoCollapsed();
-  const hidden={status:todoHidden('status',todoStatuses.map(x=>x[0])),priority:todoHidden('priority',todoPriorities.map(x=>x[0]))};
+  const hidden={status:todoHidden('status',todoBoardStatuses.map(x=>x[0])),priority:todoHidden('priority',todoPriorities.map(x=>x[0]))};
   const hiddenCount=()=>hidden.status.size+hidden.priority.size;
-  const shownStatuses=()=>todoStatuses.filter(([s])=>!hidden.status.has(s));
+  const shownStatuses=()=>todoBoardStatuses.filter(([s])=>!hidden.status.has(s));
   const shownPriorities=()=>todoPriorities.filter(([p])=>!hidden.priority.has(p));
   function setHidden(kind,value,off){
     off?hidden[kind].add(value):hidden[kind].delete(value);
@@ -57,7 +65,7 @@ async function todosPage(){
     hideBtn.classList.toggle('active',n>0);
     hideBtn.setAttribute('aria-label',n?`숨긴 열·행 ${n}개, 설정 열기`:'열·행 숨기기');
     const parts=[];
-    for(const [kind,title,list,shown] of [['status','상태 열',todoStatuses,shownStatuses()],['priority','우선순위 행',todoPriorities,shownPriorities()]]){
+    for(const [kind,title,list,shown] of [['status','상태 열',todoBoardStatuses,shownStatuses()],['priority','우선순위 행',todoPriorities,shownPriorities()]]){
       const group=el('fieldset',undefined,'todo-hide-group');group.append(el('legend',title));
       for(const [v,label] of list){
         const row=el('label',undefined,'inline-check'),box=el('input');box.type='checkbox';box.checked=!hidden[kind].has(v);
@@ -93,6 +101,8 @@ async function todosPage(){
     if(ticket!==generation)return;
     ctx.todos=todos;ctx.members=members;
     drawIssuePanel(project,issuePanel,todos);
+    const done=todos.filter(t=>t.status==='completed').length;
+    doneLink.textContent=`완료된 할 일 ${done}건`;
     const cats=[...new Set(todos.map(t=>t.category).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
     const chosen=category.value;
     category.replaceChildren(new Option('모든 분류',''),...cats.map(c=>new Option(c,c)));
@@ -100,7 +110,7 @@ async function todosPage(){
     draw();
   }
   function visible(){
-    return ctx.todos.filter(t=>(!category.value||t.category===category.value)&&(!mine.checked||t.assignee_id===me.id));
+    return ctx.todos.filter(t=>t.status!=='completed'&&(!category.value||t.category===category.value)&&(!mine.checked||t.assignee_id===me.id));
   }
   function draw(){
     if(touchDrag)endTouchDrag(false);
@@ -158,20 +168,22 @@ async function todosPage(){
     tags.append(el('span',todoStatusLabel[t.status],'todo-status todo-s-'+t.status));
     if(t.category)tags.append(el('span',t.category,'todo-category'));
     c.append(tags);
-    const check=el('label',undefined,'todo-done'),box=el('input');box.type='checkbox';box.checked=t.status==='completed';box.disabled=!canWrite;
-    check.append(box,document.createTextNode('완료'));
-    check.addEventListener('click',e=>e.stopPropagation());
-    box.addEventListener('change',async()=>{
-      box.disabled=true;
-      const to=box.checked?'completed':'in_progress';
-      try{
-        await tool('move_todo',{project_id:project.id,todo_id:t.id,status:to,priority:t.priority});
-        if(hidden.status.has(to))notify(`“${todoStatusLabel[to]}” 열이 숨겨져 있어 카드가 보이지 않습니다. 숨김 설정에서 다시 볼 수 있습니다.`);
-        await refresh();
-      }
-      catch(e){box.checked=!box.checked;notify(e.message,true);}finally{box.disabled=!canWrite;}
-    });
-    c.append(check);
+    if(todoCheckable.has(t.status)){
+      const check=el('label',undefined,'todo-done'),box=el('input');box.type='checkbox';box.disabled=!canWrite;
+      check.append(box,document.createTextNode('완료'));
+      check.addEventListener('click',e=>e.stopPropagation());
+      box.addEventListener('change',async()=>{
+        if(!box.checked)return;
+        box.disabled=true;
+        try{
+          await tool('move_todo',{project_id:project.id,todo_id:t.id,status:'completed',priority:t.priority});
+          notify(`“${t.title}”을(를) 완료했습니다. “완료된 할 일”에서 볼 수 있습니다.`);
+          await refresh();
+        }
+        catch(e){box.checked=false;box.disabled=!canWrite;notify(e.message,true);}
+      });
+      c.append(check);
+    }
     if(t.progress!=null){
       const p=el('div',undefined,'todo-progress');p.setAttribute('role','progressbar');p.setAttribute('aria-valuemin','0');p.setAttribute('aria-valuemax','100');p.setAttribute('aria-valuenow',String(t.progress));
       const track=el('span',undefined,'todo-progress-track'),fill=el('span',undefined,'todo-progress-fill');fill.style.width=t.progress+'%';
@@ -300,6 +312,63 @@ async function todosPage(){
     if(d.cell===d.card.parentElement&&d.before===next)return;
     moveCard(d.id,d.cell,d.before);
   }
+  category.addEventListener('change',draw);
+  mine.addEventListener('change',draw);
+  await refresh();
+  return root;
+}
+
+// 완료된 할 일: completed to-dos, newest first, off the board. A to-do can be
+// opened (edit dialog) or put back into progress from here.
+async function todosDonePage(){
+  const root=el('div',undefined,'todo-page todo-done-page');
+  const project=projectList.find(p=>p.id===currentProjectID);
+  if(!project){const c=card('완료된 할 일');c.append(el('p','먼저 프로젝트에 참여하고 사이드바에서 현재 프로젝트를 선택해 주세요.','empty'));root.append(c);return root;}
+  const canWrite=['owner','admin','editor'].includes(project.role);
+  const bar=el('div',undefined,'todo-toolbar'),filters=el('div',undefined,'todo-filters');
+  const category=el('select');category.setAttribute('aria-label','분류');
+  const mineLabel=el('label',undefined,'inline-check'),mine=el('input');mine.type='checkbox';
+  mineLabel.append(mine,document.createTextNode('내게 배정된 것만'));
+  const summary=el('span','','small muted');summary.setAttribute('role','status');
+  filters.append(category,mineLabel,summary);
+  bar.append(filters,btn('← 할 일 보드',()=>render('todos'),'secondary'));
+  const list=el('div',undefined,'todo-done-list');
+  root.append(bar,list);
+  const ctx={todos:[],members:[],reload:refresh};
+  let generation=0;
+  async function refresh(){
+    const ticket=++generation;
+    const [todos,members]=await Promise.all([
+      tool('list_todos',{project_id:project.id,status:'completed',limit:500}),
+      ctx.members.length?ctx.members:tool('list_project_members',{project_id:project.id}).catch(()=>[]),
+    ]);
+    if(ticket!==generation)return;
+    ctx.todos=todos.filter(t=>t.status==='completed').sort((a,b)=>when(b).localeCompare(when(a)));ctx.members=members;
+    const cats=[...new Set(ctx.todos.map(t=>t.category).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
+    const chosen=category.value;
+    category.replaceChildren(new Option('모든 분류',''),...cats.map(c=>new Option(c,c)));
+    category.value=cats.includes(chosen)?chosen:'';
+    draw();
+  }
+  function draw(){
+    const items=ctx.todos.filter(t=>(!category.value||t.category===category.value)&&(!mine.checked||t.assignee_id===me.id));
+    summary.textContent=`${items.length}건`+(ctx.todos.length>=500?' · 최근 500건까지 표시':'');
+    if(!items.length){list.replaceChildren(el('p',ctx.todos.length?'조건에 맞는 완료된 할 일이 없습니다.':'아직 완료된 할 일이 없습니다. 보드에서 진행 중·검토대기 카드의 “완료”를 체크하면 여기로 옵니다.','empty'));return;}
+    const rows=items.map(t=>{
+      const title=el('button',t.title,'todo-done-title');title.type='button';
+      title.addEventListener('click',()=>todoDialog(root,project,ctx,t));
+      const links=todoLinkPills(t)||'—';
+      const actions=el('div',undefined,'todo-done-actions');
+      if(canWrite)actions.append(btn('진행 중으로 되돌리기',async()=>{
+        await tool('move_todo',{project_id:project.id,todo_id:t.id,status:'in_progress',priority:t.priority});
+        notify(`“${t.title}”을(를) 진행 중으로 되돌렸습니다.`);await refresh();
+      },'secondary'));
+      const done=when(t);
+      return [done?new Date(done).toLocaleDateString():'—',title,el('span',todoPriorityLabel[t.priority]||t.priority,'todo-priority todo-p-'+t.priority),t.category||'—',t.assignee_name||'—',links,actions];
+    });
+    list.replaceChildren(table(['완료일','제목','우선순위','분류','담당자','연결',''],rows));
+  }
+  function when(t){return t.completed_at||t.updated_at||'';}
   category.addEventListener('change',draw);
   mine.addEventListener('change',draw);
   await refresh();
