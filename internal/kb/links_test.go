@@ -89,7 +89,7 @@ func TestDocumentLinks(t *testing.T) {
 	// finish_task links the history to the decision it carried out.
 	run := mustCall(t, tools, admin, "start_task", StartTaskInput{ProjectID: p.ID, RequestKey: "links-1", Title: "환불 기한 변경 적용", Task: "환불 기한 14일 적용"}).(StartTaskResult).Run
 	finish := FinishTaskInput{ProjectID: p.ID, TaskID: run.ID, Outcome: "completed", Summary: "적용", Changes: "환불 기한 변경", Decisions: "없음", Validation: "테스트", Remaining: "없음", References: "없음",
-		Implements: []string{newDecision.ID, newDecision.ID}}
+		Implements: []string{newDecision.ID, newDecision.ID}, UsedSources: &[]string{newDecision.ID, brief.ID, history.ID}}
 	_, err = call(t, tools, admin, "finish_task", FinishTaskInput{ProjectID: p.ID, TaskID: run.ID, Outcome: "completed", Summary: "x", Changes: "x", Decisions: "x", Validation: "x", Remaining: "x", References: "x", Implements: []string{history.ID}})
 	denied(t, err, "INVALID_INPUT")
 	completion := mustCall(t, tools, admin, "finish_task", finish).(TaskCompletion)
@@ -98,8 +98,16 @@ func TestDocumentLinks(t *testing.T) {
 	if !strings.Contains(saved.Content, "## 실행한 기획·결정") || !strings.Contains(saved.Content, "환불 기한 14일") {
 		t.Fatalf("history body lacks implemented decisions:\n%s", saved.Content)
 	}
-	if saved.Links == nil || len(saved.Links.Implements) != 1 || saved.Links.Implements[0].DocumentID != newDecision.ID {
-		t.Fatalf("history implements link missing: %+v", saved.Links)
+	// used_sources adds the brief; the history it also listed stays evidence only.
+	if saved.Links == nil || len(saved.Links.Implements) != 2 {
+		t.Fatalf("history implements links wrong: %+v", saved.Links)
+	}
+	linked := map[string]bool{}
+	for _, d := range saved.Links.Implements {
+		linked[d.DocumentID] = true
+	}
+	if !linked[newDecision.ID] || !linked[brief.ID] || !strings.Contains(saved.Content, "환불 화면 기획") {
+		t.Fatalf("used_sources decision/brief not linked: %+v\n%s", saved.Links, saved.Content)
 	}
 
 	// Reverse lookup: which tasks carried out this decision, and what it replaced.
