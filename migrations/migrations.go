@@ -94,3 +94,6 @@ var SearchThresholds string
 
 //go:embed 031_todo_import.sql
 var TodoImport string
+
+//go:embed 032_recheck_digest_runs.sql
+var RecheckDigestRuns string

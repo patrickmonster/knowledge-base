@@ -2,7 +2,7 @@
 
 // Issue notification channels (webhook · Slack · email) for one project.
 const notificationKinds={webhook:'웹훅',slack:'Slack',email:'이메일'};
-const notificationEventNames={issue_assigned:'담당 배정',issue_answered:'답변 등록',issue_commented:'댓글',issue_status:'상태 변경 (해결·닫기·다시 열기)'};
+const notificationEventNames={issue_assigned:'담당 배정',issue_answered:'답변 등록',issue_commented:'댓글',issue_status:'상태 변경 (해결·닫기·다시 열기)',recheck_digest:'재확인 기한이 지난 문서 요약 (주기 발송)'};
 const notificationStatus={pending:'대기',processing:'발송 중',sent:'발송됨',failed:'실패'};
 
 async function notificationCard(project) {
@@ -31,7 +31,7 @@ async function notificationCard(project) {
   const target=field(f,'주소 (HTTPS)','target','url');target.maxLength=2000;target.placeholder='https://hooks.slack.com/services/…';
   const events=el('fieldset',undefined,'search-scope');events.append(el('legend','보낼 알림'));
   for (const [value,label] of Object.entries(notificationEventNames)) {
-    const l=el('label',undefined,'check'),i=el('input');i.type='checkbox';i.name='events';i.value=value;i.checked=true;l.append(i,document.createTextNode(label));events.append(l);
+    const l=el('label',undefined,'check'),i=el('input');i.type='checkbox';i.name='events';i.value=value;i.checked=value!=='recheck_digest';l.append(i,document.createTextNode(label));events.append(l);
   }
   f.append(events);
   f.append(el('p','주소에는 비밀 값이 들어 있을 수 있어 저장 후에는 일부만 표시합니다. 내부망·사설 주소로는 보내지 않습니다. 실패한 알림은 최대 6번까지 다시 보냅니다.','small muted'));

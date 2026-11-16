@@ -2,6 +2,29 @@ package main
 
 import "testing"
 
+func TestRecheckDigestConfig(t *testing.T) {
+	for _, c := range []struct {
+		schedule, hour string
+		frequency      string
+		wantHour       int
+		ok             bool
+	}{
+		{"", "", "weekly", 9, true},
+		{"daily", "7", "daily", 7, true},
+		{"off", "", "", 9, true},
+		{"hourly", "", "", 0, false},
+		{"daily", "24", "", 0, false},
+		{"daily", "x", "", 0, false},
+	} {
+		t.Setenv("RECHECK_DIGEST_SCHEDULE", c.schedule)
+		t.Setenv("RECHECK_DIGEST_HOUR", c.hour)
+		got, err := recheckDigestConfig()
+		if (err == nil) != c.ok || (c.ok && (got.Frequency != c.frequency || got.Hour != c.wantHour)) {
+			t.Errorf("schedule=%q hour=%q: got %+v, %v", c.schedule, c.hour, got, err)
+		}
+	}
+}
+
 func TestServeConfig(t *testing.T) {
 	tests := []struct {
 		name   string
