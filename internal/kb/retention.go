@@ -14,7 +14,8 @@ import (
 
 // RetentionPolicy limits how long audit events and old document revisions are
 // kept. A zero day count keeps that data forever (the default), so nothing is
-// deleted until an operator opts in with environment variables.
+// deleted until a global administrator sets a period in the web console. The
+// environment variables only provide the default for values nobody has set.
 type RetentionPolicy struct {
 	AuditDays          int `json:"audit_days"`
 	RevisionDays       int `json:"revision_days"`
@@ -67,16 +68,21 @@ func retentionDays(name, raw string, min int) (int, error) {
 // Each run that deletes anything records a retention_purge audit event with
 // counts only.
 func (s *Store) ApplyRetention(ctx context.Context) (map[string]int64, error) {
-	p := s.Retention
 	out := map[string]int64{"audit_events": 0, "revisions": 0}
-	if p.AuditDays == 0 && p.RevisionDays == 0 {
-		return out, nil
-	}
 	err := transaction(ctx, s.DB, func(tx *sql.Tx) error {
 		// One purge at a time across app instances.
 		var locked bool
 		if err := tx.QueryRowContext(ctx, "SELECT pg_try_advisory_xact_lock(51283168)").Scan(&locked); err != nil || !locked {
 			return err
+		}
+		// Read the policy inside the lock so a change made in the web console
+		// applies to the next run without a restart.
+		p, _, err := s.effectiveRetention(ctx, tx)
+		if err != nil {
+			return err
+		}
+		if p.AuditDays == 0 && p.RevisionDays == 0 {
+			return nil
 		}
 		if p.RevisionDays > 0 {
 			keep := p.RevisionKeepLatest
@@ -148,6 +154,98 @@ func (s *Store) RetentionStatus(ctx context.Context, actor Identity) (any, error
 		if err != nil {
 			return nil, err
 		}
-		return map[string]any{"policy": s.Retention, "last_purge": last, "data": oldest}, nil
+		policy, sources, err := s.effectiveRetention(ctx, tx)
+		if err != nil {
+			return nil, err
+		}
+		var updated sql.NullString
+		if err := tx.QueryRowContext(ctx, `SELECT to_char(updated_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"') FROM retention_settings`).Scan(&updated); err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return nil, err
+		}
+		out := map[string]any{"policy": policy, "sources": sources, "defaults": s.Retention, "last_purge": last, "data": oldest}
+		if updated.Valid {
+			out["updated_at"] = updated.String
+		}
+		return out, nil
+	})
+}
+
+// effectiveRetention overlays the values an administrator saved in the web
+// console on the server defaults (environment). sources tells, per value,
+// whether it comes from "admin" or the "server" default.
+func (s *Store) effectiveRetention(ctx context.Context, q Querier) (RetentionPolicy, map[string]string, error) {
+	p := s.Retention
+	if p.RevisionKeepLatest < 1 {
+		p.RevisionKeepLatest = defaultRevisionKeep
+	}
+	sources := map[string]string{"audit_days": "server", "revision_days": "server", "revision_keep_latest": "server"}
+	var audit, revision, keep sql.NullInt64
+	err := q.QueryRowContext(ctx, `SELECT audit_days,revision_days,revision_keep_latest FROM retention_settings`).Scan(&audit, &revision, &keep)
+	if errors.Is(err, sql.ErrNoRows) {
+		return p, sources, nil
+	}
+	if err != nil {
+		return p, sources, err
+	}
+	if audit.Valid {
+		p.AuditDays, sources["audit_days"] = int(audit.Int64), "admin"
+	}
+	if revision.Valid {
+		p.RevisionDays, sources["revision_days"] = int(revision.Int64), "admin"
+	}
+	if keep.Valid {
+		p.RevisionKeepLatest, sources["revision_keep_latest"] = int(keep.Int64), "admin"
+	}
+	return p, sources, nil
+}
+
+// RetentionInput is the web console form. A null (or missing) value goes back
+// to the server default; 0 days keeps that data forever.
+type RetentionInput struct {
+	AuditDays          *int `json:"audit_days"`
+	RevisionDays       *int `json:"revision_days"`
+	RevisionKeepLatest *int `json:"revision_keep_latest"`
+}
+
+func validRetentionDays(name string, v *int, min int) error {
+	if v != nil && *v != 0 && (*v < min || *v > maxRetentionDays) {
+		return problem("INVALID_INPUT", fmt.Sprintf("%s must be 0 (keep forever) or between %d and %d.", name, min, maxRetentionDays))
+	}
+	return nil
+}
+
+// SetRetention saves the retention policy. Only a global administrator in a
+// web session may call it (Perform rejects keys for admin operations). Expired
+// data is deleted by the hourly job, so a shorter period removes records that
+// are already older than it within about an hour, and deleted records cannot be
+// restored.
+func (s *Store) SetRetention(ctx context.Context, actor Identity, in RetentionInput) (any, error) {
+	ctx = auditInput(ctx, in)
+	return s.Perform(ctx, actor, "update_retention", "", true, true, func(tx *sql.Tx) (any, error) {
+		if err := validRetentionDays("audit_days", in.AuditDays, minAuditRetentionDays); err != nil {
+			return nil, err
+		}
+		if err := validRetentionDays("revision_days", in.RevisionDays, minRevisionRetentionDays); err != nil {
+			return nil, err
+		}
+		if in.RevisionKeepLatest != nil && (*in.RevisionKeepLatest < 1 || *in.RevisionKeepLatest > 1000) {
+			return nil, problem("INVALID_INPUT", "revision_keep_latest must be between 1 and 1000.")
+		}
+		if in.AuditDays == nil && in.RevisionDays == nil && in.RevisionKeepLatest == nil {
+			if _, err := tx.ExecContext(ctx, `DELETE FROM retention_settings`); err != nil {
+				return nil, err
+			}
+		} else if _, err := tx.ExecContext(ctx, `INSERT INTO retention_settings(id,audit_days,revision_days,revision_keep_latest,updated_by)
+			VALUES(true,$1,$2,$3,$4)
+			ON CONFLICT(id) DO UPDATE SET audit_days=EXCLUDED.audit_days,revision_days=EXCLUDED.revision_days,
+				revision_keep_latest=EXCLUDED.revision_keep_latest,updated_by=EXCLUDED.updated_by,updated_at=now()`,
+			in.AuditDays, in.RevisionDays, in.RevisionKeepLatest, actor.User.ID); err != nil {
+			return nil, err
+		}
+		policy, sources, err := s.effectiveRetention(ctx, tx)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"policy": policy, "sources": sources, "defaults": s.Retention}, nil
 	})
 }

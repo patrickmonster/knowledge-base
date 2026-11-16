@@ -36,17 +36,25 @@ func recordSearchMiss(ctx context.Context, tx *sql.Tx, projectID, query, mode st
 }
 
 // searchMissRetentionDays is the shorter of the fixed limit and the audit retention.
-func (s *Store) searchMissRetentionDays() int {
-	if d := s.Retention.AuditDays; d > 0 && d < searchMissMaxDays {
-		return d
+func (s *Store) searchMissRetentionDays(ctx context.Context) (int, error) {
+	p, _, err := s.effectiveRetention(ctx, s.DB)
+	if err != nil {
+		return 0, err
 	}
-	return searchMissMaxDays
+	if d := p.AuditDays; d > 0 && d < searchMissMaxDays {
+		return d, nil
+	}
+	return searchMissMaxDays, nil
 }
 
 // PurgeSearchMisses deletes expired zero-result searches in one bounded batch.
 func (s *Store) PurgeSearchMisses(ctx context.Context) (int64, error) {
+	days, err := s.searchMissRetentionDays(ctx)
+	if err != nil {
+		return 0, err
+	}
 	res, err := s.DB.ExecContext(ctx, `DELETE FROM search_misses WHERE id IN (
-		SELECT id FROM search_misses WHERE created_at<now()-make_interval(days=>$1) ORDER BY id LIMIT $2)`, s.searchMissRetentionDays(), retentionBatch)
+		SELECT id FROM search_misses WHERE created_at<now()-make_interval(days=>$1) ORDER BY id LIMIT $2)`, days, retentionBatch)
 	if err != nil {
 		return 0, err
 	}
