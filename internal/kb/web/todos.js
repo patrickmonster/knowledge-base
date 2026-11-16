@@ -11,6 +11,14 @@ const todoCollapseKey='kb.todo.collapsed';
 function todoCollapsed(){try{return new Set(JSON.parse(localStorage.getItem(todoCollapseKey)||'[]'));}catch{return new Set();}}
 function saveTodoCollapsed(set){try{localStorage.setItem(todoCollapseKey,JSON.stringify([...set]));}catch{}}
 
+// Hidden columns (statuses) and rows (priorities), kept per browser like the
+// collapsed rows. Only the display changes; the to-dos themselves stay put.
+const todoHiddenKeys={status:'kb.todo.hidden.status',priority:'kb.todo.hidden.priority'};
+function todoHidden(kind,known){
+  try{const v=JSON.parse(localStorage.getItem(todoHiddenKeys[kind])||'[]');return new Set(Array.isArray(v)?v.filter(x=>known.includes(x)):[]);}catch{return new Set();}
+}
+function saveTodoHidden(kind,set){try{localStorage.setItem(todoHiddenKeys[kind],JSON.stringify([...set]));}catch{}}
+
 async function todosPage(){
   const root=el('div',undefined,'todo-page');
   const project=projectList.find(p=>p.id===currentProjectID);
@@ -22,7 +30,11 @@ async function todosPage(){
   const mineLabel=el('label',undefined,'inline-check'),mine=el('input');mine.type='checkbox';
   mineLabel.append(mine,document.createTextNode('내게 배정된 것만'));
   const summary=el('span','','small muted');summary.setAttribute('role','status');
-  filters.append(category,mineLabel,summary);
+  const hideWrap=el('div',undefined,'todo-hide'),hideBtn=el('button',undefined,'secondary todo-hide-btn'),hideMenu=el('div',undefined,'todo-hide-menu');
+  hideBtn.type='button';hideBtn.setAttribute('aria-haspopup','true');hideBtn.setAttribute('aria-expanded','false');
+  hideMenu.hidden=true;hideMenu.setAttribute('role','group');hideMenu.setAttribute('aria-label','열·행 숨기기');
+  hideWrap.append(hideBtn,hideMenu);
+  filters.append(category,mineLabel,hideWrap,summary);
   bar.append(filters);
   if(canWrite)bar.append(btn('+ 새 할 일',()=>todoDialog(root,project,ctx,{status:'not_started',priority:'medium'}),'primary'));
   const board=el('div',undefined,'todo-board');
@@ -30,6 +42,46 @@ async function todosPage(){
   const ctx={todos:[],members:[],reload:refresh};
   let generation=0;
   const collapsed=todoCollapsed();
+  const hidden={status:todoHidden('status',todoStatuses.map(x=>x[0])),priority:todoHidden('priority',todoPriorities.map(x=>x[0]))};
+  const hiddenCount=()=>hidden.status.size+hidden.priority.size;
+  const shownStatuses=()=>todoStatuses.filter(([s])=>!hidden.status.has(s));
+  const shownPriorities=()=>todoPriorities.filter(([p])=>!hidden.priority.has(p));
+  function setHidden(kind,value,off){
+    off?hidden[kind].add(value):hidden[kind].delete(value);
+    saveTodoHidden(kind,hidden[kind]);draw();
+  }
+  function drawHideMenu(){
+    const n=hiddenCount();
+    hideBtn.textContent=n?`숨김 ${n}`:'숨기기';
+    hideBtn.classList.toggle('active',n>0);
+    hideBtn.setAttribute('aria-label',n?`숨긴 열·행 ${n}개, 설정 열기`:'열·행 숨기기');
+    const parts=[];
+    for(const [kind,title,list,shown] of [['status','상태 열',todoStatuses,shownStatuses()],['priority','우선순위 행',todoPriorities,shownPriorities()]]){
+      const group=el('fieldset',undefined,'todo-hide-group');group.append(el('legend',title));
+      for(const [v,label] of list){
+        const row=el('label',undefined,'inline-check'),box=el('input');box.type='checkbox';box.checked=!hidden[kind].has(v);
+        // At least one column and one row stay visible so the board is never blank.
+        box.disabled=box.checked&&shown.length<=1;
+        box.addEventListener('change',()=>setHidden(kind,v,!box.checked));
+        row.append(box,el('span',label,kind==='status'?'todo-status todo-s-'+v:'todo-priority todo-p-'+v));
+        group.append(row);
+      }
+      parts.push(group);
+    }
+    const all=btn('모두 보이기',()=>{hidden.status.clear();hidden.priority.clear();saveTodoHidden('status',hidden.status);saveTodoHidden('priority',hidden.priority);draw();},'secondary');
+    all.disabled=!n;
+    parts.push(all);
+    hideMenu.replaceChildren(...parts);
+  }
+  function toggleHideMenu(open){
+    hideMenu.hidden=!open;hideBtn.setAttribute('aria-expanded',String(open));
+  }
+  hideBtn.addEventListener('click',()=>toggleHideMenu(hideMenu.hidden));
+  document.addEventListener('click',function away(e){
+    if(!root.isConnected){document.removeEventListener('click',away);return;}
+    if(!hideMenu.hidden&&!hideWrap.contains(e.target))toggleHideMenu(false);
+  });
+  hideWrap.addEventListener('keydown',e=>{if(e.key==='Escape'&&!hideMenu.hidden){toggleHideMenu(false);hideBtn.focus();}});
 
   async function refresh(){
     const ticket=++generation;
@@ -51,17 +103,21 @@ async function todosPage(){
   function draw(){
     if(touchDrag)endTouchDrag(false);
     const items=visible();
-    summary.textContent=`${items.length}건`+(ctx.todos.length>=500?' · 최대 500건까지 표시':'');
+    const statuses=shownStatuses(),priorities=shownPriorities();
+    const onBoard=items.filter(t=>!hidden.status.has(t.status)&&!hidden.priority.has(t.priority)).length;
+    summary.textContent=`${onBoard}건`+(onBoard<items.length?` · 숨김 ${items.length-onBoard}건`:'')+(ctx.todos.length>=500?' · 최대 500건까지 표시':'');
+    drawHideMenu();
     const inner=el('div',undefined,'todo-board-inner');
+    inner.style.setProperty('--todo-cols',String(statuses.length));
     const head=el('div',undefined,'todo-row todo-columns');
     head.append(el('div'));
-    for(const [s,label] of todoStatuses){
+    for(const [s,label] of statuses){
       const h=el('div',undefined,'todo-col-head');
       h.append(el('span',label,'todo-status todo-s-'+s),el('span',String(items.filter(t=>t.status===s).length),'todo-count'));
       head.append(h);
     }
     inner.append(head);
-    for(const [pr,plabel] of todoPriorities){
+    for(const [pr,plabel] of priorities){
       const lane=el('section',undefined,'todo-lane'),inLane=items.filter(t=>t.priority===pr);
       const toggle=el('button',undefined,'todo-lane-toggle');toggle.type='button';
       const open=!collapsed.has(pr);toggle.setAttribute('aria-expanded',String(open));
@@ -71,7 +127,7 @@ async function todosPage(){
       if(open){
         const row=el('div',undefined,'todo-row');
         row.append(el('div'));
-        for(const [s,slabel] of todoStatuses){
+        for(const [s,slabel] of statuses){
           const cell=el('div',undefined,'todo-cell todo-c-'+s);
           cell.dataset.status=s;cell.dataset.priority=pr;
           cell.setAttribute('aria-label',`${plabel} · ${slabel}`);
@@ -89,6 +145,7 @@ async function todosPage(){
       inner.append(lane);
     }
     board.replaceChildren(inner);
+    if(items.length&&!onBoard)board.append(el('p','조건에 맞는 할 일이 모두 숨겨진 열·행에 있습니다. 숨김 설정에서 보이게 할 수 있습니다.','empty'));
     if(!ctx.todos.length)board.append(el('p',canWrite?'아직 할 일이 없습니다. 칸의 “새로 만들기”나 오른쪽 위 버튼으로 추가하세요.':'아직 할 일이 없습니다.','empty'));
   }
   function todoCard(t){
@@ -104,7 +161,12 @@ async function todosPage(){
     check.addEventListener('click',e=>e.stopPropagation());
     box.addEventListener('change',async()=>{
       box.disabled=true;
-      try{await tool('move_todo',{project_id:project.id,todo_id:t.id,status:box.checked?'completed':'in_progress',priority:t.priority});await refresh();}
+      const to=box.checked?'completed':'in_progress';
+      try{
+        await tool('move_todo',{project_id:project.id,todo_id:t.id,status:to,priority:t.priority});
+        if(hidden.status.has(to))notify(`“${todoStatusLabel[to]}” 열이 숨겨져 있어 카드가 보이지 않습니다. 숨김 설정에서 다시 볼 수 있습니다.`);
+        await refresh();
+      }
       catch(e){box.checked=!box.checked;notify(e.message,true);}finally{box.disabled=!canWrite;}
     });
     c.append(check);
