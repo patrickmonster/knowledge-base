@@ -18,8 +18,8 @@ Discord에서 `/kb` 명령으로 할 일을 조회합니다. 이 버전은 **요
 ## 켜는 순서
 
 1. Discord 개발자 포털에서 애플리케이션을 만들고 **General Information**의 **Public Key**를 복사합니다. 공개 키는 서명 확인용이라 비밀이 아닙니다. 봇 토큰은 서버에 넣지 않습니다.
-2. 애플리케이션을 Discord 서버(길드)에 초대합니다(`applications.commands` 범위만 있으면 됩니다). 개발자 모드를 켜고 서버를 우클릭해 **서버 ID**를 복사합니다.
-3. 전역 관리자가 웹 **운영 현황 → Discord 연동**에 공개 키와 허용할 서버 ID(최대 20개)를 저장하고 **켜기**를 체크합니다. 공개 키와 서버가 하나 이상 있어야 켜집니다. 환경변수는 필요 없습니다.
+2. 애플리케이션을 Discord 서버(길드)에 초대합니다(`applications.commands` 범위만 있으면 됩니다). 명령을 등록할 서버의 ID는 개발자 모드를 켜고 서버를 우클릭해 복사합니다(아래 5번에서만 씁니다).
+3. 전역 관리자가 웹 **운영 현황 → Discord 연동**에 공개 키를 저장하고 **켜기**를 체크합니다. 켜려면 공개 키가 있어야 합니다. 환경변수는 필요 없습니다.
 4. 같은 카드에 표시된 **Interactions Endpoint URL**을 포털 General Information의 *Interactions Endpoint URL*에 입력합니다. Discord가 서명된 PING을 보내 확인하므로 **3번을 먼저 저장·켜야** 합니다.
 5. 명령을 한 번 등록합니다(봇 토큰은 이 요청에서만 쓰고 서버에는 저장하지 않습니다).
 
@@ -62,7 +62,7 @@ curl -X PUT "https://discord.com/api/v10/applications/<APPLICATION_ID>/guilds/<G
 ## 보안
 
 - 모든 요청은 `X-Signature-Ed25519`·`X-Signature-Timestamp`를 저장된 공개 키로 검증합니다. 실패하면 401이고 본문을 읽지 않습니다. 시각이 ±5분을 벗어나면 거부하고, 같은 interaction id는 두 번 처리하지 않습니다(409). IP당 분당 120건으로 제한합니다.
-- 허용 목록에 없는 서버·DM에서는 명령이 동작하지 않습니다.
+- 서버 허용 목록은 없습니다. 봇이 들어 있는 모든 서버와 DM에서 명령이 동작하지만, `/kb link`로 연결한 사람만 데이터를 볼 수 있고 답변은 본인에게만 보입니다. 아무나 봇을 자기 서버에 초대하지 못하게 하려면 개발자 포털에서 애플리케이션의 **Public Bot**을 끄세요.
 - 설정 변경은 전역 관리자의 웹 세션 전용(MCP 키 거부)이고 입력 범위를 검증하며 감사 로그(`update_discord_settings`, 켜짐 여부만)를 남깁니다.
 - 감사 로그에는 `discord_link`·`discord_unlink`·`discord_projects`·`discord_todos`가 사용자 기준으로 남습니다(할 일 내용은 남기지 않음).
 - 서버 설정은 DB에 저장하며 관리자 화면에서 바꿉니다. 비밀값은 서버에 없습니다.
@@ -70,6 +70,7 @@ curl -X PUT "https://discord.com/api/v10/applications/<APPLICATION_ID>/guilds/<G
 ## 운영 메모
 
 - 마이그레이션 `037_discord.sql`: `discord_settings`(서버 전체 1행), `discord_links`, `discord_link_codes`, `discord_interactions`(1일 지난 행은 요청 때 정리).
+- `discord_settings.allowed_guild_ids` 열은 예전 허용 목록의 흔적으로 더 이상 읽거나 쓰지 않습니다. 다음 마이그레이션에서 지웁니다.
 - 끄면(`켜기` 해제) 엔드포인트는 404를 돌려주고 연결 코드는 만들 수 없습니다. 연결 정보는 남습니다.
 - Discord는 3초 안에 응답을 요구합니다. 지금 명령은 한 번의 DB 조회라 충분하지만, 시간이 걸리는 명령을 추가할 때는 지연 응답(type 5)과 후속 메시지가 필요합니다.
 - 다음 단계 후보: 할 일 추가·이동 쓰기 명령, 프로젝트 slug 자동완성, 마감·담당 알림과 연계.

@@ -77,26 +77,18 @@ func TestDiscordLinkCode(t *testing.T) {
 
 func TestCleanDiscordSettings(t *testing.T) {
 	pub, _ := discordTestKey(t)
-	guild := "123456789012345678"
-	ok, err := cleanDiscordSettings(DiscordSettingsInput{Enabled: true, PublicKey: " " + strings.ToUpper(pub) + " ", AllowedGuildIDs: []string{guild, guild, " "}})
-	if err != nil || ok.PublicKey != pub || len(ok.AllowedGuildIDs) != 1 {
+	// A key alone is enough to turn it on; no server list is needed.
+	ok, err := cleanDiscordSettings(DiscordSettingsInput{Enabled: true, PublicKey: " " + strings.ToUpper(pub) + " "})
+	if err != nil || ok.PublicKey != pub || !ok.Enabled {
 		t.Fatalf("normalized: %+v %v", ok, err)
 	}
-	off, err := cleanDiscordSettings(DiscordSettingsInput{})
-	if err != nil || off.AllowedGuildIDs == nil {
+	if off, err := cleanDiscordSettings(DiscordSettingsInput{}); err != nil || off.Enabled || off.PublicKey != "" {
 		t.Fatalf("empty settings: %+v %v", off, err)
 	}
-	many := make([]string, discordMaxGuilds+1)
-	for i := range many {
-		many[i] = "1234567890123456" + strconv.Itoa(10+i)
-	}
 	for name, in := range map[string]DiscordSettingsInput{
-		"on without key":    {Enabled: true, AllowedGuildIDs: []string{guild}},
-		"on without server": {Enabled: true, PublicKey: pub},
-		"short key":         {PublicKey: pub[:62]},
-		"not hex":           {PublicKey: strings.Repeat("g", 64)},
-		"bad server id":     {AllowedGuildIDs: []string{"12345"}},
-		"too many servers":  {PublicKey: pub, AllowedGuildIDs: many},
+		"on without key": {Enabled: true},
+		"short key":      {PublicKey: pub[:62]},
+		"not hex":        {PublicKey: strings.Repeat("g", 64)},
 	} {
 		if _, err := cleanDiscordSettings(in); errorCode(err) != "INVALID_INPUT" {
 			t.Errorf("%s: %v", name, err)
@@ -208,17 +200,17 @@ func TestDiscordCommands(t *testing.T) {
 	pub, priv := discordTestKey(t)
 	const guild, other = "123456789012345678", "223456789012345678"
 
-	// Off until an administrator saves a key and a server.
+	// Off until an administrator saves a key and turns it on.
 	if _, err := discordSend(t, s, priv, strconv.FormatInt(time.Now().Unix(), 10), `{"type":1}`); errorCode(err) != "NOT_FOUND" {
 		t.Fatalf("disabled endpoint: %v", err)
 	}
-	if _, err := s.SetDiscordSettings(ctx, editor, DiscordSettingsInput{Enabled: true, PublicKey: pub, AllowedGuildIDs: []string{guild}}); errorCode(err) != "FORBIDDEN" {
+	if _, err := s.SetDiscordSettings(ctx, editor, DiscordSettingsInput{Enabled: true, PublicKey: pub}); errorCode(err) != "FORBIDDEN" {
 		t.Fatalf("only a global administrator may save settings: %v", err)
 	}
-	if _, err := s.SetDiscordSettings(ctx, admin, DiscordSettingsInput{Enabled: true, PublicKey: pub}); errorCode(err) != "INVALID_INPUT" {
-		t.Fatalf("enabling without a server: %v", err)
+	if _, err := s.SetDiscordSettings(ctx, admin, DiscordSettingsInput{Enabled: true}); errorCode(err) != "INVALID_INPUT" {
+		t.Fatalf("enabling without a key: %v", err)
 	}
-	saved, err := s.SetDiscordSettings(ctx, admin, DiscordSettingsInput{Enabled: true, PublicKey: pub, AllowedGuildIDs: []string{guild}})
+	saved, err := s.SetDiscordSettings(ctx, admin, DiscordSettingsInput{Enabled: true, PublicKey: pub})
 	if err != nil || !saved.(DiscordSettings).Enabled || !strings.HasSuffix(saved.(DiscordSettings).EndpointURL, "/api/discord/interactions") {
 		t.Fatalf("save: %+v %v", saved, err)
 	}
@@ -260,8 +252,13 @@ func TestDiscordCommands(t *testing.T) {
 	if out := cmd(guild, person, "todos", ""); !strings.Contains(out, "연결된 계정이 없습니다") {
 		t.Fatalf("unlinked caller: %s", out)
 	}
-	if out := cmd(other, person, "todos", ""); !strings.Contains(out, "사용할 수 없습니다") {
-		t.Fatalf("server that is not allowed: %s", out)
+	// There is no server list: any server the bot is in works, and so does a direct message.
+	if out := cmd(other, person, "todos", ""); !strings.Contains(out, "연결된 계정이 없습니다") {
+		t.Fatalf("another server: %s", out)
+	}
+	dm := `{"id":"888888","type":2,"user":{"id":"` + person + `"},"data":{"name":"kb","options":[{"name":"todos","type":1}]}}`
+	if r, err := discordSend(t, s, priv, now(), dm); err != nil || !strings.Contains(r.Data.Content, "연결된 계정이 없습니다") {
+		t.Fatalf("direct message: %+v %v", r, err)
 	}
 
 	// Link: the code works once, only for the person who made it.
@@ -336,7 +333,7 @@ func TestDiscordCommands(t *testing.T) {
 	}
 
 	// Turning it off closes the endpoint again.
-	if _, err := s.SetDiscordSettings(ctx, admin, DiscordSettingsInput{PublicKey: pub, AllowedGuildIDs: []string{guild}}); err != nil {
+	if _, err := s.SetDiscordSettings(ctx, admin, DiscordSettingsInput{PublicKey: pub}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := discordSend(t, s, priv, now(), `{"type":1}`); errorCode(err) != "NOT_FOUND" {
