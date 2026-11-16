@@ -8,7 +8,7 @@ const assert=require('node:assert');
 const {openConsole}=require('./web-harness.js');
 const {mockAPI}=require('./web-fixtures.js');
 
-const pages=['projects','search','rules','documents','todos','tasks','reviews','issues','attachments','vectors','usage','rechecks','keys','account','overview','users','audit'];
+const pages=['projects','search','rules','documents','todos','todosDone','tasks','reviews','issues','attachments','vectors','usage','rechecks','keys','account','overview','users','audit'];
 
 async function open(t,variant){
   const c=await openConsole(mockAPI(variant));
@@ -137,4 +137,19 @@ test('a task links to its questions and history document',async t=>{
   await show(c,'documents');
   assert.ok(!c.requests.some(r=>r.path==='/api/tools/get_document'),'the focus is used once');
   assert.strictEqual(c.document.querySelector('dialog.document-dialog[open]'),null);
+});
+
+test('completed to-dos live on their own page; only in-progress and in-review cards can be ticked',async t=>{
+  const c=await open(t,'full');
+  await show(c,'todos');
+  const heads=[...c.document.querySelectorAll('.todo-col-head .todo-status')].map(n=>n.textContent);
+  assert.deepStrictEqual(heads,['시작 전','진행 중','검토대기','아이디어']);
+  assert.strictEqual(c.document.querySelector('.todo-card[data-id="todo-3"]'),null,'completed card is not on the board');
+  const ticked=[...c.document.querySelectorAll('.todo-card')].filter(n=>n.querySelector('.todo-done')).map(n=>n.dataset.id).sort();
+  assert.deepStrictEqual(ticked,['todo-1','todo-5']);
+  assert.match(c.document.querySelector('.todo-done-link').textContent,/완료된 할 일 1건/);
+  await show(c,'todosDone');
+  const titles=[...c.document.querySelectorAll('.todo-done-title')].map(n=>n.textContent);
+  assert.deepStrictEqual(titles,['할 일 todo-3']);
+  check(c,'todosDone');
 });
