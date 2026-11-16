@@ -97,3 +97,53 @@ func mustValue(t *testing.T) func(any, error) any {
 		return v
 	}
 }
+
+func intp(n int) *int { return &n }
+
+func TestSetRetention(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	admin := loginAs(t, s, "admin@example.com")
+	member := inviteAs(t, s, admin, "member@example.com")
+	s.Retention = RetentionPolicy{AuditDays: 365, RevisionKeepLatest: 7}
+
+	// Nothing saved: the server (environment) defaults apply.
+	p, src, err := s.effectiveRetention(ctx, s.DB)
+	if err != nil || p.AuditDays != 365 || p.RevisionKeepLatest != 7 || src["audit_days"] != "server" {
+		t.Fatalf("defaults: %+v %v %v", p, src, err)
+	}
+	// Only a global administrator may change it, and values are validated.
+	if _, err := s.SetRetention(ctx, member, RetentionInput{AuditDays: intp(0)}); err == nil {
+		t.Fatal("member changed retention")
+	}
+	for _, bad := range []RetentionInput{{AuditDays: intp(30)}, {RevisionDays: intp(7)}, {AuditDays: intp(4000)}, {RevisionKeepLatest: intp(0)}} {
+		if _, err := s.SetRetention(ctx, admin, bad); err == nil {
+			t.Fatalf("accepted %+v", bad)
+		}
+	}
+	// An administrator value wins per field; the others keep the default.
+	if _, err := s.SetRetention(ctx, admin, RetentionInput{AuditDays: intp(0), RevisionDays: intp(90)}); err != nil {
+		t.Fatal(err)
+	}
+	p, src, err = s.effectiveRetention(ctx, s.DB)
+	if err != nil || p.AuditDays != 0 || p.RevisionDays != 90 || p.RevisionKeepLatest != 7 ||
+		src["audit_days"] != "admin" || src["revision_days"] != "admin" || src["revision_keep_latest"] != "server" {
+		t.Fatalf("saved: %+v %v %v", p, src, err)
+	}
+	status := mustValue(t)(s.RetentionStatus(ctx, admin)).(map[string]any)
+	if status["policy"].(RetentionPolicy).RevisionDays != 90 || status["updated_at"] == nil {
+		t.Fatalf("status: %v", status)
+	}
+	var audited int
+	s.DB.QueryRow(`SELECT count(*) FROM audit_events WHERE action='update_retention' AND details->>'revision_days'='90'`).Scan(&audited)
+	if audited != 1 {
+		t.Fatalf("audit event count %d", audited)
+	}
+	// All null goes back to the server defaults.
+	if _, err := s.SetRetention(ctx, admin, RetentionInput{}); err != nil {
+		t.Fatal(err)
+	}
+	if p, _, _ = s.effectiveRetention(ctx, s.DB); p.AuditDays != 365 || p.RevisionDays != 0 {
+		t.Fatalf("reset: %+v", p)
+	}
+}

@@ -40,8 +40,12 @@ func recordSearchTiming(ctx context.Context, tx *sql.Tx, projectID, source strin
 
 // PurgeSearchTimings deletes expired latency samples in one bounded batch.
 func (s *Store) PurgeSearchTimings(ctx context.Context) (int64, error) {
+	days, err := s.searchMissRetentionDays(ctx)
+	if err != nil {
+		return 0, err
+	}
 	res, err := s.DB.ExecContext(ctx, `DELETE FROM search_timings WHERE id IN (
-		SELECT id FROM search_timings WHERE created_at<now()-make_interval(days=>$1) ORDER BY id LIMIT $2)`, s.searchMissRetentionDays(), retentionBatch)
+		SELECT id FROM search_timings WHERE created_at<now()-make_interval(days=>$1) ORDER BY id LIMIT $2)`, days, retentionBatch)
 	if err != nil {
 		return 0, err
 	}
