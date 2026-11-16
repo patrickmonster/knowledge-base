@@ -109,3 +109,6 @@ var Discord string
 
 //go:embed 035_retention_settings.sql
 var RetentionSettings string
+
+//go:embed 036_todo_in_review.sql
+var TodoInReview string
