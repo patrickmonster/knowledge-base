@@ -25,9 +25,6 @@ var webFiles embed.FS
 type Config struct {
 	PublicURL  string
 	TrustProxy bool
-	// SetupCode must be presented to create the first administrator from the
-	// web console while none exists. Empty disables web setup.
-	SetupCode string
 }
 type App struct {
 	Store  *Store
@@ -150,7 +147,7 @@ func (a *App) Handler() http.Handler {
 			a.fail(w, err)
 			return
 		}
-		a.json(w, map[string]any{"required": needed, "available": a.Config.SetupCode != ""})
+		a.json(w, map[string]any{"required": needed})
 	})
 	mux.HandleFunc("POST /api/setup", func(w http.ResponseWriter, r *http.Request) {
 		if !a.origin(w, r) {
@@ -161,7 +158,6 @@ func (a *App) Handler() http.Handler {
 			return
 		}
 		var in struct {
-			Code     string `json:"code"`
 			Name     string `json:"name"`
 			Email    string `json:"email"`
 			Password string `json:"password"`
@@ -169,7 +165,7 @@ func (a *App) Handler() http.Handler {
 		if !readJSON(w, r, &in) {
 			return
 		}
-		if err := a.Store.Setup(r.Context(), a.Config.SetupCode, in.Code, in.Email, in.Name, in.Password); err != nil {
+		if err := a.Store.Setup(r.Context(), in.Email, in.Name, in.Password); err != nil {
 			a.fail(w, err)
 			return
 		}

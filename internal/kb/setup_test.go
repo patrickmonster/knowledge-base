@@ -10,8 +10,7 @@ import (
 
 func TestFirstRunSetupCreatesTheOnlyAdministrator(t *testing.T) {
 	s := emptyTestStore(t)
-	const code = "setup-code-for-tests-only-0001"
-	app, err := NewApp(s, Config{PublicURL: "http://localhost:8080", SetupCode: code})
+	app, err := NewApp(s, Config{PublicURL: "http://localhost:8080"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,41 +36,30 @@ func TestFirstRunSetupCreatesTheOnlyAdministrator(t *testing.T) {
 		handler.ServeHTTP(w, r)
 		return w
 	}
-	body := func(code, email string) string {
-		b, _ := json.Marshal(map[string]string{"code": code, "name": "첫 관리자", "email": email, "password": testPassword})
+	body := func(email string) string {
+		b, _ := json.Marshal(map[string]string{"name": "첫 관리자", "email": email, "password": testPassword})
 		return string(b)
 	}
 	const origin = "http://localhost:8080"
-	if d := status(); d["required"] != true || d["available"] != true {
+	if d := status(); d["required"] != true {
 		t.Fatalf("fresh install must require setup: %v", d)
 	}
-	if w := post("https://evil.example", body(code, "first@example.com")); w.Code != 403 {
+	if w := post("https://evil.example", body("first@example.com")); w.Code != 403 {
 		t.Fatalf("foreign origin: %d", w.Code)
 	}
-	if w := post(origin, body("wrong-code", "first@example.com")); w.Code != 403 {
-		t.Fatalf("wrong code: %d %s", w.Code, w.Body)
-	}
-	if w := post(origin, body("", "first@example.com")); w.Code != 403 {
-		t.Fatalf("empty code: %d", w.Code)
-	}
-	if w := post(origin, `{"code":"`+code+`","name":"첫 관리자","email":"first@example.com","password":"short"}`); w.Code != 400 {
+	if w := post(origin, `{"name":"첫 관리자","email":"first@example.com","password":"short"}`); w.Code != 400 {
 		t.Fatalf("short password: %d", w.Code)
 	}
 	if d := status(); d["required"] != true {
 		t.Fatal("rejected attempts must not complete setup")
 	}
-	var denied int
-	if err := s.DB.QueryRow("SELECT count(*) FROM audit_events WHERE action='bootstrap' AND outcome='denied'").Scan(&denied); err != nil || denied != 2 {
-		t.Fatalf("denied attempts audited: %d %v", denied, err)
-	}
-	if w := post(origin, body(code, "First@Example.com")); w.Code != 200 {
+	if w := post(origin, body("First@Example.com")); w.Code != 200 {
 		t.Fatalf("setup: %d %s", w.Code, w.Body)
 	}
 	if d := status(); d["required"] != false {
 		t.Fatal("setup must close once an administrator exists")
 	}
-	// The correct code is useless afterwards.
-	if w := post(origin, body(code, "second@example.com")); w.Code != 409 {
+	if w := post(origin, body("second@example.com")); w.Code != 409 {
 		t.Fatalf("second setup: %d %s", w.Code, w.Body)
 	}
 	id := loginAs(t, s, "first@example.com")
@@ -84,18 +72,12 @@ func TestFirstRunSetupCreatesTheOnlyAdministrator(t *testing.T) {
 	}
 }
 
-func TestSetupUnavailableWithoutCodeOrOnExistingServer(t *testing.T) {
-	s := emptyTestStore(t)
-	if err := s.Setup(context.Background(), "", "", "a@example.com", "A", testPassword); errorCode(err) != "FORBIDDEN" {
-		t.Fatalf("empty server code must not allow setup: %v", err)
-	}
-	if err := s.Bootstrap(context.Background(), "admin@example.com", "관리자", testPassword); err != nil {
-		t.Fatal(err)
-	}
+func TestSetupClosedOnExistingServer(t *testing.T) {
+	s := testStore(t)
 	if needed, err := s.NeedsSetup(context.Background()); err != nil || needed {
 		t.Fatalf("needs setup after bootstrap: %v %v", needed, err)
 	}
-	if err := s.Setup(context.Background(), "code-code-code-code-code", "code-code-code-code-code", "b@example.com", "B", testPassword); errorCode(err) != "CONFLICT" {
+	if err := s.Setup(context.Background(), "b@example.com", "B", testPassword); errorCode(err) != "CONFLICT" {
 		t.Fatalf("setup on existing server: %v", err)
 	}
 }

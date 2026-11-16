@@ -89,7 +89,7 @@ docker compose up --build -d
 docker compose --profile setup run --rm bootstrap
 ```
 
-마지막 bootstrap 명령은 관리자가 아직 없을 때만 성공합니다. 이 명령 대신 웹에서 만들 수도 있습니다. 관리자가 없는 서버는 첫 화면에 **최초 관리자 만들기**를 보여 주며, 설정 코드로 `SETUP_TOKEN`(20자 이상) 값 또는 서버 시작 로그의 `setup_code`를 입력합니다([설치 안내](.railway/README.md#최초-관리자와-연결)). 모델은 최초 한 번 내려받아 전용 볼륨에 보관합니다. 이후 `.env`에서 `BOOTSTRAP_PASSWORD`를 제거합니다. [http://localhost:8080](http://localhost:8080)에서 설정한 계정으로 로그인합니다. 일반 앱 컨테이너에는 bootstrap 비밀번호를 전달하지 않습니다.
+마지막 bootstrap 명령은 관리자가 아직 없을 때만 성공합니다. 이 명령 대신 웹에서 만들 수도 있습니다. 관리자가 없는 서버는 첫 화면에 **최초 관리자 만들기**를 보여 줍니다([설치 안내](.railway/README.md#최초-관리자와-연결)). 모델은 최초 한 번 내려받아 전용 볼륨에 보관합니다. 이후 `.env`에서 `BOOTSTRAP_PASSWORD`를 제거합니다. [http://localhost:8080](http://localhost:8080)에서 설정한 계정으로 로그인합니다. 일반 앱 컨테이너에는 bootstrap 비밀번호를 전달하지 않습니다.
 
 Go로 직접 개발하려면 환경변수를 설정한 상태에서 다음 명령을 실행합니다. 프로그램은 `.env`를 자동으로 읽지 않습니다.
 
