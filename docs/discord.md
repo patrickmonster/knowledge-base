@@ -68,8 +68,7 @@ curl -X PUT "https://discord.com/api/v10/applications/<APPLICATION_ID>/guilds/<G
 
 ## 운영 메모
 
-- 마이그레이션 `037_discord.sql`: `discord_settings`(서버 전체 1행), `discord_links`, `discord_link_codes`, `discord_interactions`(1일 지난 행은 요청 때 정리).
-- `discord_settings.allowed_guild_ids` 열은 예전 허용 목록의 흔적으로 더 이상 읽거나 쓰지 않습니다. 다음 마이그레이션에서 지웁니다.
+- 마이그레이션 `037_discord.sql`: `discord_settings`(서버 전체 1행), `discord_links`, `discord_link_codes`, `discord_interactions`(1일 지난 행은 요청 때 정리). `038_discord_drop_guild_ids.sql`은 예전 허용 서버 목록 열(`allowed_guild_ids`)을 지웁니다.
 - 끄면(`켜기` 해제) 엔드포인트는 404를 돌려주고 연결 코드는 만들 수 없습니다. 연결 정보는 남습니다.
 - Discord는 3초 안에 응답을 요구합니다. 지금 명령은 한 번의 DB 조회라 충분하지만, 시간이 걸리는 명령을 추가할 때는 지연 응답(type 5)과 후속 메시지가 필요합니다.
 - 다음 단계 후보: 할 일 추가·이동 쓰기 명령, 프로젝트 slug 자동완성, 마감·담당 알림과 연계.
