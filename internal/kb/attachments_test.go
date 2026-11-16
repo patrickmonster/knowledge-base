@@ -593,6 +593,40 @@ func TestAttachmentTextExtractionIndexesDocument(t *testing.T) {
 		t.Fatalf("list misses text link: %+v", listed)
 	}
 
+	// A file attached to a summary document links that summary and its text
+	// with one related link; files without a summary link nothing.
+	if links := mustCall(t, tools, viewer, "get_document_links", LinksQuery{ProjectID: p.ID, DocumentID: doc.ID}).(DocumentLinks); len(links.Related) != 0 {
+		t.Fatalf("text of an unattached file was linked: %+v", links)
+	}
+	summary := mustCall(t, tools, owner, "create_document", DocumentInput{ProjectID: p.ID, Title: "환불 규정 요약", Kind: "brief", Content: "환불 규정 파일의 목적과 요점"}).(Document)
+	body := docxBytes(t, "구매 확정 후에는 환불 불가")
+	out := mustCall(t, tools, owner, "prepare_attachment_upload", PrepareAttachmentInput{ProjectID: p.ID, DocumentID: summary.ID, Filename: "환불 예외.docx", SizeBytes: int64(len(body))}).(map[string]any)
+	stored, err := s.UploadAttachment(ctx, owner, AttachmentInput{p.ID, out["id"].(string)}, bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	linked := stored.(Attachment)
+	if linked.TextDocumentID == nil {
+		t.Fatalf("summary file not extracted: %+v", linked)
+	}
+	links := mustCall(t, tools, viewer, "get_document_links", LinksQuery{ProjectID: p.ID, DocumentID: summary.ID}).(DocumentLinks)
+	if len(links.Related) != 1 || links.Related[0].DocumentID != *linked.TextDocumentID || links.Related[0].Note != attachmentTextLinkNote || links.Related[0].Kind != "artifact" {
+		t.Fatalf("summary not linked to its text: %+v", links)
+	}
+	text := mustCall(t, tools, viewer, "get_document", DocumentRef{ProjectID: p.ID, DocumentID: *linked.TextDocumentID}).(Document)
+	if text.Links == nil || len(text.Links.Related) != 1 || text.Links.Related[0].DocumentID != summary.ID {
+		t.Fatalf("text not linked back to its summary: %+v", text.Links)
+	}
+	if summary = mustCall(t, tools, viewer, "get_document", DocumentRef{ProjectID: p.ID, DocumentID: summary.ID}).(Document); summary.Revision != 1 {
+		t.Fatalf("linking created a summary revision: %d", summary.Revision)
+	}
+	// Deleting the file archives the text but keeps the link to its summary.
+	mustCall(t, tools, owner, "delete_attachment", AttachmentInput{p.ID, linked.ID})
+	links = mustCall(t, tools, viewer, "get_document_links", LinksQuery{ProjectID: p.ID, DocumentID: summary.ID}).(DocumentLinks)
+	if len(links.Related) != 1 || links.Related[0].Status != "archived" {
+		t.Fatalf("link after delete: %+v", links)
+	}
+
 	// Broken and unsupported files are stored; only the index is skipped.
 	broken := upload("깨진.xlsx", []byte("PK not a zip"))
 	if broken.Status != "ready" || broken.TextStatus != "failed" || broken.TextError == nil || *broken.TextError != ExtractInvalidFile || broken.TextDocumentID != nil {

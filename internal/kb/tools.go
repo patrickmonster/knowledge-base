@@ -87,6 +87,8 @@ type ContextInput struct {
 	ProjectID     string `json:"project_id"`
 	Task          string `json:"task"`
 	ExcerptBudget int    `json:"excerpt_budget,omitempty" jsonschema:"Maximum total excerpt characters, 1000 to 20000; omit for the default 8000"`
+	// RelatedProjectIDs opts in to excerpts from other projects the caller can read.
+	RelatedProjectIDs []string `json:"related_project_ids,omitempty" jsonschema:"Other projects you can read whose material should come along, at most 5 (opt-in). Their hits come back apart in related_sources, each naming its project, using up to a quarter of excerpt_budget; a project you are not a member of fails the call"`
 }
 
 func NewTools(s *Store) Tools {
@@ -273,7 +275,7 @@ func NewTools(s *Store) Tools {
 		}
 		return map[string]any{"project_id": in.ProjectID, "queued_chunks": count, "queued_issue_chunks": issueCount}, nil
 	})
-	add(t, s, "get_task_context", "Collect relevant excerpts and recent decision pointers, with source document IDs and revisions, for a task.", false, func(in ContextInput) string { return in.ProjectID }, func(ctx context.Context, tx *sql.Tx, a Identity, in ContextInput) (any, error) {
+	add(t, s, "get_task_context", "Collect relevant excerpts and recent decision pointers, with source document IDs and revisions, for a task. Pass related_project_ids to also get related_sources from other projects you can read.", false, func(in ContextInput) string { return in.ProjectID }, func(ctx context.Context, tx *sql.Tx, a Identity, in ContextInput) (any, error) {
 		return s.taskContext(ctx, tx, a, in)
 	})
 	registerWorkflowTools(t, s)

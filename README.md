@@ -143,7 +143,7 @@ Authorization: Bearer <발급받은 MCP 키>
 | `search_across_projects` | 참여 중인 여러 프로젝트를 한 번에 검색(`project_ids` 생략 시 전체, 최대 50개) |
 | `get_embedding_status` | 프로젝트별 임베딩 대기·처리·완료·실패 건수 조회 |
 | `reindex_project_embeddings` | 소유자 전용: 현재 본문으로 청크를 다시 만들고 벡터 재생성 예약(새 버전은 만들지 않음) |
-| `get_task_context` | 작업에 필요한 발췌문·출처·최근 결정 탐색 정보 구성 |
+| `get_task_context` | 작업에 필요한 발췌문·출처·최근 결정 탐색 정보 구성. 선택 입력 `related_project_ids`로 참여 중인 다른 프로젝트 자료를 `related_sources`에 따로 함께 조회 |
 | `start_task`, `finish_task` | 작업 시작 맥락 저장·종료 결과와 문서 일괄 저장. `start_task`에 `branch`·`worktree`·`paths`를 넘기면 같은 곳의 다른 진행 중 작업을 `run.context.concurrent_runs` 경고로 알려 준다(차단 없음, 7일 넘은 작업은 `stale`; [안내](docs/task-workflow.md#동시-작업-경고-concurrent_runs)) |
 | `get_task_run`, `list_task_runs` | 작업 상태·출처·완료 문서 조회 및 중단된 작업 ID 복구 |
 | `check_task_deployments` | `finish_task`의 `pull_requests`로 남긴 PR의 병합·배포를 지금 확인하고 history에 상태 갱신 블록 추가(서버도 20분마다 자동 확인) |
@@ -179,7 +179,7 @@ Authorization: Bearer <발급받은 MCP 키>
 
 `get_document`(현재 버전)와 `get_document_links`는 `supersedes`, `superseded_by`, `implements`, `implemented_by`, `related`로 묶어 돌려줍니다. 과거 버전 조회에는 관계를 붙이지 않습니다. 검색에서는 결과 목록 안에서만 순서를 바꾸며 대체된 문서를 숨기지 않습니다.
 
-웹 **진행 중 작업** 화면은 `start_task`로 시작해 아직 `finish_task`로 마치지 않은 작업을 보여 줍니다. 상태·내 작업 필터, 7일 넘게 열린 작업 표시, 시작 자료 스냅샷, 완료 기록과 PR 병합·배포 상태, 연결된 미해결 질의 수를 확인하고 중단 처리(`close_task_run`)·오래된 작업 일괄 정리(소유자)를 할 수 있습니다. 사이드바에 진행 중 작업 수 배지가 붙습니다. 시작 때 넘긴 브랜치·worktree·경로가 카드에 표시되고, 시작 자료에서 동시 작업 경고를 볼 수 있습니다.
+웹 **진행 중 작업** 화면은 `start_task`로 시작해 아직 `finish_task`로 마치지 않은 작업을 보여 줍니다. 상태·내 작업 필터, 7일 넘게 열린 작업 표시, 시작 자료 스냅샷, 완료 기록과 PR 병합·배포 상태, 연결된 미해결 질의 수를 확인하고, 작업 카드에서 연결된 질의·이슈(이슈 · 질의 화면에서 그 작업의 질의만 표시)와 완료 기록의 history 문서(문서 화면에서 열림)로 바로 이동하며, 중단 처리(`close_task_run`)·오래된 작업 일괄 정리(소유자)를 할 수 있습니다. 사이드바에 진행 중 작업 수 배지가 붙습니다. 시작 때 넘긴 브랜치·worktree·경로가 카드에 표시되고, 시작 자료에서 동시 작업 경고를 볼 수 있습니다.
 
 웹 **할 일 보드** 화면은 프로젝트 할 일을 상태 열 × 우선순위 행으로 보여 줍니다. 카드를 끌어(휴대폰에서는 길게 눌러 집은 뒤) 다른 칸이나 카드 사이로 옮기고, “숨기기” 메뉴로 상태 열·우선순위 행을 숨기고(브라우저에만 저장, 카드 데이터는 그대로) 완료 체크로 완료 열로 보내며, 카드를 눌러 제목·내용·분류·진행률·담당자·마감일을 고칩니다. 자세한 내용은 [docs/todos.md](docs/todos.md)를 참고하세요(`025_todos` 마이그레이션 필요).
 
@@ -235,6 +235,7 @@ Authorization: Bearer <발급받은 MCP 키>
 - 참여하지 않은 프로젝트를 지정하면 단일 프로젝트 검색과 같이 `NOT_FOUND`로 거부하고 다른 프로젝트도 검색하지 않습니다.
 - 특정 프로젝트로 제한된 MCP 키는 그 프로젝트만 검색합니다. 다른 프로젝트를 지정하면 `FORBIDDEN`입니다.
 - 웹 **지식 검색** 화면에서 프로젝트를 골라(기본: 전체) 같은 검색을 실행하고 결과 본문을 바로 열람합니다.
+- `start_task`·`get_task_context`에 `related_project_ids`(최대 5개)를 넘기면 같은 권한 검사로 관련 프로젝트를 함께 조회해 `related_sources`에 프로젝트 이름과 함께 따로 담습니다([작업 흐름](docs/task-workflow.md#관련-프로젝트-자료-related_sources)).
 
 모델 준비 후 MCP에서 문서를 저장하고 `get_embedding_status`의 `ready` 증가를 확인한 다음, `search_knowledge`에 `mode: "semantic"`을 지정해 검사합니다. `/healthz`는 DB 연결 상태만 검사하며 모델 준비 여부를 보장하지 않습니다.
 

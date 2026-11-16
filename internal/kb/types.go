@@ -133,6 +133,12 @@ type TaskContext struct {
 	// ConcurrentRuns lists other open tasks on the same branch, worktree or
 	// overlapping paths (start_task branch/worktree/paths); a warning only.
 	ConcurrentRuns []ConcurrentRun `json:"concurrent_runs,omitempty"`
+	// RelatedProjects and RelatedSources answer related_project_ids: other
+	// projects the caller can read, searched with the task text and kept
+	// apart from Sources. Each related source carries its project slug and name.
+	RelatedProjects []SearchedProject `json:"related_projects,omitempty"`
+	RelatedSources  []SearchHit       `json:"related_sources,omitempty"`
+	RelatedWarning  string            `json:"related_warning,omitempty"`
 }
 
 type SearchResult struct {
