@@ -444,6 +444,9 @@ func createIssue(ctx context.Context, tx *sql.Tx, a Identity, in CreateIssueInpu
 		}
 		return existing, nil
 	}
+	if err := rebuildIssueChunks(ctx, tx, id); err != nil {
+		return nil, err
+	}
 	if in.AssigneeID != "" {
 		if err := notifyIssue(ctx, tx, a, id, eventIssueAssigned, &in.AssigneeID); err != nil {
 			return nil, err
@@ -579,6 +582,9 @@ func answerIssue(ctx context.Context, tx *sql.Tx, a Identity, in AnswerIssueInpu
 		issue.ID, in.Answer, a.User.ID); err != nil {
 		return nil, err
 	}
+	if err := rebuildIssueChunks(ctx, tx, issue.ID); err != nil {
+		return nil, err
+	}
 	if err := notifyIssue(ctx, tx, a, issue.ID, eventIssueAnswered, &issue.CreatedBy); err != nil {
 		return nil, err
 	}
@@ -681,6 +687,11 @@ func updateIssue(ctx context.Context, tx *sql.Tx, a Identity, in UpdateIssueInpu
 	}
 	if len(sets) > 0 {
 		if _, err := tx.ExecContext(ctx, `UPDATE issues SET `+strings.Join(sets, ",")+`,updated_at=clock_timestamp() WHERE id=$1`, args...); err != nil {
+			return nil, err
+		}
+	}
+	if in.Title != nil || in.Body != nil || in.Tags != nil || in.Resolution != nil {
+		if err := rebuildIssueChunks(ctx, tx, issue.ID); err != nil {
 			return nil, err
 		}
 	}

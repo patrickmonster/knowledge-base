@@ -48,12 +48,30 @@ async function searchPage() {
     if (ticket!==generation) return;
     let text=`${result.projects.length}개 프로젝트에서 ${result.hits.length}건 · ${searchRetrieval[result.retrieval]||result.retrieval}`;
     if (result.unindexed_chunks) text+=` · 임베딩 대기 조각 ${result.unindexed_chunks}개`;
+    if (result.issues?.length) text+=` · 질의·이슈 ${result.issues.length}건`;
+    if (result.unindexed_issue_chunks) text+=` · 질의 임베딩 대기 ${result.unindexed_issue_chunks}개`;
     summary.textContent=text;
     const nodes=[];
     if (result.warning) nodes.push(el('p',result.warning,'small muted'));
     if (!result.hits.length) nodes.push(el('p','일치하는 문서가 없습니다. 결과가 없다고 해서 자료가 없다는 뜻은 아닙니다.','empty'));
     nodes.push(...result.hits.map(hitCard));
+    // Matching questions and issues follow the documents as a separate list.
+    if (result.issues?.length) {
+      nodes.push(el('h3','관련 질의·이슈'));
+      nodes.push(...result.issues.map(issueHitCard));
+    }
     list.replaceChildren(...nodes);
+  }
+  function issueHitCard(h) {
+    const c=card(h.title), meta=`${h.project_name||h.project_id} · ${searchIssueKinds[h.kind]||h.kind} · ${searchIssueStatus[h.status]||h.status}${h.blocking?' · 차단':''} · 점수 ${Number(h.score).toFixed(4)}`;
+    c.classList.add('search-hit');c.tabIndex=0;c.setAttribute('role','button');c.setAttribute('aria-haspopup','dialog');
+    c.append(el('p',meta,'small muted'));
+    c.append(el('p',h.excerpt.length>400?h.excerpt.slice(0,400)+'…':h.excerpt,'small'));
+    c.append(el('code',h.citation));
+    const open=()=>openIssueHitDialog(root,h,meta);
+    c.addEventListener('click',e=>{if(!getSelection().toString())open();});
+    c.addEventListener('keydown',e=>{if(e.target===c&&(e.key==='Enter'||e.key===' ')){e.preventDefault();open();}});
+    return c;
   }
   // Each hit is a clickable card; clicking (or Enter/Space) opens the full body in a modal.
   function hitCard(h) {
@@ -71,8 +89,26 @@ async function searchPage() {
   return root;
 }
 
+const searchIssueKinds={question:'질의',issue:'이슈'};
+const searchIssueStatus={open:'열림',answered:'답변됨',resolved:'해결됨',closed:'닫힘'};
+
+// Shows a matching question's body, answer and resolution in the same modal as documents.
+function openIssueHitDialog(parent,h,metaText) {
+  searchDialog(parent,h,metaText,content=>tool('get_issue',{project_id:h.project_id,issue_id:h.issue_id}).then(issue=>{
+    const nodes=[renderMarkdown(issue.body,'vector-content')];
+    if (issue.answer) nodes.push(el('h3','답변'),renderMarkdown(issue.answer,'vector-content'));
+    if (issue.resolution) nodes.push(el('h3','해결'),el('p',issue.resolution));
+    content.replaceChildren(...nodes);
+  }));
+}
+
 // Shows a search hit's full Markdown body in a modal; it closes on 닫기, Esc or a backdrop click.
 function openHitDialog(parent,h,metaText) {
+  searchDialog(parent,h,metaText,content=>tool('get_document',{project_id:h.project_id,document_id:h.document_id,revision:h.revision})
+    .then(doc=>content.replaceChildren(renderMarkdown(doc.content,'vector-content'))));
+}
+
+function searchDialog(parent,h,metaText,load) {
   const dialog=el('dialog',undefined,'search-dialog'), content=el('div');
   content.append(el('p','불러오는 중…','muted'));
   const close=btn('닫기',()=>dialog.close(),'secondary'), actions=el('div',undefined,'actions search-dialog-actions');
@@ -81,7 +117,5 @@ function openHitDialog(parent,h,metaText) {
   dialog.addEventListener('close',()=>dialog.remove(),{once:true});
   dialog.addEventListener('click',e=>{if(e.target!==dialog)return;const r=dialog.getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)dialog.close();});
   parent.append(dialog);dialog.showModal();close.focus();
-  tool('get_document',{project_id:h.project_id,document_id:h.document_id,revision:h.revision})
-    .then(doc=>content.replaceChildren(renderMarkdown(doc.content,'vector-content')))
-    .catch(e=>content.replaceChildren(el('p',e.message,'muted')));
+  load(content).catch(e=>content.replaceChildren(el('p',e.message,'muted')));
 }

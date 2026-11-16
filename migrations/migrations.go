@@ -118,3 +118,6 @@ var DiscordDropGuildIDs string
 
 //go:embed 039_discord_issue_channels.sql
 var DiscordIssueChannels string
+
+//go:embed 040_issue_chunks.sql
+var IssueChunks string

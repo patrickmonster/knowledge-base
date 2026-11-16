@@ -308,4 +308,8 @@ type SearchInput struct {
 	Mode      string `json:"mode,omitempty" jsonschema:"hybrid (default when configured), semantic, or lexical"`
 	// NoSynonyms disables glossary synonym expansion for this query.
 	NoSynonyms bool `json:"no_synonyms,omitempty" jsonschema:"Set true to search the exact query without glossary synonym expansion"`
+	// includeIssues adds matching questions and issues (SearchResult.Issues).
+	// search_knowledge and search_across_projects set it; task context lists
+	// related questions on its own.
+	includeIssues bool
 }

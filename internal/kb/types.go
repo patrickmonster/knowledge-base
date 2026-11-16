@@ -142,6 +142,11 @@ type SearchResult struct {
 	ExpandedTerms   []string `json:"expanded_terms,omitempty"`
 	Warning         string   `json:"warning,omitempty"`
 	UnindexedChunks int      `json:"unindexed_chunks"`
+	// Issues are questions and issues whose title, body, answer or resolution
+	// match, at most 5, kept apart from document hits.
+	Issues []IssueSearchHit `json:"issues,omitempty"`
+	// UnindexedIssueChunks counts question chunks still waiting for vectors.
+	UnindexedIssueChunks int `json:"unindexed_issue_chunks,omitempty"`
 	// timing is recorded to search_timings, not returned to callers.
 	timing searchTiming
 }
