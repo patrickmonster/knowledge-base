@@ -153,7 +153,8 @@ Authorization: Bearer <발급받은 MCP 키>
 | `list_todos`, `save_todo`, `move_todo`, `delete_todo` | 할 일 보드 조회(상태·우선순위·분류·담당자 필터, 연결 작업 수·PR 상태 포함)·추가·수정(`expected_revision`)·칸 이동(`before_id`)·삭제. 쓰기는 편집자 이상 |
 | `link_issue_todo` | 질의·이슈를 할 일에 연결·해제(편집자 이상). `create_issue`의 `todo_id`로도 연결하고, `task_id`만 넘기면 그 작업의 할 일을 따른다([안내](docs/todos.md#이슈질의와-연결)) |
 | `link_task_todo` | 열린 작업을 할 일에 연결·해제. `start_task`의 `todo_id`와 같이 할 일을 진행 중으로 옮기고, 작업 완료·PR 병합 때 완료로 옮긴다([안내](docs/todos.md#진행-중-작업과-연결)) |
-| `get_usage_stats` | 프로젝트 사용 통계(최근 1~365일, 기본 30일, 한국 시간 일 단위): 합계·일별 추이·종류별 증가·결과 0건 검색어·검색 시간·상위 도구·사용자·열람 문서·보유 현황 |
+| `get_usage_stats` | 프로젝트 사용 통계(최근 1~365일, 기본 30일, 한국 시간 일 단위): 합계·일별 추이·종류별 증가·결과 0건 검색어·검색 시간·HNSW 검토 판정(`hnsw_review`)·상위 도구·사용자·열람 문서·보유 현황 |
+| `set_search_thresholds` | 소유자·관리자: 프로젝트의 HNSW 검토 기준(`vector_p95_ms`, `scanned_chunks`) 설정. 호출마다 두 값을 바꾸며 0이나 생략은 서버 기본값(`HNSW_REVIEW_*`) |
 
 문서 종류는 `brief`, `decision`, `history`, `artifact`, `reference`입니다. 상태는 `draft`, `active`, `archived`이고 기본 검색에는 활성 문서의 최신 버전만 포함됩니다. `update_document`는 `expected_revision`과 수정 이유 `reason`이 필요합니다. 충돌하면 최신 내용을 읽고 변경을 병합해야 합니다.
 
@@ -194,7 +195,7 @@ Authorization: Bearer <발급받은 MCP 키>
 - 모델 호출은 최대 8개 청크를 묶어서 처리하며 문서 저장 트랜잭션 밖에서 실행합니다. DB 작업 임대로 여러 앱 인스턴스가 중복 처리하지 않도록 합니다.
 - 실패하면 30초부터 간격을 늘려 최대 5회 시도합니다. 원문은 유지합니다. `get_embedding_status`의 오류 코드와 `retries_exhausted`를 확인하고 모델 복구 후 소유자가 `reindex_project_embeddings`를 호출할 수 있습니다.
 - 검색 질문 임베딩은 최대 20초 기다립니다. `hybrid`에서 실패하면 `retrieval: "lexical-fallback"`과 `warning`을 반환합니다. `semantic`은 실패를 오류로 반환합니다. 권한 검사를 통과한 요청만 모델을 호출합니다.
-- 현재 코사인 검색은 프로젝트 범위를 제한한 정확 검색입니다. 대규모 자료용 근사 검색 인덱스(HNSW)는 아직 없으므로 데이터 증가 시 검색 시간을 측정해야 합니다.
+- 현재 코사인 검색은 프로젝트 범위를 제한한 정확 검색입니다. 대규모 자료용 근사 검색 인덱스(HNSW)는 아직 없으므로 데이터 증가 시 검색 시간을 측정해야 합니다. `get_usage_stats`의 `hnsw_review`가 측정값을 HNSW 검토 기준(벡터 검색 p95, 비교 청크 수)과 비교해 `review`·`ok`·`insufficient_data`로 알려 줍니다. 기준은 아래 서버 기본값을 쓰고, 프로젝트 소유자·관리자가 `set_search_thresholds`나 웹 '사용 통계'의 '검색 시간' 카드에서 프로젝트별로 바꿀 수 있습니다.
 
 | 변수 | 기본값 / 의미 |
 | --- | --- |
@@ -204,6 +205,8 @@ Authorization: Bearer <발급받은 MCP 키>
 | `OLLAMA_NUM_PARALLEL`, `OLLAMA_MAX_LOADED_MODELS` | Ollama 서비스에 `1` 지정; 동시 요청과 적재 모델을 하나로 제한 |
 | `EMBEDDING_ENABLED` | `true`; `false`이면 생성 작업을 멈추고 기본 검색을 키워드 방식으로 수행 |
 | `OLLAMA_NO_CLOUD` | Ollama 서비스에 `true` 지정; 클라우드 모델 비활성화 |
+| `HNSW_REVIEW_VECTOR_P95_MS` | `100`(1~60000). 벡터 검색 p95가 이 값(ms) 이상이면 HNSW 검토 필요. 벡터 검색 20회 이상일 때만 판정. 프로젝트 설정이 우선 |
+| `HNSW_REVIEW_SCANNED_CHUNKS` | `20000`(100~100000000). 한 번의 벡터 검색이 이만큼 청크를 비교하면 HNSW 검토 필요. 프로젝트 설정이 우선 |
 
 모든 앱 인스턴스에 같은 모델 설정을 적용합니다. 모델 이름이 바뀌면 기존 완료 청크를 자동 재생성하고, 새 모델과 다른 벡터는 검색에서 제외합니다. 같은 이름의 모델 파일을 갱신했거나 재시도가 소진된 경우 모든 해당 프로젝트를 명시적으로 재색인합니다. 모델 차원을 바꾸려면 DB 마이그레이션과 코드 변경도 필요합니다. 운영에서는 검증한 Ollama 이미지와 모델 버전을 고정해 사용합니다.
 

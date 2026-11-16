@@ -88,3 +88,6 @@ var WebhookPlainSecret string
 
 //go:embed 029_project_repositories.sql
 var ProjectRepositories string
+
+//go:embed 030_search_thresholds.sql
+var SearchThresholds string

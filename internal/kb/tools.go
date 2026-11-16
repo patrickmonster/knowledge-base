@@ -277,6 +277,7 @@ func NewTools(s *Store) Tools {
 	registerNotificationTools(t, s)
 	registerAgentsTools(t, s)
 	registerRepositoryTools(t, s)
+	registerSearchThresholdTools(t, s)
 	registerQualityTools(t, s)
 	registerRuleTools(t, s)
 	registerTodoTools(t, s)

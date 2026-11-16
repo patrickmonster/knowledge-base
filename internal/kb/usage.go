@@ -133,6 +133,7 @@ type UsageStats struct {
 	TopDocuments  []UsageDocument      `json:"top_documents" jsonschema:"Most read documents (get_document) in the window"`
 	SearchMisses  []UsageSearchMiss    `json:"search_misses" jsonschema:"Most frequent zero-result search_knowledge queries (normalized, lowercase), at most 20"`
 	SearchLatency []UsageSearchLatency `json:"search_latency" jsonschema:"Search time per retrieval path from search_knowledge and task context searches in the window"`
+	HNSWReview    UsageHNSWReview      `json:"hnsw_review" jsonschema:"Vector search times in the window against the project's HNSW review thresholds"`
 	KindGrowth    []UsageKindGrowth    `json:"kind_growth"`
 	Guidance      string               `json:"guidance"`
 }
@@ -145,7 +146,7 @@ const usageWindow = `WITH w AS (
 	ws AS (SELECT from_day, to_day, (from_day::timestamp AT TIME ZONE $3) AS start_at FROM w),
 	a AS (SELECT e.* FROM audit_events e, ws WHERE e.project_id=$1 AND e.created_at>=ws.start_at)`
 
-func usageStats(ctx context.Context, tx *sql.Tx, a Identity, in UsageStatsInput) (any, error) {
+func usageStats(ctx context.Context, tx *sql.Tx, a Identity, in UsageStatsInput, hnswDefaults HNSWThresholds) (any, error) {
 	if _, err := projectAccess(ctx, tx, a.User.ID, in.ProjectID, false); err != nil {
 		return nil, err
 	}
@@ -157,7 +158,7 @@ func usageStats(ctx context.Context, tx *sql.Tx, a Identity, in UsageStatsInput)
 	}
 	args := []any{in.ProjectID, in.Days, usageTimezone, usageSearchActions, usageReadActions}
 	out := UsageStats{ProjectID: in.ProjectID, Days: in.Days, Timezone: usageTimezone,
-		Guidance: "Calls, searches, reads and active users come from the audit log and only cover what AUDIT_RETENTION_DAYS keeps; document writes come from revisions. Searches include start_task and get_task_context. search_misses lists zero-result search_knowledge queries, kept at most 365 days without the searching user; read them as knowledge to write or glossary synonyms to add. search_latency summarizes measured search times (same retention as search_misses); compare p95_vector_ms with max_scanned_chunks to decide when exact vector search needs an HNSW index. The call that reads these statistics is not counted."}
+		Guidance: "Calls, searches, reads and active users come from the audit log and only cover what AUDIT_RETENTION_DAYS keeps; document writes come from revisions. Searches include start_task and get_task_context. search_misses lists zero-result search_knowledge queries, kept at most 365 days without the searching user; read them as knowledge to write or glossary synonyms to add. search_latency summarizes measured search times (same retention as search_misses); compare p95_vector_ms with max_scanned_chunks to decide when exact vector search needs an HNSW index. hnsw_review applies the project's thresholds (set_search_thresholds, or the server default) to all vector searches in the window: status review means a threshold is reached. The call that reads these statistics is not counted."}
 
 	type header struct {
 		From   string      `json:"from"`
@@ -263,6 +264,24 @@ func usageStats(ctx context.Context, tx *sql.Tx, a Identity, in UsageStatsInput)
 	FROM t GROUP BY retrieval ORDER BY count(*) DESC,retrieval`, args[:3]...); err != nil {
 		return nil, err
 	}
+	thresholds, err := projectSearchThresholds(ctx, tx, in.ProjectID, hnswDefaults)
+	if err != nil {
+		return nil, err
+	}
+	type vectorSummary struct {
+		Searches  int      `json:"searches"`
+		P95MS     *float64 `json:"p95_ms"`
+		MaxChunks int      `json:"max_chunks"`
+	}
+	vs, err := one[vectorSummary](ctx, tx, usageWindow+`
+	SELECT jsonb_build_object('searches',count(*),
+		'p95_ms',round((percentile_cont(0.95) WITHIN GROUP (ORDER BY vector_ms::float8))::numeric,2),
+		'max_chunks',coalesce(max(scanned_chunks),0))
+	FROM search_timings st, ws WHERE st.project_id=$1 AND st.created_at>=ws.start_at AND st.vector_ms IS NOT NULL`, args[:3]...)
+	if err != nil {
+		return nil, err
+	}
+	out.HNSWReview = hnswReview(thresholds, vs.Searches, vs.P95MS, vs.MaxChunks)
 
 	if out.KindGrowth, err = many[UsageKindGrowth](ctx, tx, usageWindow+`,
 	days AS (SELECT generate_series(ws.from_day,ws.to_day,interval '1 day')::date AS day FROM ws),
