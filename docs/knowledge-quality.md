@@ -5,9 +5,10 @@ MCP 도구와 기존 작업 흐름(`start_task`·`finish_task`)에 붙는 품질
 ## 1. 중복·충돌 결정 감지
 
 - `create_document`·`create_templated_document`·`finish_task`(documents)로 **decision**을 저장하면 응답에 `similar_decisions`가 붙습니다. 같은 프로젝트의 active·draft 결정 중 표현이 비슷한 문서입니다.
-- 각 항목에는 `similarity`(0–1), `shared_terms`, `suggested_relation`(`supersedes` 0.4 이상, 그 외 `related`), 안내 문구가 있습니다. 기준값은 0.18 이상입니다.
+- 각 항목에는 `similarity`(0–1), `shared_terms`, `suggested_relation`(`supersedes` 0.4 이상, 그 외 `related`), 안내 문구가 있습니다. 기준값은 0.06 이상입니다(아래 '기준값 근거').
 - 이미 링크된 문서는 제외합니다. 기존 결정에 대해서는 `find_similar_decisions(document_id)`로 다시 확인할 수 있습니다.
-- 판단 방식: 키워드 색인으로 후보 30개를 고른 뒤, 제목(40%)과 본문(60%)의 고유 어휘 Jaccard 유사도를 계산합니다. 양식 제목(결정 배경·선택 이유 등)과 `kb://` 인용은 제외합니다. 의미가 같아도 표현이 전혀 다르면 놓칠 수 있습니다.
+- 판단 방식: 키워드 색인으로 후보 30개를 고른 뒤, 제목(40%)과 본문(60%)의 고유 어휘 Jaccard 유사도를 계산합니다. 양식 제목(결정 배경·선택 이유 등), `kb://` 인용, 커밋·문서 ID와 날짜·숫자, 결정 문서마다 들어가는 기록 문구(`rev`, `draft`, '사용자가 선택했다', '재구성' 등)는 제외합니다. 의미가 같아도 표현이 전혀 다르면 놓칠 수 있습니다.
+- 기준값 근거(2026-11-16): 이 프로젝트의 결정 10건·45쌍으로 측정했습니다. 주제가 다른 결정은 최대 0.054, 주제가 이어지는 결정은 0.067–0.105였고(Railway 볼륨 백업↔development 볼륨 삭제 등), 한 결정을 줄이거나 고쳐 쓴 판은 0.69–0.97이었습니다. 그래서 보고 기준은 두 무리 사이의 0.06, `supersedes` 제안 기준은 서로 다른 결정이 닿지 않는 0.4를 유지합니다. 표본이 작으므로 결정이 훨씬 늘면 다시 측정합니다. 측정에서 이미 이어진 것으로 기록된 결정 한 쌍(HNSW 도입 시점↔Ollama·pgvector 검색, 0.057)은 표현이 달라 여전히 놓칩니다.
 - AI는 사용자에게 확인한 뒤 `link_documents(source=새 결정, target=기존 결정, relation=supersedes)` 또는 `related`를 호출합니다. 두 결정이 충돌하면 사용자에게 어느 쪽이 유효한지 묻습니다.
 
 ## 2. 오래된 지식 재확인 담당자
