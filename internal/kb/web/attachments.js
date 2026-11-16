@@ -1,5 +1,13 @@
 'use strict';
 
+// Preview: what the 첨부 문서 page can show without downloading. The server
+// decides again from the file's bytes (GET /api/attachments/{id}/preview), so
+// a renamed file is refused there and the dialog falls back to a message.
+const attachmentPreviewKinds={png:'image',jpg:'image',jpeg:'image',gif:'image',webp:'image',pdf:'pdf',txt:'text',md:'text',csv:'text',tsv:'text',json:'text',log:'text',yaml:'text',yml:'text'};
+function attachmentPreviewKind(f){const m=/\.([^.]+)$/.exec(f.filename||'');return m?attachmentPreviewKinds[m[1].toLowerCase()]||'':'';}
+function attachmentPreviewURL(f){return `/api/attachments/${encodeURIComponent(f.id)}/preview?project_id=${encodeURIComponent(f.project_id)}`;}
+function attachmentHasPreview(f){return f.status==='ready'&&(!!attachmentPreviewKind(f)||(f.text_status==='extracted'&&!!f.text_document_id));}
+
 async function attachmentsPage() {
   const root = el('div'), connection = card('버킷 연결 상태');
   const connectionState = el('p','연결 확인 중…');
@@ -81,6 +89,7 @@ async function attachmentsPage() {
       if(items.length)
       list.append(table(['파일','크기 / 상태','연결 문서 · 이슈','관리'],items.map(f=>{
         const actions=el('div',undefined,'actions');
+        if(attachmentHasPreview(f))actions.append(btn('미리보기',()=>openPreviewDialog(f)));
         if(f.status==='ready')actions.append(btn('다운로드',async()=>{
           const result=await tool('get_attachment_download',{project_id:projectID,attachment_id:f.id});
           location.assign(result.url);
@@ -100,6 +109,55 @@ async function attachmentsPage() {
       const next=btn('다음',async()=>{offset+=25;await refresh();});next.disabled=items.length<25;
       nav.append(prev,next,btn('새로고침',refresh));list.append(nav);
     } catch(e) {if(ticket===generation)list.replaceChildren(listHead(),el('p',e.message,'muted'),btn('다시 불러오기',refresh));}
+  }
+  // Shows the file in a modal: images inline, text files as plain text, and
+  // for PDF·Word·Excel the extracted text (PDF also opens the original in a
+  // new tab, in the browser's own viewer). Nothing here uses a download link.
+  function openPreviewDialog(f) {
+    const dialog=el('dialog',undefined,'attachment-dialog attachment-preview'), kind=attachmentPreviewKind(f), url=attachmentPreviewURL(f), projectID=f.project_id;
+    const body=el('div',undefined,'attachment-preview-body');
+    const actions=el('div',undefined,'actions');
+    let open=true;
+    const failed=message=>el('p',message+' 다운로드해서 확인해 주세요.','muted');
+    if(kind==='pdf'){
+      const a=el('a','원본 PDF 새 탭에서 열기','button-link');a.href=url;a.target='_blank';a.rel='noopener';actions.append(a);
+    }
+    actions.append(btn('다운로드',async()=>{
+      const result=await tool('get_attachment_download',{project_id:projectID,attachment_id:f.id});
+      location.assign(result.url);
+    }),btn('닫기',()=>dialog.close()));
+    if(kind==='image'){
+      const img=el('img',undefined,'attachment-preview-image');img.alt=f.filename;
+      img.addEventListener('error',()=>img.replaceWith(failed('이미지를 표시하지 못했습니다.')),{once:true});
+      img.src=url;body.append(img);
+    } else if(kind==='text'){
+      const status=el('p','불러오는 중…','muted');body.append(status);
+      (async()=>{
+        try{
+          const response=await fetch(url);
+          if(!response.ok){let message='미리보기를 불러오지 못했습니다.';try{message=(await response.json()).error?.message||message;}catch{}throw Error(message);}
+          const text=await response.text();
+          if(!open)return;
+          const pre=el('pre',text,'attachment-preview-text');
+          body.replaceChildren(...(response.headers.get('X-Preview-Truncated')?[el('p','파일이 커서 앞부분 1 MiB만 표시합니다.','small muted')]:[]),pre);
+        }catch(e){if(open)status.replaceWith(failed(e.message));}
+      })();
+    }
+    if(f.text_status==='extracted'&&f.text_document_id){
+      const section=el('div',undefined,'attachment-preview-extracted');
+      section.append(el('h3','추출 본문'),el('p','서식·이미지·차트는 빠진 텍스트입니다. 정확한 모양과 수치는 원본으로 확인하세요.'+(f.text_truncated?' 본문이 길어 앞부분만 담겨 있습니다.':''),'small muted'));
+      const status=el('p','불러오는 중…','muted');section.append(status);body.append(section);
+      tool('get_document',{project_id:projectID,document_id:f.text_document_id}).then(doc=>{
+        if(open)status.replaceWith(renderMarkdown(doc.content,'vector-content'));
+      }).catch(e=>{if(open)status.textContent='추출 본문을 불러오지 못했습니다: '+e.message;});
+    } else if(kind==='pdf'){
+      const why={empty:'추출할 본문이 없는 PDF입니다(스캔본일 수 있습니다).',failed:'본문 추출에 실패한 PDF입니다.'}[f.text_status]||'본문이 추출되지 않은 PDF입니다.';
+      body.append(el('p',why+' 위의 “원본 PDF 새 탭에서 열기”로 확인해 주세요.','muted'));
+    }
+    dialog.append(el('h2',f.filename),el('p',`${(f.size_bytes/1024).toFixed(1)} KB · ${f.id}`,'small muted'),actions,body);
+    dialog.addEventListener('close',()=>{open=false;dialog.remove();},{once:true});
+    dialog.addEventListener('click',e=>{if(e.target!==dialog)return;const r=dialog.getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)dialog.close();});
+    root.append(dialog);dialog.showModal();
   }
   // Closes on success, Esc, 취소 or a backdrop click, but stays open while a file is being sent.
   function openUploadDialog() {
