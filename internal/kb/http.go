@@ -49,6 +49,7 @@ func (a *App) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("PUT /api/attachments/{id}/content", a.attachmentUpload)
 	mux.HandleFunc("GET /api/attachments/{id}/image", a.attachmentImage)
+	mux.HandleFunc("GET /api/attachments/{id}/preview", a.attachmentPreview)
 	a.sessionRoute(mux, "GET /api/attachments/storage", a.attachmentStorage)
 	mux.HandleFunc("GET /api/projects/{id}/export", a.projectExport)
 	mux.HandleFunc("POST /api/projects/{id}/import", a.projectImport)
@@ -349,6 +350,9 @@ func (a *App) Handler() http.Handler {
 		limit, timeout := int64(1<<20), 30*time.Second
 		if r.Method == "PUT" && strings.HasPrefix(r.URL.Path, "/api/attachments/") && strings.HasSuffix(r.URL.Path, "/content") {
 			limit, timeout = MaxAttachmentBytes+1, 120*time.Second
+		}
+		if r.Method == "GET" && strings.HasPrefix(r.URL.Path, "/api/attachments/") && strings.HasSuffix(r.URL.Path, "/preview") {
+			timeout = 120 * time.Second // a 25 MiB PDF read through from the bucket
 		}
 		if r.Method == "POST" && strings.HasPrefix(r.URL.Path, "/api/github/webhooks/") {
 			limit = maxWebhookBody

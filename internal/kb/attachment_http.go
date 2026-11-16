@@ -8,6 +8,7 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -118,6 +119,51 @@ func (a *App) attachmentUpload(w http.ResponseWriter, r *http.Request) {
 // show it inline under img-src 'self'. Only issue images (checked as raster
 // types on upload) are served, and the type is sniffed again before sending.
 func (a *App) attachmentImage(w http.ResponseWriter, r *http.Request) {
+	a.attachmentInline(w, r, "view_issue_image", true)
+}
+
+// attachmentPreview streams a project file to a signed-in member for the
+// preview on the 첨부 문서 page: raster images, PDF and plain text only.
+func (a *App) attachmentPreview(w http.ResponseWriter, r *http.Request) {
+	a.attachmentInline(w, r, "preview_attachment", false)
+}
+
+// maxPreviewTextBytes caps a plain-text preview; larger files are cut there
+// and marked with X-Preview-Truncated.
+const maxPreviewTextBytes = 1 << 20
+
+// previewTextExtensions are the file names shown as plain text. The bytes must
+// also sniff as text, so a renamed HTML or binary file is not shown.
+var previewTextExtensions = map[string]bool{".txt": true, ".md": true, ".csv": true, ".tsv": true, ".json": true, ".log": true, ".yaml": true, ".yml": true}
+
+// inlineType decides from the first bytes, never from the stored name alone,
+// how a file may be shown in the browser. It returns the Content-Type to send
+// and the Content-Security-Policy for that response, or ok=false when the file
+// must be downloaded instead.
+//
+// Images and text are sandboxed. A PDF opens in the browser's own viewer in a
+// new tab, which a sandbox would block; default-src 'none' still stops it from
+// loading anything, and the global X-Frame-Options keeps it out of frames.
+// SVG and HTML are never served inline: they would run script on this origin.
+func inlineType(filename string, head []byte, imagesOnly bool) (contentType, csp string, ok bool) {
+	kind := http.DetectContentType(head)
+	switch {
+	case issueImageTypes[kind]:
+		return kind, "default-src 'none'; sandbox", true
+	case imagesOnly:
+		return "", "", false
+	case kind == "application/pdf":
+		return kind, "default-src 'none'; frame-ancestors 'none'", true
+	case strings.HasPrefix(kind, "text/plain") && previewTextExtensions[strings.ToLower(path.Ext(filename))]:
+		return kind, "default-src 'none'; sandbox", true
+	}
+	return "", "", false
+}
+
+// attachmentInline serves a ready file's bytes for display to a session user
+// with read access to its project. It never accepts an MCP key or a link
+// token, so the address can be shown in the page without leaking access.
+func (a *App) attachmentInline(w http.ResponseWriter, r *http.Request, action string, issueImage bool) {
 	cookie, err := r.Cookie("kb_session")
 	if err != nil {
 		a.fail(w, problem("UNAUTHORIZED", "Please sign in."))
@@ -133,7 +179,7 @@ func (a *App) attachmentImage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	in := AttachmentInput{ProjectID: r.URL.Query().Get("project_id"), AttachmentID: r.PathValue("id")}
-	out, err := a.Store.Perform(auditInput(r.Context(), in), id, "view_issue_image", in.ProjectID, false, false, func(tx *sql.Tx) (any, error) {
+	out, err := a.Store.Perform(auditInput(r.Context(), in), id, action, in.ProjectID, false, false, func(tx *sql.Tx) (any, error) {
 		f, err := readAttachment(r.Context(), tx, id, in, false)
 		if err != nil {
 			return nil, err
@@ -141,11 +187,14 @@ func (a *App) attachmentImage(w http.ResponseWriter, r *http.Request) {
 		if err = a.Store.requireBucket(); err != nil {
 			return nil, err
 		}
-		if f.IssueID == nil {
+		if issueImage && f.IssueID == nil {
 			return nil, problem("NOT_FOUND", "Image not found.")
 		}
 		if f.Status != "ready" {
-			return nil, problem("CONFLICT", "Image is not ready.")
+			if issueImage {
+				return nil, problem("CONFLICT", "Image is not ready.")
+			}
+			return nil, problem("CONFLICT", "File is not ready.")
 		}
 		return f, nil
 	})
@@ -156,23 +205,36 @@ func (a *App) attachmentImage(w http.ResponseWriter, r *http.Request) {
 	f := out.(Attachment)
 	body, err := a.Store.Objects.Get(r.Context(), attachmentKey(f.ProjectID, f.ID))
 	if err != nil {
-		a.fail(w, problem("STORAGE_UNAVAILABLE", "Could not read the image."))
+		if issueImage {
+			a.fail(w, problem("STORAGE_UNAVAILABLE", "Could not read the image."))
+		} else {
+			a.fail(w, problem("STORAGE_UNAVAILABLE", "Could not read the file."))
+		}
 		return
 	}
 	defer body.Close()
 	reader := bufio.NewReaderSize(io.LimitReader(body, f.SizeBytes), 512)
 	head, _ := reader.Peek(512)
-	kind := http.DetectContentType(head)
-	if !issueImageTypes[kind] {
-		a.fail(w, problem("NOT_FOUND", "Image not found."))
+	kind, csp, ok := inlineType(f.Filename, head, issueImage)
+	if !ok {
+		if issueImage {
+			a.fail(w, problem("NOT_FOUND", "Image not found."))
+		} else {
+			a.fail(w, problem("INVALID_INPUT", "This file type has no preview. Download it instead."))
+		}
 		return
 	}
+	size := f.SizeBytes
 	h := w.Header()
+	if strings.HasPrefix(kind, "text/plain") && size > maxPreviewTextBytes {
+		size = maxPreviewTextBytes
+		h.Set("X-Preview-Truncated", "true")
+	}
 	h.Set("Content-Type", kind)
-	h.Set("Content-Length", strconv.FormatInt(f.SizeBytes, 10))
+	h.Set("Content-Length", strconv.FormatInt(size, 10))
 	h.Set("Content-Disposition", mime.FormatMediaType("inline", map[string]string{"filename": f.Filename}))
-	h.Set("Content-Security-Policy", "default-src 'none'; sandbox")
-	// Image content never changes for an attachment ID; access is rechecked after expiry.
+	h.Set("Content-Security-Policy", csp)
+	// File content never changes for an attachment ID; access is rechecked after expiry.
 	h.Set("Cache-Control", "private, max-age=300")
-	io.Copy(w, reader)
+	io.Copy(w, io.LimitReader(reader, size))
 }
