@@ -93,3 +93,24 @@ func archiveAttachmentText(ctx context.Context, tx *sql.Tx, a Identity, f Attach
 	_, err = updateDocument(ctx, tx, a, UpdateInput{ProjectID: f.ProjectID, DocumentID: *f.TextDocumentID, ExpectedRevision: revision, Reason: "첨부 파일 삭제로 추출 본문 보관 처리", Patch: DocumentPatch{Status: &archived}})
 	return err
 }
+
+// attachmentTextLinkNote marks the related link between a file's summary
+// document and its extracted text document.
+const attachmentTextLinkNote = "첨부 본문 자동 연결"
+
+// linkAttachmentText links the document a file is attached to (the summary)
+// and the file's extracted text document with an undirected related link, so
+// either one leads to the other. It is idempotent: a related link that already
+// exists in either direction is kept as it is. A file without a summary
+// document or without a text document links nothing.
+func linkAttachmentText(ctx context.Context, tx *sql.Tx, a Identity, f Attachment, textDocumentID string) error {
+	if f.DocumentID == nil || textDocumentID == "" || *f.DocumentID == textDocumentID {
+		return nil
+	}
+	_, err := tx.ExecContext(ctx, `INSERT INTO document_links(project_id,source_id,target_id,relation,note,created_by)
+	SELECT $1,$2,$3,'related',$4,$5
+	WHERE EXISTS(SELECT 1 FROM documents WHERE id=$2 AND project_id=$1) AND EXISTS(SELECT 1 FROM documents WHERE id=$3 AND project_id=$1)
+	AND NOT EXISTS(SELECT 1 FROM document_links WHERE relation='related' AND source_id=$3 AND target_id=$2)
+	ON CONFLICT(source_id,relation,target_id) DO NOTHING`, f.ProjectID, *f.DocumentID, textDocumentID, attachmentTextLinkNote, a.User.ID)
+	return err
+}
