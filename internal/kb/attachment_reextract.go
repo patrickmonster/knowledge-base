@@ -140,7 +140,12 @@ func (s *Store) reextractAttachment(ctx context.Context, a Identity, ref Attachm
 		if cur.Status != "ready" || !sameString(cur.TextDocumentID, f.TextDocumentID) {
 			return nil, problem("CONFLICT", "File changed while extracting. Try again.")
 		}
-		return completeReextract(ctx, tx, a, cur, text)
+		done, err := completeReextract(ctx, tx, a, cur, text)
+		if err != nil {
+			return nil, err
+		}
+		// Text indexed before summaries were linked gets its link on any retry.
+		return done, linkAttachmentText(ctx, tx, a, cur, done.TextDocumentID)
 	})
 	if err != nil {
 		return item, err

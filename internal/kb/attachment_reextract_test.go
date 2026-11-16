@@ -140,3 +140,59 @@ func TestReextractAttachments(t *testing.T) {
 	_, err = call(t, tools, owner, "reextract_attachment", ReextractInput{ProjectID: p.ID, AttachmentID: old2.ID})
 	denied(t, err, "CONFLICT")
 }
+
+func TestReextractLinksSummaryDocument(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	s.Objects = &memoryObjects{files: map[string][]byte{}}
+	tools := NewTools(s)
+	admin := loginAs(t, s, "admin@example.com")
+	owner := inviteAs(t, s, admin, "owner@example.com")
+	p := mustCall(t, tools, owner, "create_project", CreateProjectInput{Slug: "reextract-link", Name: "Reextract link"}).(Project)
+	summary := mustCall(t, tools, owner, "create_document", DocumentInput{ProjectID: p.ID, Title: "배송 안내 요약", Kind: "brief", Content: "배송 안내 파일의 요점"}).(Document)
+	related := func() []LinkedDocument {
+		t.Helper()
+		return mustCall(t, tools, owner, "get_document_links", LinksQuery{ProjectID: p.ID, DocumentID: summary.ID}).(DocumentLinks).Related
+	}
+
+	// Stored while extraction was off: nothing to link yet.
+	s.Extractor = nil
+	body := docxBytes(t, "택배는 영업일 기준 이틀 안에 출발")
+	out := mustCall(t, tools, owner, "prepare_attachment_upload", PrepareAttachmentInput{ProjectID: p.ID, DocumentID: summary.ID, Filename: "배송 안내.docx", SizeBytes: int64(len(body))}).(map[string]any)
+	stored, err := s.UploadAttachment(ctx, owner, AttachmentInput{p.ID, out["id"].(string)}, bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := stored.(Attachment)
+	if f.TextDocumentID != nil || len(related()) != 0 {
+		t.Fatalf("linked without text: %+v", f)
+	}
+
+	// A batch retry creates the text and links it to the summary.
+	s.Extractor = InProcessExtractor{}
+	item := mustCall(t, tools, owner, "reextract_attachment", ReextractInput{ProjectID: p.ID}).(ReextractResult).Items[0]
+	if item.Result != "extracted" || item.TextDocumentID == "" {
+		t.Fatalf("retry: %+v", item)
+	}
+	if links := related(); len(links) != 1 || links[0].DocumentID != item.TextDocumentID || links[0].Note != attachmentTextLinkNote {
+		t.Fatalf("summary not linked after retry: %+v", links)
+	}
+
+	// Retries never duplicate it, also when someone linked the pair the other way.
+	mustCall(t, tools, owner, "unlink_documents", LinkInput{ProjectID: p.ID, SourceID: summary.ID, TargetID: item.TextDocumentID, Relation: relationRelated})
+	mustCall(t, tools, owner, "link_documents", LinkInput{ProjectID: p.ID, SourceID: item.TextDocumentID, TargetID: summary.ID, Relation: relationRelated, Note: "직접 연결"})
+	again := mustCall(t, tools, owner, "reextract_attachment", ReextractInput{ProjectID: p.ID, AttachmentID: f.ID}).(ReextractResult).Items[0]
+	if again.Result != "unchanged" {
+		t.Fatalf("same text: %+v", again)
+	}
+	if links := related(); len(links) != 1 || links[0].Note != "직접 연결" {
+		t.Fatalf("link duplicated or replaced: %+v", links)
+	}
+
+	// Text indexed before links existed gets the link on its next retry.
+	mustCall(t, tools, owner, "unlink_documents", LinkInput{ProjectID: p.ID, SourceID: summary.ID, TargetID: item.TextDocumentID, Relation: relationRelated})
+	mustCall(t, tools, owner, "reextract_attachment", ReextractInput{ProjectID: p.ID, AttachmentID: f.ID})
+	if links := related(); len(links) != 1 || links[0].DocumentID != item.TextDocumentID {
+		t.Fatalf("existing text not linked on retry: %+v", links)
+	}
+}
