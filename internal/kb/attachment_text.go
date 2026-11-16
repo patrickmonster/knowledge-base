@@ -34,12 +34,8 @@ func (s *Store) extractAttachmentText(ctx context.Context, f Attachment, file st
 	return attachmentText{status: "extracted", format: format, res: res}
 }
 
-// saveAttachmentText stores extracted text as an artifact document owned by the
-// uploader and returns its id, or "" when there is nothing to store.
-func saveAttachmentText(ctx context.Context, tx *sql.Tx, a Identity, f Attachment, sha string, text attachmentText) (string, error) {
-	if text.status != "extracted" {
-		return "", nil
-	}
+// attachmentTextBody is the artifact document body: a provenance header and the text.
+func attachmentTextBody(f Attachment, sha string, text attachmentText) string {
 	units := ""
 	switch {
 	case text.format == "pdf" && text.res.Units > 0:
@@ -54,11 +50,20 @@ func saveAttachmentText(ctx context.Context, tx *sql.Tx, a Identity, f Attachmen
 		fmt.Fprintf(&head, "> 본문이 길어 앞부분 %d자만 담았습니다.\n", MaxExtractedRunes)
 	}
 	head.WriteString("\n")
+	return head.String() + text.res.Text
+}
+
+// saveAttachmentText stores extracted text as an artifact document owned by the
+// uploader and returns its id, or "" when there is nothing to store.
+func saveAttachmentText(ctx context.Context, tx *sql.Tx, a Identity, f Attachment, sha string, text attachmentText) (string, error) {
+	if text.status != "extracted" {
+		return "", nil
+	}
 	out, err := createDocument(ctx, tx, a, DocumentInput{
 		ProjectID: f.ProjectID,
 		Title:     "첨부 본문: " + truncateRunes(f.Filename, 190),
 		Kind:      "artifact",
-		Content:   head.String() + text.res.Text,
+		Content:   attachmentTextBody(f, sha, text),
 		Tags:      []string{"첨부본문", text.format},
 		Status:    "active",
 	})
