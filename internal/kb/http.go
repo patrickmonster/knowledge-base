@@ -55,6 +55,7 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("POST /api/projects/{id}/import", a.projectImport)
 	mux.HandleFunc("GET /api/projects/{id}/agents.md", a.agentsDownload)
 	mux.HandleFunc("POST /api/github/webhooks/{id}", a.githubWebhook)
+	mux.HandleFunc("POST /api/discord/interactions", a.discordInteractions)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 		defer cancel()
@@ -306,6 +307,17 @@ func (a *App) Handler() http.Handler {
 		return a.Store.AuditLog(r.Context(), id, in)
 	})
 	a.sessionRoute(mux, "GET /api/admin/stats", func(r *http.Request, id Identity) (any, error) { return a.Store.Stats(r.Context(), id) })
+	a.sessionRoute(mux, "GET /api/admin/discord", func(r *http.Request, id Identity) (any, error) { return a.Store.DiscordSettingsStatus(r.Context(), id) })
+	a.sessionRoute(mux, "POST /api/admin/discord", func(r *http.Request, id Identity) (any, error) {
+		var in DiscordSettingsInput
+		if err := decode(r, &in); err != nil {
+			return nil, err
+		}
+		return a.Store.SetDiscordSettings(r.Context(), id, in)
+	})
+	a.sessionRoute(mux, "GET /api/discord/link", func(r *http.Request, id Identity) (any, error) { return a.Store.DiscordLink(r.Context(), id) })
+	a.sessionRoute(mux, "POST /api/discord/link-code", func(r *http.Request, id Identity) (any, error) { return a.Store.CreateDiscordLinkCode(r.Context(), id) })
+	a.sessionRoute(mux, "POST /api/discord/unlink", func(r *http.Request, id Identity) (any, error) { return a.Store.UnlinkDiscord(r.Context(), id) })
 	a.sessionRoute(mux, "GET /api/admin/retention", func(r *http.Request, id Identity) (any, error) { return a.Store.RetentionStatus(r.Context(), id) })
 	a.sessionRoute(mux, "POST /api/admin/retention", func(r *http.Request, id Identity) (any, error) {
 		var in RetentionInput

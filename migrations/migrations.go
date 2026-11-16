@@ -104,5 +104,8 @@ var DocumentNotifications string
 //go:embed 034_recheck_digest_runs.sql
 var RecheckDigestRuns string
 
+//go:embed 037_discord.sql
+var Discord string
+
 //go:embed 035_retention_settings.sql
 var RetentionSettings string
