@@ -95,5 +95,5 @@ var SearchThresholds string
 //go:embed 031_todo_import.sql
 var TodoImport string
 
-//go:embed 032_document_notifications.sql
+//go:embed 033_document_notifications.sql
 var DocumentNotifications string
