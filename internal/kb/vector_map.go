@@ -33,8 +33,8 @@ type VectorMap struct {
 	ExplainedVariance float64       `json:"explained_variance"`
 	// Per-axis share of total variance, in x, y, z order. A 2D view uses the
 	// first two entries; explained_variance is their sum over all three.
-	ComponentVariance [3]float64    `json:"component_variance"`
-	EmbeddingStatus   any           `json:"embedding_status"`
+	ComponentVariance [3]float64 `json:"component_variance"`
+	EmbeddingStatus   any        `json:"embedding_status"`
 }
 
 // Only projected coordinates leave the server. Each request rechecks membership

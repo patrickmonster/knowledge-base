@@ -1,0 +1,11 @@
+{
+  "name": "knowledge-base-web-tests",
+  "private": true,
+  "description": "Node tests for the web console (internal/kb/web). Run: npm ci && npm test",
+  "scripts": {
+    "test": "node --test"
+  },
+  "devDependencies": {
+    "jsdom": "^27.0.0"
+  }
+}

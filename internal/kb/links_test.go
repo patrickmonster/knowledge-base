@@ -39,12 +39,12 @@ func TestDocumentLinks(t *testing.T) {
 		in   LinkInput
 		code string
 	}{
-		{LinkInput{ProjectID: p.ID, SourceID: oldDecision.ID, TargetID: newDecision.ID, Relation: "supersedes"}, "CONFLICT"},     // cycle
-		{LinkInput{ProjectID: p.ID, SourceID: brief.ID, TargetID: oldDecision.ID, Relation: "supersedes"}, "INVALID_INPUT"},      // kind mismatch
-		{LinkInput{ProjectID: p.ID, SourceID: oldDecision.ID, TargetID: brief.ID, Relation: "implements"}, "INVALID_INPUT"},      // source not history
-		{LinkInput{ProjectID: p.ID, SourceID: history.ID, TargetID: history.ID, Relation: "related"}, "INVALID_INPUT"},           // self
-		{LinkInput{ProjectID: p.ID, SourceID: history.ID, TargetID: brief.ID, Relation: "blocks"}, "INVALID_INPUT"},              // unknown relation
-		{LinkInput{ProjectID: p.ID, SourceID: newDecision.ID, TargetID: foreign.ID, Relation: "related"}, "NOT_FOUND"},           // other project
+		{LinkInput{ProjectID: p.ID, SourceID: oldDecision.ID, TargetID: newDecision.ID, Relation: "supersedes"}, "CONFLICT"}, // cycle
+		{LinkInput{ProjectID: p.ID, SourceID: brief.ID, TargetID: oldDecision.ID, Relation: "supersedes"}, "INVALID_INPUT"},  // kind mismatch
+		{LinkInput{ProjectID: p.ID, SourceID: oldDecision.ID, TargetID: brief.ID, Relation: "implements"}, "INVALID_INPUT"},  // source not history
+		{LinkInput{ProjectID: p.ID, SourceID: history.ID, TargetID: history.ID, Relation: "related"}, "INVALID_INPUT"},       // self
+		{LinkInput{ProjectID: p.ID, SourceID: history.ID, TargetID: brief.ID, Relation: "blocks"}, "INVALID_INPUT"},          // unknown relation
+		{LinkInput{ProjectID: p.ID, SourceID: newDecision.ID, TargetID: foreign.ID, Relation: "related"}, "NOT_FOUND"},       // other project
 		{LinkInput{ProjectID: p.ID, SourceID: history.ID, TargetID: brief.ID, Relation: "related", Note: strings.Repeat("가", 501)}, "INVALID_INPUT"},
 	} {
 		_, err := call(t, tools, admin, "link_documents", bad.in)

@@ -176,4 +176,3 @@ func TestProjectRulesAndAdminRole(t *testing.T) {
 		t.Fatalf("audit copied rule text: %s", details)
 	}
 }
-

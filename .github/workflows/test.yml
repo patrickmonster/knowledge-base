@@ -28,6 +28,14 @@ jobs:
         with:
           go-version: '1.27.x'
           cache: true
+      - name: gofmt
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "Run gofmt -w on:"
+            echo "$unformatted"
+            exit 1
+          fi
       - run: go vet ./...
       - run: go test -race ./...
       - run: go build ./cmd/knowledge-base
@@ -35,8 +43,11 @@ jobs:
         with:
           node-version: '22'
           cache: npm
-          cache-dependency-path: .railway/package-lock.json
+          cache-dependency-path: |
+            .railway/package-lock.json
+            scripts/package-lock.json
       - run: npm ci --prefix .railway
       - run: npm --prefix .railway run check
       - run: npm --prefix .railway test
-      - run: node --test scripts/web-diff.test.js scripts/web-qr.test.js
+      - run: npm ci --prefix scripts
+      - run: npm --prefix scripts test
