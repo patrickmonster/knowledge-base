@@ -267,7 +267,9 @@ func (s *Store) searchCurrentKnowledge(ctx context.Context, tx *sql.Tx, a Identi
 	if err == nil {
 		err = recordSearchTiming(ctx, tx, in.ProjectID, source, out, since(start))
 	}
-	if err == nil && len(out.Hits) == 0 {
+	// Only search_knowledge queries are zero-result evidence: a task description
+	// is a long free-text brief, not something the team searched for.
+	if err == nil && len(out.Hits) == 0 && source == searchSourceKnowledge {
 		err = recordSearchMiss(ctx, tx, in.ProjectID, in.Query, out.Retrieval)
 	}
 	return out, err
