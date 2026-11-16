@@ -307,7 +307,7 @@ func TestStaleTaskRunCleanup(t *testing.T) {
 	if _, err := s.DB.ExecContext(ctx, `INSERT INTO task_pull_requests(task_id,project_id,repository,number,url,state) VALUES($1,$2,'acme/kb',7,'https://github.com/acme/kb/pull/7','merged')`, old2.ID, p.ID); err != nil {
 		t.Fatal(err)
 	}
-	mustCall(t, tools, editor, "create_issue", CreateIssueInput{ProjectID: p.ID, Title: "작업 질의", Body: "확인 필요", AssigneeID: admin.User.ID, TaskID: old2.ID})
+	linked := mustCall(t, tools, editor, "create_issue", CreateIssueInput{ProjectID: p.ID, Title: "작업 질의", Body: "확인 필요", AssigneeID: admin.User.ID, TaskID: old2.ID}).(Issue)
 	board := mustCall(t, tools, admin, "list_task_runs", TaskListInput{ProjectID: p.ID, Status: "open", Mine: true}).([]map[string]any)
 	if len(board) != 1 || board[0]["id"] != mine.ID || board[0]["created_by_name"] == "" {
 		t.Fatalf("mine filter: %+v", board)
@@ -317,11 +317,13 @@ func TestStaleTaskRunCleanup(t *testing.T) {
 		prs, _ := r["pull_requests"].([]any)
 		switch r["id"] {
 		case old2.ID:
-			if len(prs) != 1 || prs[0].(map[string]any)["state"] != "merged" || r["open_issues"] != float64(1) {
+			issues, _ := r["issues"].([]any)
+			if len(prs) != 1 || prs[0].(map[string]any)["state"] != "merged" || r["open_issues"] != float64(1) || r["issue_count"] != float64(1) ||
+				len(issues) != 1 || issues[0].(map[string]any)["id"] != linked.ID || issues[0].(map[string]any)["status"] != "open" {
 				t.Fatalf("board row with PR and issue: %+v", r)
 			}
 		default:
-			if len(prs) != 0 || r["open_issues"] != float64(0) {
+			if issues, _ := r["issues"].([]any); len(prs) != 0 || r["open_issues"] != float64(0) || len(issues) != 0 {
 				t.Fatalf("board row without links: %+v", r)
 			}
 		}

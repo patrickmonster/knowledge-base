@@ -83,6 +83,9 @@ async function issueTodoForm(cardEl,i,after) {
 let issuesTab='list';
 
 async function issuesPage() {
+  // Set when another page (a task) asks for its linked questions; cleared by any filter change.
+  let focus=takePageFocus('issues');
+  if (focus) issuesTab='list';
   const root=el('div'), projects=[];
   for (let offset=0; offset<=100000; offset+=50) {
     const batch=await tool('list_projects',{limit:50,offset});
@@ -148,6 +151,7 @@ async function issuesPage() {
   async function refresh() {
     const ticket=++generation, p=current();
     list.replaceChildren(el('p','불러오는 중…','muted'));
+    if (focus?.issue_ids?.length) return showFocused(ticket,p,focus);
     const input={project_id:p.id,status:status.value,limit:50};
     if (scope.value==='assigned') input.assignee_id=me.id;
     if (scope.value==='asked') input.created_by=me.id;
@@ -157,6 +161,13 @@ async function issuesPage() {
     const blocking=issues.filter(i=>i.blocking&&i.status==='open').length;
     summary.textContent=`${issues.length}건${issues.length===50?' 이상':''}`+(blocking?` · 작업 보류 질의 ${blocking}건`:'')+(canWrite()?'':' · 조회 권한만 있어 답변·변경할 수 없습니다.');
     list.replaceChildren(...(issues.length?issues.map(issueCard):[el('p','조건에 맞는 질의·이슈가 없습니다.','empty')]));
+  }
+
+  async function showFocused(ticket,p,f) {
+    const items=(await Promise.all(f.issue_ids.map(id=>tool('get_issue',{project_id:p.id,issue_id:id}).catch(()=>null)))).filter(Boolean);
+    if (ticket!==generation) return;
+    summary.replaceChildren(document.createTextNode(`${f.label||'선택한 질의·이슈'} ${items.length}건 `),btn('전체 목록 보기',()=>{focus=null;return refresh();},'secondary issues-focus-clear'));
+    list.replaceChildren(...(items.length?items.map(issueCard):[el('p','질의·이슈를 찾지 못했습니다. 삭제되었거나 볼 권한이 없을 수 있습니다.','empty')]));
   }
 
   function issueCard(i) {
@@ -415,11 +426,11 @@ async function issuesPage() {
   }
   function selectQuery(form) {
     const l=el('label','검색어'),i=el('input');i.type='search';i.placeholder='제목·내용·답변';i.maxLength=500;l.append(i);form.append(l);
-    let timer;i.addEventListener('input',()=>{clearTimeout(timer);timer=setTimeout(()=>refresh().catch(e=>notify(e.message,true)),300);});
+    let timer;i.addEventListener('input',()=>{clearTimeout(timer);focus=null;timer=setTimeout(()=>refresh().catch(e=>notify(e.message,true)),300);});
     return i;
   }
-  project.addEventListener('change',()=>loadProject().catch(e=>notify(e.message,true)));
-  for (const s of [scope,status]) s.addEventListener('change',()=>refresh().catch(e=>notify(e.message,true)));
+  project.addEventListener('change',()=>{focus=null;loadProject().catch(e=>notify(e.message,true));});
+  for (const s of [scope,status]) s.addEventListener('change',()=>{focus=null;refresh().catch(e=>notify(e.message,true));});
   await loadProject();
   return root;
 }
