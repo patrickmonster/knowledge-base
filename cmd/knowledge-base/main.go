@@ -145,6 +145,21 @@ func run() error {
 		if err != nil {
 			return err
 		}
+		// First-run setup: while no administrator exists, the web console can
+		// create one with this code (SETUP_TOKEN, or a random one logged here).
+		setupFromEnv := os.Getenv("SETUP_TOKEN") != ""
+		if config.SetupCode = os.Getenv("SETUP_TOKEN"); setupFromEnv && len(config.SetupCode) < 20 {
+			return errors.New("SETUP_TOKEN must have at least 20 characters")
+		} else if !setupFromEnv {
+			config.SetupCode = kb.NewSetupCode()
+		}
+		if needed, err := store.NeedsSetup(ctx); err != nil {
+			slog.Error("could not check whether an administrator exists")
+		} else if needed && setupFromEnv {
+			slog.Warn("no administrator exists: open the public URL and create one with the SETUP_TOKEN value", "public_url", config.PublicURL)
+		} else if needed {
+			slog.Warn("no administrator exists: open the public URL and create one with this setup code (valid until restart)", "public_url", config.PublicURL, "setup_code", config.SetupCode)
+		}
 		app, err := kb.NewApp(store, config)
 		if err != nil {
 			return err

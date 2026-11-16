@@ -25,6 +25,9 @@ var webFiles embed.FS
 type Config struct {
 	PublicURL  string
 	TrustProxy bool
+	// SetupCode must be presented to create the first administrator from the
+	// web console while none exists. Empty disables web setup.
+	SetupCode string
 }
 type App struct {
 	Store  *Store
@@ -137,6 +140,39 @@ func (a *App) Handler() http.Handler {
 		}
 		http.SetCookie(w, a.mfaCookie("", -1))
 		http.SetCookie(w, a.cookie(raw, 12*3600))
+		a.json(w, map[string]any{"ok": true})
+	})
+	// Public: tells the console whether to show first-run setup. It reveals
+	// only whether an administrator exists.
+	mux.HandleFunc("GET /api/setup", func(w http.ResponseWriter, r *http.Request) {
+		needed, err := a.Store.NeedsSetup(r.Context())
+		if err != nil {
+			a.fail(w, err)
+			return
+		}
+		a.json(w, map[string]any{"required": needed, "available": a.Config.SetupCode != ""})
+	})
+	mux.HandleFunc("POST /api/setup", func(w http.ResponseWriter, r *http.Request) {
+		if !a.origin(w, r) {
+			return
+		}
+		if err := a.Store.RateLimit(r.Context(), "setup-ip:"+a.clientIP(r), 10, 900); err != nil {
+			a.fail(w, err)
+			return
+		}
+		var in struct {
+			Code     string `json:"code"`
+			Name     string `json:"name"`
+			Email    string `json:"email"`
+			Password string `json:"password"`
+		}
+		if !readJSON(w, r, &in) {
+			return
+		}
+		if err := a.Store.Setup(r.Context(), a.Config.SetupCode, in.Code, in.Email, in.Name, in.Password); err != nil {
+			a.fail(w, err)
+			return
+		}
 		a.json(w, map[string]any{"ok": true})
 	})
 	mux.HandleFunc("POST /api/accept-invitation", func(w http.ResponseWriter, r *http.Request) {
