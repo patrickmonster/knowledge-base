@@ -135,6 +135,22 @@ func (s *Store) searchProjects(ctx context.Context, tx *sql.Tx, projectIDs []str
 	return out, nil
 }
 
+// historyRankOffset pushes history hits this many places down each ranked list
+// before fusion. History documents are long point-in-time records that mention
+// many topics, make up most of a project's documents and grow with every
+// finished task, so without an offset they crowd current knowledge (reference,
+// brief, decision, glossary) out of the top results and the top results shift
+// whenever a new history is saved. A history still ranks first when nothing
+// else matches within this many places.
+const historyRankOffset = 10
+
+func kindRankOffset(kind string) int {
+	if kind == "history" {
+		return historyRankOffset
+	}
+	return 0
+}
+
 // RRF combines order rather than incomparable cosine and tsvector score magnitudes.
 func fuseRanks(lexical, semantic []SearchHit, limit int) []SearchHit {
 	type entry struct {
@@ -149,7 +165,7 @@ func fuseRanks(lexical, semantic []SearchHit, limit int) []SearchHit {
 				e = &entry{hit: hit}
 				merged[hit.DocumentID] = e
 			}
-			e.score += 1.0 / float64(60+rank+1)
+			e.score += 1.0 / float64(60+rank+kindRankOffset(hit.Kind)+1)
 		}
 	}
 	out := make([]SearchHit, 0, len(merged))
