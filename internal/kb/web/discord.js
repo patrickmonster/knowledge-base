@@ -15,7 +15,7 @@ async function discordLinkCard(){
   if(!st.linked){
     c.append(el('p','코드를 만들고 10분 안에 Discord에서 `/kb link` 명령에 입력하세요. 코드는 한 번만 쓸 수 있습니다.','small muted'),btn('연결 코드 만들기',async()=>{const r=await api('/api/discord/link-code',{});out.replaceChildren(el('code',r.code),el('p','만료: '+new Date(r.expires_at).toLocaleTimeString()+' · 이 화면을 닫으면 다시 볼 수 없습니다.','small muted'));}),out);
   }else{
-    c.append(el('p','Discord에서 `/kb projects`, `/kb todos`를 사용할 수 있습니다. 답변은 본인에게만 보이고, 프로젝트 권한은 이 계정의 역할을 따릅니다.','small muted'),btn('연결 해제',async()=>{if(!confirm('Discord 연결을 해제할까요?'))return;await api('/api/discord/unlink',{});await render('account');},'danger'));
+    c.append(el('p','Discord에서 `/kb projects`, `/kb todos`를 쓰고, 메시지를 우클릭 → 앱 → 이슈로 등록으로 이슈를 만들 수 있습니다. 답변은 본인에게만 보이고, 프로젝트 권한은 이 계정의 역할을 따릅니다.','small muted'),btn('연결 해제',async()=>{if(!confirm('Discord 연결을 해제할까요?'))return;await api('/api/discord/unlink',{});await render('account');},'danger'));
   }
   return c;
 }
@@ -31,8 +31,27 @@ async function discordAdminCard(){
   formSubmit(f,'저장',async()=>{await api('/api/admin/discord',{enabled:cb.checked,public_key:key.value.trim()});notify('저장했습니다.');await render('overview');});
   c.append(f);
   if(s.updated_at)c.append(el('p','마지막 저장: '+new Date(s.updated_at).toLocaleString(),'small muted'));
-  c.append(discordRegisterForm());
+  c.append(discordChannelForm(s.channels||[]),discordRegisterForm());
   return c;
+}
+
+// 메시지 명령 '이슈로 등록'이 이슈를 만들 프로젝트를 Discord 채널(포럼)별로 정한다.
+// 채널 ID는 비밀이 아니다. 매핑이 없으면 누른 사람의 프로젝트가 하나일 때만 그 프로젝트를 쓴다.
+function discordChannelForm(channels){
+  const box=el('div');
+  box.append(el('h3','이슈로 등록 — 채널과 프로젝트 연결'),el('p','Discord에서 메시지를 우클릭 → 앱 → 이슈로 등록을 누르면 그 메시지가 이슈가 됩니다. 이슈가 들어갈 프로젝트를 포럼(또는 텍스트) 채널별로 정합니다. 누른 사람은 /kb link로 연결한 계정이어야 하고, 그 프로젝트의 편집자 이상이어야 합니다. 명령은 아래 \'슬래시 명령 등록\'을 다시 실행해야 Discord에 나타납니다.','small muted'));
+  if(!channels.length)box.append(el('p','연결된 채널이 없습니다.','small muted'));
+  for(const ch of channels){
+    const row=el('div','row');
+    row.append(el('code',ch.channel_id),el('span',' → '+ch.project_name+' ('+ch.project_slug+')'),btn('삭제',async()=>{if(!confirm('이 채널 연결을 지울까요?'))return;await api('/api/admin/discord/channels',{channel_id:ch.channel_id,project_slug:''});notify('지웠습니다.');await render('overview');},'danger'));
+    box.append(row);
+  }
+  const f=el('form');
+  const id=field(f,'채널 ID (개발자 모드 → 포럼 채널 우클릭 → ID 복사)','channel_id','text','');id.inputMode='numeric';id.autocomplete='off';
+  const slug=field(f,'프로젝트 slug','project_slug','text','');slug.autocomplete='off';
+  formSubmit(f,'채널 연결 저장',async()=>{await api('/api/admin/discord/channels',{channel_id:id.value.trim(),project_slug:slug.value.trim()});notify('저장했습니다.');await render('overview');});
+  box.append(f);
+  return box;
 }
 
 // Registers /kb with Discord. The bot token is typed here for this one request

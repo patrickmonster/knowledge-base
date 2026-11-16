@@ -115,3 +115,6 @@ var TodoInReview string
 
 //go:embed 038_discord_drop_guild_ids.sql
 var DiscordDropGuildIDs string
+
+//go:embed 039_discord_issue_channels.sql
+var DiscordIssueChannels string

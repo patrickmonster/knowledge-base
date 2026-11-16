@@ -315,6 +315,13 @@ func (a *App) Handler() http.Handler {
 		}
 		return a.Store.SetDiscordSettings(r.Context(), id, in)
 	})
+	a.sessionRoute(mux, "POST /api/admin/discord/channels", func(r *http.Request, id Identity) (any, error) {
+		var in DiscordChannelInput
+		if err := decode(r, &in); err != nil {
+			return nil, err
+		}
+		return a.Store.SetDiscordChannel(r.Context(), id, in)
+	})
 	a.sessionRoute(mux, "POST /api/admin/discord/register-commands", func(r *http.Request, id Identity) (any, error) {
 		var in DiscordRegisterInput
 		if err := decode(r, &in); err != nil {

@@ -75,6 +75,8 @@ type DiscordSettings struct {
 	PublicKey   string `json:"public_key"`
 	UpdatedAt   string `json:"updated_at,omitempty"`
 	EndpointURL string `json:"endpoint_url,omitempty"`
+	// Channels map Discord channels to the project the message command files issues in.
+	Channels []DiscordChannel `json:"channels,omitempty"`
 }
 
 type DiscordSettingsInput struct {
@@ -119,11 +121,30 @@ type discordInteraction struct {
 	User *struct {
 		ID string `json:"id"`
 	} `json:"user"`
-	Data *struct {
+	// Channel is where the command was used; for a forum post it is the thread
+	// and ParentID is the forum.
+	Channel *discordChannelRef `json:"channel"`
+	Data    *struct {
 		Name    string          `json:"name"`
+		Type    int             `json:"type"` // 1 slash command (default), 3 message command
 		Options []discordOption `json:"options"`
+		// TargetID and Resolved carry the message a message command was used on.
+		TargetID string `json:"target_id"`
+		Resolved struct {
+			Messages map[string]discordSourceMessage `json:"messages"`
+		} `json:"resolved"`
 	} `json:"data"`
 }
+
+type discordChannelRef struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	ParentID string `json:"parent_id"`
+	Type     int    `json:"type"`
+}
+
+// isThread is true for news, public and private threads (forum posts are public threads).
+func (c discordChannelRef) isThread() bool { return c.Type == 10 || c.Type == 11 || c.Type == 12 }
 
 func (i discordInteraction) userID() string {
 	if i.Member != nil && i.Member.User.ID != "" {
@@ -278,7 +299,11 @@ func (s *Store) discordEndpointURL() string { return s.PublicURL + "/api/discord
 func (s *Store) DiscordSettingsStatus(ctx context.Context, actor Identity) (any, error) {
 	return s.Perform(ctx, actor, "view_discord_settings", "", false, true, func(tx *sql.Tx) (any, error) {
 		out, err := s.discordSettings(ctx, tx)
+		if err != nil {
+			return out, err
+		}
 		out.EndpointURL = s.discordEndpointURL()
+		out.Channels, err = s.discordChannels(ctx, tx)
 		return out, err
 	})
 }
@@ -441,6 +466,12 @@ func (s *Store) ReceiveDiscordInteraction(ctx context.Context, req DiscordReques
 }
 
 func (s *Store) runDiscordCommand(ctx context.Context, ix discordInteraction, discordUser string) (string, error) {
+	if ix.Data.Type == discordCommandTypeMessage {
+		if ix.Data.Name != discordMessageCommandName {
+			return "알 수 없는 메시지 명령입니다.", nil
+		}
+		return s.discordIssueCommand(ctx, ix, discordUser)
+	}
 	if ix.Data.Name != "kb" || len(ix.Data.Options) == 0 {
 		return "`/kb link`, `/kb unlink`, `/kb projects`, `/kb todos` 중에서 고르세요.", nil
 	}

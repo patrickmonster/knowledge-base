@@ -23,7 +23,7 @@ func TestDiscordCommandDefinition(t *testing.T) {
 		t.Fatal(err)
 	}
 	var cmds []discordCommand
-	if err := json.Unmarshal(raw, &cmds); err != nil || len(cmds) != 1 || cmds[0].Name != "kb" {
+	if err := json.Unmarshal(raw, &cmds); err != nil || len(cmds) != 2 || cmds[0].Name != "kb" {
 		t.Fatalf("definition: %s %v", raw, err)
 	}
 	name := regexp.MustCompile(`^[a-z0-9_-]{1,32}$`)
@@ -37,6 +37,11 @@ func TestDiscordCommandDefinition(t *testing.T) {
 		}
 	}
 	walk(cmds[0].Options)
+	// The message command (Apps → 이슈로 등록) has no description or options, as Discord requires.
+	if m := cmds[1]; m.Type != discordCommandTypeMessage || m.Name != discordMessageCommandName || m.Description != "" || len(m.Options) != 0 ||
+		utf8.RuneCountInString(m.Name) > 32 || strings.Contains(string(raw), `"type":3,"description":"","options"`) {
+		t.Errorf("message command: %+v", m)
+	}
 	subs := map[string]bool{}
 	var statusChoices []string
 	for _, o := range cmds[0].Options {
@@ -121,7 +126,7 @@ func TestCallDiscordRegister(t *testing.T) {
 		t.Fatalf("request: %s %s auth=%q", fake.method, fake.path, fake.auth)
 	}
 	var sent []discordCommand
-	if err := json.Unmarshal(fake.body, &sent); err != nil || len(sent) != 1 || sent[0].Name != "kb" {
+	if err := json.Unmarshal(fake.body, &sent); err != nil || len(sent) != 2 || sent[0].Name != "kb" || sent[1].Type != discordCommandTypeMessage {
 		t.Fatalf("body: %s %v", fake.body, err)
 	}
 	if _, err := callDiscordRegister(ctx, srv.URL, app, "", registerTestToken); err != nil || fake.path != "/applications/"+app+"/commands" {
