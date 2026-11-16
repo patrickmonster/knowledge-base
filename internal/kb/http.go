@@ -315,6 +315,13 @@ func (a *App) Handler() http.Handler {
 		}
 		return a.Store.SetDiscordSettings(r.Context(), id, in)
 	})
+	a.sessionRoute(mux, "POST /api/admin/discord/register-commands", func(r *http.Request, id Identity) (any, error) {
+		var in DiscordRegisterInput
+		if err := decode(r, &in); err != nil {
+			return nil, err
+		}
+		return a.Store.RegisterDiscordCommands(r.Context(), id, in)
+	})
 	a.sessionRoute(mux, "GET /api/discord/link", func(r *http.Request, id Identity) (any, error) { return a.Store.DiscordLink(r.Context(), id) })
 	a.sessionRoute(mux, "POST /api/discord/link-code", func(r *http.Request, id Identity) (any, error) { return a.Store.CreateDiscordLinkCode(r.Context(), id) })
 	a.sessionRoute(mux, "POST /api/discord/unlink", func(r *http.Request, id Identity) (any, error) { return a.Store.UnlinkDiscord(r.Context(), id) })
@@ -523,7 +530,7 @@ func (a *App) fail(w http.ResponseWriter, err error) {
 	case "RATE_LIMITED":
 		status = 429
 		w.Header().Set("Retry-After", "900")
-	case "STORAGE_UNAVAILABLE", "SCAN_UNAVAILABLE", "MFA_UNAVAILABLE", "WEBHOOK_UNAVAILABLE":
+	case "STORAGE_UNAVAILABLE", "SCAN_UNAVAILABLE", "MFA_UNAVAILABLE", "WEBHOOK_UNAVAILABLE", "DISCORD_UNAVAILABLE":
 		status = 503
 	case "QUOTA_EXCEEDED":
 		status = 413

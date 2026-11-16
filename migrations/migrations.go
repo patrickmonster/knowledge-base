@@ -112,3 +112,6 @@ var RetentionSettings string
 
 //go:embed 036_todo_in_review.sql
 var TodoInReview string
+
+//go:embed 038_discord_drop_guild_ids.sql
+var DiscordDropGuildIDs string

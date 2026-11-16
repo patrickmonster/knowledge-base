@@ -343,3 +343,15 @@ func TestDiscordCommands(t *testing.T) {
 		t.Fatalf("no link codes while off: %v", err)
 	}
 }
+
+func TestDiscordGuildListColumnIsDropped(t *testing.T) {
+	s := testStore(t)
+	var n int
+	if err := s.DB.QueryRowContext(context.Background(), `SELECT count(*) FROM information_schema.columns
+		WHERE table_schema=current_schema() AND table_name='discord_settings' AND column_name='allowed_guild_ids'`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Fatal("discord_settings.allowed_guild_ids should have been dropped by migration 038")
+	}
+}
