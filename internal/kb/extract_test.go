@@ -106,6 +106,120 @@ func TestExtractXLSX(t *testing.T) {
 	}
 }
 
+func TestExtractXLSXDates(t *testing.T) {
+	styles := `<?xml version="1.0" encoding="UTF-8"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">` +
+		`<numFmts count="4"><numFmt numFmtId="164" formatCode="yyyy&quot;년&quot; m&quot;월&quot; d&quot;일&quot;"/>` +
+		`<numFmt numFmtId="165" formatCode="[$-412]yyyy-mm-dd hh:mm"/><numFmt numFmtId="166" formatCode="#,##0&quot;원&quot;"/>` +
+		`<numFmt numFmtId="167" formatCode="[h]:mm:ss"/></numFmts>` +
+		// cellStyleXfs must not be counted as cell styles.
+		`<cellStyleXfs count="1"><xf numFmtId="14"/></cellStyleXfs>` +
+		`<cellXfs count="7"><xf numFmtId="0"/><xf numFmtId="14"/><xf numFmtId="164"/><xf numFmtId="165"/><xf numFmtId="166"/><xf numFmtId="20"/><xf numFmtId="167"/></cellXfs></styleSheet>`
+	sheet := `<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>` +
+		`<row r="1"><c r="A1" t="inlineStr"><is><t>항목</t></is></c><c r="B1" t="inlineStr"><is><t>값</t></is></c></row>` +
+		`<row r="2"><c r="A2" t="inlineStr"><is><t>기본</t></is></c><c r="B2" s="1"><v>46341</v></c></row>` +
+		`<row r="3"><c r="A3" t="inlineStr"><is><t>한글</t></is></c><c r="B3" s="2"><v>46341</v></c></row>` +
+		`<row r="4"><c r="A4" t="inlineStr"><is><t>시각</t></is></c><c r="B4" s="3"><v>45658.75</v></c></row>` +
+		`<row r="5"><c r="A5" t="inlineStr"><is><t>금액</t></is></c><c r="B5" s="4"><v>46341</v></c></row>` +
+		`<row r="6"><c r="A6" t="inlineStr"><is><t>시간</t></is></c><c r="B6" s="5"><v>0.5</v></c></row>` +
+		`<row r="7"><c r="A7" t="inlineStr"><is><t>경과</t></is></c><c r="B7" s="6"><v>0.25</v></c></row>` +
+		`<row r="8"><c r="A8" t="inlineStr"><is><t>서식없음</t></is></c><c r="B8"><v>46341</v></c></row>` +
+		`<row r="9"><c r="A9" t="inlineStr"><is><t>범위밖</t></is></c><c r="B9" s="99"><v>46341</v></c></row>` +
+		`<row r="10"><c r="A10" t="inlineStr"><is><t>문자열</t></is></c><c r="B10" s="1" t="str"><v>46341</v></c></row>` +
+		`<row r="11"><c r="A11" t="inlineStr"><is><t>오류</t></is></c><c r="B11" s="1" t="e"><v>#VALUE!</v></c></row>` +
+		`</sheetData></worksheet>`
+	workbook := func(pr string) string {
+		return `<?xml version="1.0" encoding="UTF-8"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">` + pr +
+			`<sheets><sheet name="날짜" sheetId="1"/></sheets></workbook>`
+	}
+	file := writeZip(t, "dates.xlsx", map[string]string{
+		"xl/workbook.xml":          workbook(""),
+		"xl/styles.xml":            styles,
+		"xl/worksheets/sheet1.xml": sheet,
+	})
+	res, err := ExtractText("xlsx", file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"| 기본 | 2026-11-15 |", "| 한글 | 2026-11-15 |", "| 시각 | 2025-01-01 18:00 |",
+		"| 금액 | 46341 |", "| 시간 | 12:00 |", "| 경과 | 06:00:00 |",
+		"| 서식없음 | 46341 |", "| 범위밖 | 46341 |", "| 문자열 | 46341 |", "| 오류 | #VALUE! |",
+	} {
+		if !strings.Contains(res.Text, want) {
+			t.Fatalf("missing %q in:\n%s", want, res.Text)
+		}
+	}
+
+	// The 1904 date system counts from 1904-01-01.
+	file1904 := writeZip(t, "dates1904.xlsx", map[string]string{
+		"xl/workbook.xml":          workbook(`<workbookPr date1904="1"/>`),
+		"xl/styles.xml":            styles,
+		"xl/worksheets/sheet1.xml": strings.Replace(sheet, "<v>46341</v></c></row>", "<v>44879</v></c></row>", 1),
+	})
+	res, err = ExtractText("xlsx", file1904)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(res.Text, "| 기본 | 2026-11-15 |") {
+		t.Fatalf("1904 date wrong:\n%s", res.Text)
+	}
+}
+
+func TestClassifyNumFmt(t *testing.T) {
+	for code, want := range map[string]dateKind{
+		"General":                     dateNone,
+		"0.00":                        dateNone,
+		"#,##0;[Red]-#,##0":           dateNone,
+		"0.00E+00":                    dateNone,
+		"@":                           dateNone,
+		`"Day" 0`:                     dateNone,
+		`[$₩-412]#,##0`:               dateNone,
+		"yyyy-mm-dd":                  datePart,
+		"mmm":                         datePart,
+		`d\-mmm`:                      datePart,
+		`yyyy"년" m"월" d"일"`:           datePart,
+		"[$-F800]dddd, mmmm dd, yyyy": datePart,
+		"h:mm AM/PM":                  timePart,
+		"mm:ss":                       timePart | secondsPart,
+		"[h]:mm":                      timePart,
+		"yyyy-mm-dd hh:mm:ss":         datePart | timePart | secondsPart,
+		"[Blue]yyyy/mm/dd;@":          datePart,
+	} {
+		if got := classifyNumFmt(code); got != want {
+			t.Errorf("classifyNumFmt(%q) = %b, want %b", code, got, want)
+		}
+	}
+}
+
+func TestFormatExcelDate(t *testing.T) {
+	for _, c := range []struct {
+		raw  string
+		kind dateKind
+		in04 bool
+		want string
+		ok   bool
+	}{
+		{"46341", datePart, false, "2026-11-15", true},
+		{"46341.5", datePart | timePart, false, "2026-11-15 12:00", true},
+		{"1", datePart, false, "1900-01-01", true},
+		{"59", datePart, false, "1900-02-28", true},
+		{"61", datePart, false, "1900-03-01", true},
+		{"0", datePart, false, "", false},
+		{"0.75", datePart | timePart, false, "18:00", true},
+		{"0", datePart, true, "1904-01-01", true},
+		{"-1", datePart, false, "", false},
+		{"3000000", datePart, false, "", false},
+		{"abc", datePart, false, "", false},
+		{"46341", dateNone, false, "", false},
+		{"0.000011574", timePart | secondsPart, false, "00:00:01", true},
+	} {
+		got, ok := formatExcelDate(c.raw, c.kind, c.in04)
+		if got != c.want || ok != c.ok {
+			t.Errorf("formatExcelDate(%q, %b, %v) = %q, %v; want %q, %v", c.raw, c.kind, c.in04, got, ok, c.want, c.ok)
+		}
+	}
+}
+
 // buildPDF writes a minimal PDF whose objects are given in order (object 1 is
 // the catalog), computing the xref table.
 func buildPDF(t *testing.T, objects []string) string {
