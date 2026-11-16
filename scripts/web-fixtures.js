@@ -135,6 +135,7 @@ function mockAPI(variant){
     'POST /api/discord/unlink':()=>({unlinked:true}),
     'GET /api/admin/discord':()=>({enabled:full,public_key:full?'a'.repeat(64):'',endpoint_url:'https://kb.example.com/api/discord/interactions',updated_at:full?T:undefined}),
     'POST /api/admin/discord':()=>({}),
+    'POST /api/admin/discord/register-commands':()=>({scope:'guild',commands:['kb']}),
     'GET /api/admin/users':()=>[{...ME,activated:true,mfa_enabled:full,created_at:T},...list([{...OTHER,activated:true,mfa_enabled:true,created_at:T},{id:'user-3',name:'퇴사자',email:'gone@example.com',global_role:'member',disabled:true,activated:false,mfa_enabled:false,created_at:T}])],
     'POST /api/admin/users':()=>({}),
     'POST /api/admin/users/mfa-reset':()=>({}),
