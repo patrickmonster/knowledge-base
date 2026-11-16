@@ -194,7 +194,7 @@ func NewTools(s *Store) Tools {
 		FROM project_members m JOIN users u ON u.id=m.user_id WHERE m.project_id=$1 ORDER BY m.role,u.name LIMIT 200`, in.ProjectID)
 	})
 	add(t, s, "create_document", "Save project knowledge. kind: brief, decision, history, artifact, reference, glossary. Default status: active. A new decision returns similar_decisions: existing decisions that may duplicate or conflict with it; confirm with the user, then link_documents supersedes or related.", true, func(in DocumentInput) string { return in.ProjectID }, createDocumentChecked)
-	add(t, s, "update_document", "Update knowledge using its current revision and a change reason. Previous versions remain available.", true, func(in UpdateInput) string { return in.ProjectID }, updateDocument)
+	add(t, s, "update_document", "Update knowledge using its current revision and a change reason. Previous versions remain available. To change part of a long body, send edits (old_str/new_str pairs, each old_str matching exactly once) instead of the whole text in patch.content; all edits apply or none, and the response reports edits_applied.", true, func(in UpdateInput) string { return in.ProjectID }, updateDocument)
 	add(t, s, "get_document", "Read a document, optionally at a specific revision. The current revision includes links (supersedes, superseded_by, implements, implemented_by, related) and, for an active reference/brief not updated for 90 days, a recheck warning: verify it before relying on it.", false, func(in DocumentRef) string { return in.ProjectID }, func(ctx context.Context, tx *sql.Tx, a Identity, in DocumentRef) (any, error) {
 		d, err := getDocument(ctx, tx, a, in)
 		if err != nil || in.Revision != 0 {

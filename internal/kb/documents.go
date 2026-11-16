@@ -86,11 +86,12 @@ func getDocument(ctx context.Context, tx *sql.Tx, actor Identity, in DocumentRef
 }
 
 type UpdateInput struct {
-	ProjectID        string        `json:"project_id"`
-	DocumentID       string        `json:"document_id"`
-	ExpectedRevision int           `json:"expected_revision"`
-	Reason           string        `json:"reason"`
-	Patch            DocumentPatch `json:"patch"`
+	ProjectID        string         `json:"project_id"`
+	DocumentID       string         `json:"document_id"`
+	ExpectedRevision int            `json:"expected_revision"`
+	Reason           string         `json:"reason"`
+	Patch            DocumentPatch  `json:"patch"`
+	Edits            []DocumentEdit `json:"edits,omitempty" jsonschema:"Partial content edits applied in order instead of patch.content: each old_str must occur exactly once in the content at that point; an empty new_str deletes it. All or nothing; at most 50 edits"`
 }
 
 func updateDocument(ctx context.Context, tx *sql.Tx, actor Identity, in UpdateInput) (any, error) {
@@ -111,7 +112,10 @@ func updateDocument(ctx context.Context, tx *sql.Tx, actor Identity, in UpdateIn
 		return nil, problem("REVISION_CONFLICT", fmt.Sprintf("Current revision is %d. Read it, merge your change, then retry.", d.Revision))
 	}
 	p := in.Patch
-	if p.Title == nil && p.Kind == nil && p.Content == nil && p.Tags == nil && p.Status == nil && p.SourceURL == nil {
+	if len(in.Edits) > 0 && p.Content != nil {
+		return nil, problem("INVALID_INPUT", "Use either patch.content (full replacement) or edits, not both.")
+	}
+	if p.Title == nil && p.Kind == nil && p.Content == nil && p.Tags == nil && p.Status == nil && p.SourceURL == nil && len(in.Edits) == 0 {
 		return nil, problem("INVALID_INPUT", "Provide at least one changed field.")
 	}
 	input := DocumentInput{ProjectID: d.ProjectID, Title: d.Title, Kind: d.Kind, Content: d.Content, Tags: d.Tags, Status: d.Status}
@@ -126,6 +130,13 @@ func updateDocument(ctx context.Context, tx *sql.Tx, actor Identity, in UpdateIn
 	}
 	if p.Content != nil {
 		input.Content = *p.Content
+	}
+	if len(in.Edits) > 0 {
+		edited, err := applyDocumentEdits(d.Content, in.Edits)
+		if err != nil {
+			return nil, err
+		}
+		input.Content = edited
 	}
 	if p.Tags != nil {
 		input.Tags = *p.Tags
@@ -150,6 +161,9 @@ func updateDocument(ctx context.Context, tx *sql.Tx, actor Identity, in UpdateIn
 	}
 	if previousStatus == "draft" && d.Status == "active" {
 		notifyDocumentBestEffort(ctx, tx, actor, d, eventDocumentPromoted)
+	}
+	if len(in.Edits) > 0 {
+		return EditedDocument{Document: d, EditsApplied: len(in.Edits)}, nil
 	}
 	return d, nil
 }

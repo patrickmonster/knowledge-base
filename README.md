@@ -158,7 +158,7 @@ Authorization: Bearer <발급받은 MCP 키>
 | `get_usage_stats` | 프로젝트 사용 통계(최근 1~365일, 기본 30일, 한국 시간 일 단위): 합계·일별 추이·종류별 증가·결과 0건 검색어·검색 시간·HNSW 검토 판정(`hnsw_review`)·상위 도구·사용자·열람 문서·보유 현황 |
 | `set_search_thresholds` | 소유자·관리자: 프로젝트의 HNSW 검토 기준(`vector_p95_ms`, `scanned_chunks`) 설정. 호출마다 두 값을 바꾸며 0이나 생략은 서버 기본값(`HNSW_REVIEW_*`) |
 
-문서 종류는 `brief`, `decision`, `history`, `artifact`, `reference`입니다. 상태는 `draft`, `active`, `archived`이고 기본 검색에는 활성 문서의 최신 버전만 포함됩니다. `update_document`는 `expected_revision`과 수정 이유 `reason`이 필요합니다. 충돌하면 최신 내용을 읽고 변경을 병합해야 합니다.
+문서 종류는 `brief`, `decision`, `history`, `artifact`, `reference`입니다. 상태는 `draft`, `active`, `archived`이고 기본 검색에는 활성 문서의 최신 버전만 포함됩니다. `update_document`는 `expected_revision`과 수정 이유 `reason`이 필요합니다. 충돌하면 최신 내용을 읽고 변경을 병합해야 합니다. 긴 본문의 일부만 고칠 때는 `patch.content`로 전체를 다시 보내지 않고 `edits`(`old_str`/`new_str` 쌍 배열, 최대 50개)를 보냅니다. 편집은 순서대로 적용되고, 각 `old_str`는 그 시점 본문에서 정확히 한 번 나와야 합니다(없거나 여러 번이면 `EDIT_NOT_APPLIED`로 아무것도 저장하지 않음). `new_str`가 비어 있으면 삭제이고, `patch.content`와 함께 쓸 수 없습니다. 제목·태그 등 다른 `patch` 필드와는 함께 쓸 수 있으며 응답에 `edits_applied`가 붙습니다.
 
 `list_documents`는 `kind`, `status` 외에 다음 필터를 받습니다. 모든 필터는 함께 적용(AND)됩니다.
 
