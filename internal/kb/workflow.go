@@ -21,6 +21,10 @@ type StartTaskInput struct {
 	Task          string `json:"task" jsonschema:"Requested work and retrieval query, up to 1000 characters"`
 	ExcerptBudget int    `json:"excerpt_budget,omitempty" jsonschema:"Maximum total excerpt characters, 1000 to 20000; omit for the default 8000"`
 	TodoID        string `json:"todo_id,omitempty" jsonschema:"The to-do (list_todos) this task carries out; it moves to in_progress and completes with the task. Omit when the request matches no to-do"`
+	// Branch, Worktree and Paths say where the task works; other open tasks on the same ground come back as context.concurrent_runs (a warning only).
+	Branch   string   `json:"branch,omitempty" jsonschema:"Git branch this task works on, up to 200 characters; other open tasks on the same branch are reported in context.concurrent_runs"`
+	Worktree string   `json:"worktree,omitempty" jsonschema:"Worktree or checkout directory this task works in, up to 500 characters; other open tasks in the same worktree are reported in context.concurrent_runs"`
+	Paths    []string `json:"paths,omitempty" jsonschema:"Repository-relative files or directories this task changes, at most 20; open tasks with an equal or enclosing/enclosed path are reported in context.concurrent_runs"`
 }
 type TaskRef struct {
 	ProjectID string `json:"project_id"`
@@ -60,6 +64,9 @@ type TaskRun struct {
 	Task          string          `json:"task"`
 	ExcerptBudget int             `json:"excerpt_budget"`
 	TodoID        string          `json:"todo_id,omitempty"`
+	Branch        string          `json:"branch,omitempty"`
+	Worktree      string          `json:"worktree,omitempty"`
+	Paths         []string        `json:"paths,omitempty"`
 	Status        string          `json:"status"`
 	Context       TaskContext     `json:"context"`
 	Completion    *TaskCompletion `json:"completion"`
@@ -98,7 +105,7 @@ func registerWorkflowTools(t Tools, s *Store) {
 		return documentTemplates(), nil
 	})
 	add(t, s, "create_templated_document", "Validate template sections and save a brief, decision or history document. Default status is draft. Read get_document_templates first.", true, func(in TemplateDocumentInput) string { return in.ProjectID }, createTemplatedDocument)
-	add(t, s, "start_task", "Call before project work: retrieve knowledge and persist the starting context. Editor access required. Reuse request_key and identical inputs on retries; keep the returned run.id for finish_task. This does not execute the work itself.", true, func(in StartTaskInput) string { return in.ProjectID }, s.startTask)
+	add(t, s, "start_task", "Call before project work: retrieve knowledge and persist the starting context. Editor access required. Reuse request_key and identical inputs on retries; keep the returned run.id for finish_task. Pass branch, worktree and paths (optional) and check run.context.concurrent_runs: other open tasks on the same branch/worktree or overlapping paths (a warning, nothing is blocked). This does not execute the work itself.", true, func(in StartTaskInput) string { return in.ProjectID }, s.startTask)
 	add(t, s, "finish_task", "Call after work: atomically save a history and optional brief/decision documents, then close the task. Only its creator may finish. Retry identical inputs safely; changed input after completion conflicts. Never claim tests or deployment that did not occur.", true, func(in FinishTaskInput) string { return in.ProjectID }, s.finishTask)
 	add(t, s, "get_task_run", "Read a task, its starting context snapshot and completion document IDs. The snapshot may be outdated; refresh knowledge before resuming work.", false, func(in TaskRef) string { return in.ProjectID }, func(ctx context.Context, tx *sql.Tx, a Identity, in TaskRef) (any, error) {
 		if _, err := projectAccess(ctx, tx, a.User.ID, in.ProjectID, false); err != nil {
@@ -192,8 +199,16 @@ func (s *Store) startTask(ctx context.Context, tx *sql.Tx, a Identity, in StartT
 			return nil, err
 		}
 	}
-	result, err := tx.ExecContext(ctx, `INSERT INTO task_runs(id,project_id,created_by,request_key,title,task,excerpt_budget) VALUES($1,$2,$3,$4,$5,$6,$7)
-	ON CONFLICT(project_id,created_by,request_key) DO NOTHING`, uuid.NewString(), in.ProjectID, a.User.ID, in.RequestKey, in.Title, in.Task, in.ExcerptBudget)
+	scope, err := normalizeScope(in.Branch, in.Worktree, in.Paths)
+	if err != nil {
+		return nil, err
+	}
+	scopePaths, err := json.Marshal(append([]string{}, scope.Paths...))
+	if err != nil {
+		return nil, err
+	}
+	result, err := tx.ExecContext(ctx, `INSERT INTO task_runs(id,project_id,created_by,request_key,title,task,excerpt_budget,branch,worktree,paths) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb)
+	ON CONFLICT(project_id,created_by,request_key) DO NOTHING`, uuid.NewString(), in.ProjectID, a.User.ID, in.RequestKey, in.Title, in.Task, in.ExcerptBudget, scope.Branch, scope.Worktree, string(scopePaths))
 	if err != nil {
 		return nil, err
 	}
@@ -206,7 +221,7 @@ func (s *Store) startTask(ctx context.Context, tx *sql.Tx, a Identity, in StartT
 		return nil, err
 	}
 	// A retry that names a to-do must name the linked one; link_task_todo changes it afterwards.
-	if run.Title != in.Title || run.Task != in.Task || run.ExcerptBudget != in.ExcerptBudget || (inserted == 0 && in.TodoID != "" && run.TodoID != in.TodoID) {
+	if run.Title != in.Title || run.Task != in.Task || run.ExcerptBudget != in.ExcerptBudget || run.Branch != scope.Branch || run.Worktree != scope.Worktree || strings.Join(run.Paths, "\n") != strings.Join(scope.Paths, "\n") || (inserted == 0 && in.TodoID != "" && run.TodoID != in.TodoID) {
 		return nil, problem("CONFLICT", "request_key was already used with different task inputs.")
 	}
 	if inserted > 0 && in.TodoID != "" {
@@ -234,6 +249,10 @@ func (s *Store) startTask(ctx context.Context, tx *sql.Tx, a Identity, in StartT
 			}
 			run.Context.Todos.Candidates = kept
 		}
+		// A warning only: it never blocks the task. Retries (inserted == 0) keep the snapshot stored at the first call.
+		if run.Context.ConcurrentRuns, err = concurrentRuns(ctx, tx, in.ProjectID, run.ID, scope); err != nil {
+			return nil, err
+		}
 		raw, err := json.Marshal(run.Context)
 		if err != nil {
 			return nil, err
@@ -245,6 +264,7 @@ func (s *Store) startTask(ctx context.Context, tx *sql.Tx, a Identity, in StartT
 	return StartTaskResult{Run: run, NextSteps: []string{
 		"Check run.status first. If completed, use run.completion; do not repeat the work. If abandoned, it was closed with closed_reason: start a new task with a new request_key. This context is a start-time snapshot, not a live view.",
 		"Check context.todos: linked is the to-do this task carries out. If none is linked and a candidate is exactly what the user asked for, link it with link_task_todo so the board follows the work; finish_task completed (or the task's merged pull requests) completes it.",
+		"If you passed branch, worktree or paths, check context.concurrent_runs: other open tasks on the same branch or worktree, or on overlapping paths, with who started them and when. This is a warning only; coordinate with that person before changing the same files, and treat stale entries (open for 7+ days) as possibly abandoned. Omit those fields when you do not know them.",
 		"Check context.issues before working: answer questions assigned to you only with facts, read answers to your questions, and confirm with the user before proceeding past an open blocking question. For shared_areas you do not own (owner_is_you=false), leave a question for the owner with create_issue(area_id, task_id) instead of deciding alone.",
 		"Follow context.rules while working: project_rules (set by the project owner or admins) apply to everyone and win on conflict; personal_rules are your user's own preferences. Use them for commit messages and work conventions; ask the user when a rule is unclear. Re-read with list_rules when resuming.",
 		"Inspect context.retrieval, warning and unindexed_chunks. Read relevant full documents and recent decision pointers with get_document before relying on them.",

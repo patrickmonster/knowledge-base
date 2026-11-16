@@ -38,9 +38,19 @@ const (
 	eventIssueCommented = "issue_commented"
 	eventIssueStatus    = "issue_status"
 	eventTest           = "test"
+
+	eventDocumentCreated  = "document_created"
+	eventDocumentPromoted = "document_promoted"
 )
 
+// notificationEvents are the issue events a channel gets by default.
+// Document events are opt-in so existing channels do not start receiving them.
 var notificationEvents = []string{eventIssueAssigned, eventIssueAnswered, eventIssueCommented, eventIssueStatus}
+var documentEvents = []string{eventDocumentCreated, eventDocumentPromoted}
+
+// defaultDocumentKinds leaves out history (one per task) and artifact (automatic
+// attachment text) documents, which would flood a channel.
+var defaultDocumentKinds = []string{"brief", "decision", "reference", "glossary"}
 
 // maxNotificationAttempts bounds retries; backoff doubles from one minute.
 const maxNotificationAttempts = 6
@@ -53,6 +63,7 @@ type NotificationChannel struct {
 	Target      string   `json:"target,omitempty"`
 	TargetHint  string   `json:"target_hint"`
 	Events      []string `json:"events"`
+	DocKinds    []string `json:"document_kinds"`
 	Enabled     bool     `json:"enabled"`
 	CreatedBy   string   `json:"created_by"`
 	CreatedAt   string   `json:"created_at"`
@@ -69,7 +80,8 @@ type NotificationChannelInput struct {
 	Kind      string   `json:"kind,omitempty" jsonschema:"webhook, slack, or email"`
 	Name      string   `json:"name,omitempty"`
 	Target    string   `json:"target,omitempty" jsonschema:"HTTPS URL for webhook/slack (a Discord webhook URL gets Discord-formatted messages); empty keeps the current URL when updating; unused for email"`
-	Events    []string `json:"events,omitempty" jsonschema:"issue_assigned, issue_answered, issue_commented, issue_status; empty means all"`
+	Events    []string `json:"events,omitempty" jsonschema:"issue_assigned, issue_answered, issue_commented, issue_status, document_created, document_promoted; empty means the four issue events (document events are opt-in)"`
+	DocKinds  []string `json:"document_kinds,omitempty" jsonschema:"Document kinds announced by document_created/document_promoted; empty means brief, decision, reference, glossary"`
 	Enabled   *bool    `json:"enabled,omitempty"`
 	Remove    bool     `json:"remove,omitempty"`
 }
@@ -95,6 +107,9 @@ type notificationPayload struct {
 	IssueStatus string                  `json:"issue_status,omitempty"`
 	Blocking    bool                    `json:"blocking,omitempty"`
 	AreaName    string                  `json:"area_name,omitempty"`
+	DocTitle    string                  `json:"document_title,omitempty"`
+	DocKind     string                  `json:"document_kind,omitempty"`
+	DocStatus   string                  `json:"document_status,omitempty"`
 	ActorName   string                  `json:"actor_name"`
 	Recipients  []notificationRecipient `json:"recipients"`
 	CreatedAt   string                  `json:"created_at"`
@@ -176,6 +191,24 @@ func validateChannelTarget(kind, target string) error {
 	return nil
 }
 
+func normalizeDocKinds(kinds []string) ([]string, error) {
+	if len(kinds) == 0 {
+		return append([]string{}, defaultDocumentKinds...), nil
+	}
+	seen := map[string]bool{}
+	out := []string{}
+	for _, k := range kinds {
+		if !validKind(k) {
+			return nil, problem("INVALID_INPUT", "document_kinds must be brief, decision, history, artifact, reference, or glossary.")
+		}
+		if !seen[k] {
+			seen[k] = true
+			out = append(out, k)
+		}
+	}
+	return out, nil
+}
+
 func normalizeEvents(events []string) ([]string, error) {
 	if len(events) == 0 {
 		return append([]string{}, notificationEvents...), nil
@@ -184,11 +217,11 @@ func normalizeEvents(events []string) ([]string, error) {
 	out := []string{}
 	for _, e := range events {
 		valid := e == eventRecheckDigest // opt-in: not part of the default set
-		for _, known := range notificationEvents {
+		for _, known := range append(append([]string{}, notificationEvents...), documentEvents...) {
 			valid = valid || e == known
 		}
 		if !valid {
-			return nil, problem("INVALID_INPUT", "events must be issue_assigned, issue_answered, issue_commented, issue_status, or recheck_digest.")
+			return nil, problem("INVALID_INPUT", "events must be issue_assigned, issue_answered, issue_commented, issue_status, document_created, document_promoted, or recheck_digest.")
 		}
 		if !seen[e] {
 			seen[e] = true
@@ -244,6 +277,9 @@ func setNotificationChannel(ctx context.Context, tx *sql.Tx, a Identity, in Noti
 		if in.Events == nil {
 			in.Events = current.Events
 		}
+		if in.DocKinds == nil {
+			in.DocKinds = current.DocKinds
+		}
 		if in.Enabled == nil {
 			in.Enabled = &current.Enabled
 		}
@@ -270,14 +306,18 @@ func setNotificationChannel(ctx context.Context, tx *sql.Tx, a Identity, in Noti
 	if err != nil {
 		return nil, err
 	}
+	docKinds, err := normalizeDocKinds(in.DocKinds)
+	if err != nil {
+		return nil, err
+	}
 	id := in.ChannelID
 	if id == "" {
 		id = uuid.NewString()
-		_, err = tx.ExecContext(ctx, `INSERT INTO notification_channels(id,project_id,kind,name,target,events,enabled,created_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`,
-			id, in.ProjectID, in.Kind, in.Name, in.Target, events, *in.Enabled, a.User.ID)
+		_, err = tx.ExecContext(ctx, `INSERT INTO notification_channels(id,project_id,kind,name,target,events,document_kinds,enabled,created_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+			id, in.ProjectID, in.Kind, in.Name, in.Target, events, docKinds, *in.Enabled, a.User.ID)
 	} else {
-		_, err = tx.ExecContext(ctx, `UPDATE notification_channels SET name=$2,target=$3,events=$4,enabled=$5,updated_at=clock_timestamp() WHERE id=$1`,
-			id, in.Name, in.Target, events, *in.Enabled)
+		_, err = tx.ExecContext(ctx, `UPDATE notification_channels SET name=$2,target=$3,events=$4,document_kinds=$6,enabled=$5,updated_at=clock_timestamp() WHERE id=$1`,
+			id, in.Name, in.Target, events, *in.Enabled, docKinds)
 		if err == nil && !*in.Enabled {
 			// Turning a channel off also drops what it had waiting; rows already
 			// being sent are stopped by the worker's lease renewal check.
@@ -573,10 +613,7 @@ func (s *Store) ProcessNotificationBatch(ctx context.Context) (int, error) {
 		if !enabled {
 			sendErr = &deliveryError{Code: "CHANNEL_DISABLED", Permanent: true}
 		} else {
-			job.Payload.URL = s.PublicURL + "/#issues"
-			if job.Event == eventRecheckDigest {
-				job.Payload.URL = s.PublicURL + "/#documents"
-			}
+			job.Payload.URL = s.PublicURL + notificationRoute(job.Payload)
 			sendErr = s.Notifier.deliver(ctx, job)
 		}
 		status, code, next := "sent", "", time.Duration(0)
@@ -775,6 +812,9 @@ func (n *Notifier) sendEmail(job outboxJob) error {
 }
 
 func notificationSubject(p notificationPayload) string {
+	if p.DocTitle != "" {
+		return documentSubject(p)
+	}
 	kind := map[string]string{"question": "질의", "issue": "이슈"}[p.IssueKind]
 	switch p.Event {
 	case eventTest:
@@ -815,7 +855,9 @@ func notificationText(p notificationPayload) string {
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "[%s] %s\n", p.ProjectName, notificationSubject(p))
-	if p.Event == eventTest {
+	if p.DocTitle != "" {
+		writeDocumentText(&b, p)
+	} else if p.Event == eventTest {
 		fmt.Fprintf(&b, "%s 님이 알림 채널을 테스트했습니다.\n", p.ActorName)
 	} else {
 		fmt.Fprintf(&b, "받는 사람: %s\n작업자: %s\n상태: %s", strings.Join(names, ", "), p.ActorName, issueStatusLabel(p.IssueStatus))

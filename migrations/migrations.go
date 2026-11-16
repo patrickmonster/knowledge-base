@@ -95,5 +95,11 @@ var SearchThresholds string
 //go:embed 031_todo_import.sql
 var TodoImport string
 
+//go:embed 032_task_scope.sql
+var TaskScope string
+
+//go:embed 033_document_notifications.sql
+var DocumentNotifications string
+
 //go:embed 034_recheck_digest_runs.sql
 var RecheckDigestRuns string
