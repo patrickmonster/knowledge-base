@@ -23,8 +23,8 @@ jobs:
     env:
       TEST_DATABASE_URL: postgres://postgres:integration-test-only@localhost:5432/knowledge_test?sslmode=disable
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version: '1.27.x'
           cache: true
@@ -39,7 +39,7 @@ jobs:
       - run: go vet ./...
       - run: go test -race ./...
       - run: go build ./cmd/knowledge-base
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
           cache: npm
