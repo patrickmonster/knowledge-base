@@ -88,9 +88,10 @@ DB 트랜잭션과 버킷 PUT은 하나의 원자적 작업이 아닙니다. 중
 | 변수 | 기본값 / 의미 |
 | --- | --- |
 | `ATTACHMENT_PROJECT_QUOTA_MB` | `1024`. 프로젝트별 첨부 총량(MiB). `0`이면 제한 없음, 지정 시 25~1048576 |
-| `CLAMAV_ADDRESS` | 비어 있으면 백신 검사 없음. `host:port`(예: Railway 내부 주소의 clamd 3310)를 지정하면 모든 업로드를 검사 |
+| `CLAMAV_ADDRESS` | 기본값일 뿐이다. 비어 있으면 백신 검사 없음. `host:port`(예: Railway 내부 주소의 clamd 3310)를 지정하면 모든 업로드를 검사. 관리자 화면에서 정한 값이 있으면 그 값이 우선한다(아래) |
 | `ATTACHMENT_ALLOW_EXECUTABLES` | `false`. `true`면 아래 실행 파일 차단을 끔 |
 
+- **관리자 화면 설정**: 전역 관리자가 웹 콘솔 '운영 현황'의 '악성 파일 검사 (ClamAV)' 카드에서 검사 방식을 고른다. '서버 기본값 따르기'(환경변수 `CLAMAV_ADDRESS`), '사용 안 함'(환경변수가 있어도 끔), '주소 지정'(`host:port`). 값은 서버 전체 1행(`scanner_settings`, 035)에 저장되고 업로드마다 읽으므로 재시작 없이 바로 적용된다. 웹 세션·전역 관리자 전용(MCP 키 거부)이고, 감사 로그 `update_scanner`에는 검사 사용 여부만 남기며 주소는 기록하지 않는다. 주소는 이 카드에만 표시되고 `GET /api/attachments/storage`에는 나오지 않는다.
 - **총량**: 저장 완료 파일과 1시간 안의 진행 중 예약(`pending`·`uploading`)을 합산합니다. `prepare_attachment_upload`에서 초과하면 `QUOTA_EXCEEDED`(HTTP 413)입니다. 같은 프로젝트의 동시 예약은 프로젝트 행 잠금으로 순서대로 처리합니다. 사용량은 `get_attachment_usage`와 웹 첨부 목록에 표시됩니다.
 - **실행 파일 차단(기본)**: `.exe .dll .scr .com .msi .msp .bat .cmd .ps1 .psm1 .vbs .vbe .jse .wsf .wsh .hta .lnk .pif .cpl .jar .apk .appx .msix .reg` 이름은 예약 단계에서, 이름을 바꾼 Windows PE·ELF·Mach-O 실행 파일은 업로드 본문 앞부분으로 거부합니다(`BLOCKED_FILE`, HTTP 422).
 - **백신 검사(ClamAV)**: 앱이 임시 파일을 clamd `INSTREAM`으로 보내고, 깨끗하다는 응답을 받은 뒤에만 버킷에 저장합니다. 감염이면 `MALWARE_DETECTED`(422), clamd 연결 실패·오류·크기 초과면 `SCAN_UNAVAILABLE`(503)로 **저장하지 않습니다(fail closed)**. clamd의 `StreamMaxLength`는 26M 이상이어야 합니다(현재 clamd 기본값은 100M이며, 제공 설정은 26M으로 고정).
