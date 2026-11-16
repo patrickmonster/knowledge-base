@@ -133,7 +133,7 @@ func resolveProject(ctx context.Context, tx *sql.Tx, a Identity, in ResolveProje
 		out.Guidance = resolveNoMatch
 	case 1:
 		out.Matched, out.Project, out.Guidance = true, &projects[0], resolveMatch
-		if out.Rules, err = taskRules(ctx, tx, a.User.ID, projects[0]); err != nil {
+		if out.Rules, err = taskRules(ctx, tx, a, projects[0]); err != nil {
 			return ResolvedProject{}, err
 		}
 	default:

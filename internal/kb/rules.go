@@ -43,7 +43,9 @@ type Rule struct {
 type RuleSet struct {
 	ProjectRules  []Rule `json:"project_rules"`
 	PersonalRules []Rule `json:"personal_rules"`
-	// CanManageProjectRules tells the caller whether the web console lets them edit project rules.
+	// CanManageProjectRules tells whether this call's caller can change project rules:
+	// an owner or admin in a web session. It is false for MCP key calls, which
+	// are refused for project rules whatever the role.
 	CanManageProjectRules bool   `json:"can_manage_project_rules"`
 	Guidance              string `json:"guidance"`
 }
@@ -107,14 +109,15 @@ func projectRuleWriter(a Identity, role string) error {
 }
 
 // listRules returns the caller's rules; disabled ones only when includeDisabled.
-func listRules(ctx context.Context, q Querier, userID string, p Project, includeDisabled bool) (RuleSet, error) {
+func listRules(ctx context.Context, q Querier, a Identity, p Project, includeDisabled bool) (RuleSet, error) {
+	userID := a.User.ID
 	rules, err := many[Rule](ctx, q, `SELECT to_jsonb(r) FROM project_rules r
 		WHERE r.project_id=$1 AND (r.scope='project' OR r.user_id=$2) AND (r.enabled OR $3)
 		ORDER BY r.scope, CASE r.category WHEN 'commit' THEN 0 WHEN 'work' THEN 1 ELSE 2 END, r.created_at, r.id`, p.ID, userID, includeDisabled)
 	if err != nil {
 		return RuleSet{}, err
 	}
-	out := RuleSet{ProjectRules: []Rule{}, PersonalRules: []Rule{}, CanManageProjectRules: canManageProjectRules(p.Role), Guidance: rulesGuidance}
+	out := RuleSet{ProjectRules: []Rule{}, PersonalRules: []Rule{}, CanManageProjectRules: canManageProjectRules(p.Role) && a.KeyID == "", Guidance: rulesGuidance}
 	for _, r := range rules {
 		if r.Scope == "project" {
 			out.ProjectRules = append(out.ProjectRules, r)
@@ -270,7 +273,7 @@ func registerRuleTools(t Tools, s *Store) {
 		if err != nil {
 			return nil, err
 		}
-		return listRules(ctx, tx, a.User.ID, p, in.IncludeDisabled)
+		return listRules(ctx, tx, a, p, in.IncludeDisabled)
 	})
 	add(t, s, "save_rule", "Add or change a rule. scope personal: your own rules, any member. scope project: owner or admin in the web console only (MCP keys are refused). To change a rule pass rule_id and expected_revision.", true, func(in SaveRuleInput) string { return in.ProjectID }, saveRule)
 	add(t, s, "delete_rule", "Delete one of your personal rules, or (owner/admin in the web console) a project rule.", true, func(in RuleRef) string { return in.ProjectID }, deleteRule)
@@ -278,8 +281,8 @@ func registerRuleTools(t Tools, s *Store) {
 }
 
 // taskRules attaches the caller's rules to the task context; nil when there are none.
-func taskRules(ctx context.Context, q Querier, userID string, p Project) (*RuleSet, error) {
-	rules, err := listRules(ctx, q, userID, p, false)
+func taskRules(ctx context.Context, q Querier, a Identity, p Project) (*RuleSet, error) {
+	rules, err := listRules(ctx, q, a, p, false)
 	if err != nil {
 		return nil, err
 	}

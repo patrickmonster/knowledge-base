@@ -61,6 +61,14 @@ func TestProjectRulesAndAdminRole(t *testing.T) {
 		_, err = call(t, tools, who, "delete_rule", RuleRef{ProjectID: p.ID, RuleID: added.ID})
 		denied(t, err, "FORBIDDEN")
 	}
+	// can_manage_project_rules describes this call: an owner's MCP key cannot change
+	// project rules, so it reports false even though the same owner can in the web console.
+	if byKey := mustCall(t, tools, ownerKey, "list_rules", ProjectInput{ProjectID: p.ID}).(RuleSet); byKey.CanManageProjectRules {
+		t.Fatal("owner key reported can_manage_project_rules")
+	}
+	if bySession := mustCall(t, tools, owner, "list_rules", ProjectInput{ProjectID: p.ID}).(RuleSet); !bySession.CanManageProjectRules {
+		t.Fatal("owner web session must report can_manage_project_rules")
+	}
 	_, err = call(t, tools, outsider, "list_rules", ProjectInput{ProjectID: p.ID})
 	denied(t, err, "NOT_FOUND")
 
