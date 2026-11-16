@@ -319,6 +319,13 @@ func (a *App) Handler() http.Handler {
 	a.sessionRoute(mux, "POST /api/discord/link-code", func(r *http.Request, id Identity) (any, error) { return a.Store.CreateDiscordLinkCode(r.Context(), id) })
 	a.sessionRoute(mux, "POST /api/discord/unlink", func(r *http.Request, id Identity) (any, error) { return a.Store.UnlinkDiscord(r.Context(), id) })
 	a.sessionRoute(mux, "GET /api/admin/retention", func(r *http.Request, id Identity) (any, error) { return a.Store.RetentionStatus(r.Context(), id) })
+	a.sessionRoute(mux, "POST /api/admin/retention", func(r *http.Request, id Identity) (any, error) {
+		var in RetentionInput
+		if err := decode(r, &in); err != nil {
+			return nil, err
+		}
+		return a.Store.SetRetention(r.Context(), id, in)
+	})
 	a.sessionRoute(mux, "POST /api/vectors/map", func(r *http.Request, id Identity) (any, error) {
 		var in VectorMapInput
 		if err := decode(r, &in); err != nil {

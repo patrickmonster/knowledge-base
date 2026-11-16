@@ -106,3 +106,6 @@ var RecheckDigestRuns string
 
 //go:embed 037_discord.sql
 var Discord string
+
+//go:embed 035_retention_settings.sql
+var RetentionSettings string
