@@ -111,6 +111,37 @@ func (s *Store) Bootstrap(ctx context.Context, email, name, password string) err
 		return audit(ctx, tx, Event{ActorID: id, Action: "bootstrap", TargetID: id, Outcome: "success", RequestID: uuid.NewString()})
 	})
 }
+
+// NeedsSetup reports whether no administrator exists yet, as on a fresh
+// install. Only then may the first administrator be created.
+func (s *Store) NeedsSetup(ctx context.Context) (bool, error) {
+	var exists bool
+	err := s.DB.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM users WHERE global_role='admin')").Scan(&exists)
+	return !exists, err
+}
+
+// NewSetupCode returns a random one-time code for first-run setup.
+func NewSetupCode() string { return token() }
+
+// Setup creates the first administrator from the web console. want is the
+// server's setup code (from the SETUP_TOKEN variable or the startup log), so
+// reaching the public address alone is not enough to claim a new server.
+func (s *Store) Setup(ctx context.Context, want, code, email, name, password string) error {
+	needed, err := s.NeedsSetup(ctx)
+	if err != nil {
+		return err
+	}
+	if !needed {
+		return problem("CONFLICT", "Setup is already complete. Sign in instead.")
+	}
+	if want == "" || subtle.ConstantTimeCompare([]byte(digest(strings.TrimSpace(code))), []byte(digest(want))) != 1 {
+		if err := audit(ctx, s.DB, Event{Action: "bootstrap", Outcome: "denied", ErrorCode: "FORBIDDEN", RequestID: uuid.NewString()}); err != nil {
+			return err
+		}
+		return problem("FORBIDDEN", "The setup code is incorrect. Use the SETUP_TOKEN variable or the code in the server's startup log.")
+	}
+	return s.Bootstrap(ctx, email, name, password)
+}
 func (s *Store) RateLimit(ctx context.Context, bucket string, limit int, windowSeconds int) error {
 	var attempts int
 	err := s.DB.QueryRowContext(ctx, `INSERT INTO rate_limits(bucket) VALUES($1) ON CONFLICT(bucket) DO UPDATE SET

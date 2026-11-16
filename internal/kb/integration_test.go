@@ -24,6 +24,16 @@ const testPassword = "test-only-long-password-123!"
 
 func testStore(t *testing.T) *Store {
 	t.Helper()
+	s := emptyTestStore(t)
+	if err := s.Bootstrap(context.Background(), "admin@example.com", "관리자", testPassword); err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+// emptyTestStore is a migrated store with no users, like a fresh install.
+func emptyTestStore(t *testing.T) *Store {
+	t.Helper()
 	dsn := os.Getenv("TEST_DATABASE_URL")
 	if dsn == "" {
 		t.Skip("set TEST_DATABASE_URL to run real PostgreSQL integration tests")
@@ -54,9 +64,6 @@ func testStore(t *testing.T) *Store {
 	}
 	if err = s.Migrate(ctx); err != nil {
 		t.Fatal("migration is not repeatable:", err)
-	}
-	if err = s.Bootstrap(ctx, "admin@example.com", "관리자", testPassword); err != nil {
-		t.Fatal(err)
 	}
 	return s
 }
