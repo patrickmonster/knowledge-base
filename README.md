@@ -19,6 +19,7 @@ Go로 만든 팀 공용 지식 서버입니다. 프로젝트별 기획·결정·
 - 문서 저장·수정 시 자동 임베딩 대기열, 실패 재시도·상태 조회·소유자 재색인
 - 이슈·질의 베이스: 공통 작업 영역과 담당자, 질의·이슈 등록·답변·해결, 작업 시작 시 관련 질의 표시, 질의응답의 지식 문서화, GitHub 저장소 이슈 가져오기([안내](docs/issues.md#github-이슈-가져오기))
 - 할 일 보드([안내](docs/todos.md)): 프로젝트 할 일을 상태(시작 전·진행 중·완료·아이디어) 열과 우선순위(높음·보통·낮음) 행으로 보는 웹 보드, 분류·진행률·담당자·마감일, 드래그로 이동, AI도 MCP로 추가·이동, 진행 중 작업과 연결해 시작·완료·PR 병합에 따라 자동 이동, 질의·이슈를 연결해 카드에 질의·보류 수 표시
+- Discord 슬래시 명령([안내](docs/discord.md)): Interactions Endpoint(요청·응답, 봇 토큰 없음)로 `/kb link`·`unlink`·`projects`·`todos`. 웹 내 계정에서 만든 단회 코드로 연결하고 연결된 계정의 프로젝트 역할로만 읽기 조회, 본인에게만 보이는 답변, Ed25519 서명 검증, 설정은 관리자 웹 화면
 - 팀 확산([안내](docs/team-rollout.md)): 이슈 담당자 알림과 선택형 문서 생성·승격 알림, 재확인 요약 주기 발송(웹훅·Slack·이메일), 웹 문서 관계 보기·편집, 문서 버전 비교, 검토 대기 사이드바 배지, 공통 작업 영역 삭제·정리, 다른 저장소용 AGENTS.md 생성, 프로젝트 내보내기·가져오기(JSON·Markdown)
 - 작업 PR 병합·배포 자동 기록: `finish_task`에 남긴 PR을 GitHub에서 확인해 병합·배포(서버 자신의 저장소)되면 history에 상태 갱신 블록 추가, 미기록 PR은 작업 시작 맥락에 표시
 - 지식 품질과 AI 작업 흐름: 중복·충돌 결정 감지, 재확인 담당자·주기 요약, start_task 맥락 활용도 피드백과 검색 품질 지표, finish_task 결정 후보 추출, 오래 열린 작업 정리, 용어집(glossary)과 검색 동의어 확장([안내](docs/knowledge-quality.md))
@@ -324,6 +325,7 @@ TEST_DATABASE_URL='<test-only PostgreSQL URL>' TEST_OLLAMA_URL=http://localhost:
 - `internal/kb/vector_search.go`: 질문 임베딩·권한 범위 내 의미 검색·하이브리드 순위
 - `internal/kb/issues.go`, `web/issues.js`: 이슈·질의 베이스와 작업 시작 연동
 - `internal/kb/todos.go`, `web/todos.js`: 할 일 보드(`025_todos.sql`)
+- `internal/kb/discord.go`, `web/discord.js`, `migrations/037_discord.sql`: Discord 슬래시 명령 수신·서명 검증·계정 연결·읽기 명령
 - `internal/kb/github_issues.go`: GitHub 이슈 가져오기(`import_github_issues`)
 - `internal/kb/github_webhooks.go`: GitHub 웹훅 설정(웹 전용)과 수신·서명 검증, 이슈·PR 이벤트 반영
 - `internal/kb/deployments.go`: 작업 PR의 병합·배포 확인과 history 상태 갱신 블록(`check_task_deployments`, 주기 확인)
