@@ -130,6 +130,9 @@ type TaskContext struct {
 	Deployments *TaskDeployments `json:"deployments,omitempty"`
 	// Todos are the linked to-do (start_task todo_id) and open to-dos resembling the task.
 	Todos *TaskTodos `json:"todos,omitempty"`
+	// ConcurrentRuns lists other open tasks on the same branch, worktree or
+	// overlapping paths (start_task branch/worktree/paths); a warning only.
+	ConcurrentRuns []ConcurrentRun `json:"concurrent_runs,omitempty"`
 }
 
 type SearchResult struct {

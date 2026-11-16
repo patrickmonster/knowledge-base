@@ -94,3 +94,6 @@ var SearchThresholds string
 
 //go:embed 031_todo_import.sql
 var TodoImport string
+
+//go:embed 032_task_scope.sql
+var TaskScope string

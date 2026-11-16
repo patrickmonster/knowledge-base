@@ -79,6 +79,10 @@ async function tasksPage() {
       :r.status==='completed'?`완료 ${new Date(r.completed_at).toLocaleString()}`:`중단 ${r.closed_at?new Date(r.closed_at).toLocaleString():''}`;
     c.append(el('p',`${r.created_by_name||'알 수 없음'} · ${when}`,'small muted'));
     c.append(el('p',r.task,'task-text'));
+    if (r.branch||r.worktree||r.paths?.length) {
+      const scope=[r.branch&&`브랜치 ${r.branch}`,r.worktree&&`worktree ${r.worktree}`,r.paths?.length&&`경로 ${r.paths.join(', ')}`].filter(Boolean);
+      c.append(el('p',scope.join(' · '),'small muted task-scope'));
+    }
     if (r.status==='abandoned'&&r.closed_reason) c.append(el('p',`중단 사유: ${r.closed_reason}`+(r.closed_by_name?` (${r.closed_by_name})`:''),'small'));
     const facts=el('div',undefined,'task-facts');
     for (const pr of r.pull_requests||[]) {
@@ -167,6 +171,13 @@ function taskDetail(run) {
   out.push(el('h3',`참고 자료 ${sources.length}건`+(ctx.retrieval?` · ${ctx.retrieval}`:'')));
   if (sources.length) { const ul=el('ul'); sources.forEach(s=>ul.append(el('li',`${s.title} (버전 ${s.revision})`))); out.push(ul); }
   if (ctx.warning) out.push(el('p',ctx.warning,'small'));
+  const concurrent=ctx.concurrent_runs||[];
+  if (concurrent.length) {
+    out.push(el('h3',`시작 시 같은 곳에서 진행 중이던 작업 ${concurrent.length}건`),el('p','같은 브랜치·worktree 또는 겹치는 경로의 다른 열린 작업입니다. 차단하지 않는 경고입니다.','small muted'));
+    const ul=el('ul');
+    concurrent.forEach(x=>ul.append(el('li',`${x.title} · ${x.created_by_name||'알 수 없음'} · ${new Date(x.started_at).toLocaleString()}${x.stale?' · 7일 넘게 열림(stale)':''} · `+(x.overlaps||[]).map(o=>o.kind==='path'?`경로 ${o.value}${o.theirs&&o.theirs!==o.value?` ↔ ${o.theirs}`:''}`:`${o.kind==='branch'?'브랜치':'worktree'} ${o.value}`).join(', '))));
+    out.push(ul);
+  }
   const issues=ctx.issues;
   if (issues) {
     const n=(issues.assigned_to_you?.length||0)+(issues.your_questions?.length||0)+(issues.related?.length||0);
