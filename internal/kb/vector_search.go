@@ -60,10 +60,14 @@ func (s *Store) searchProjects(ctx context.Context, tx *sql.Tx, projectIDs []str
 			query += " " + strings.Join(out.ExpandedTerms, " ")
 		}
 	}
+	issueLimit := min(limit, maxIssueHits)
 	if in.Mode == "lexical" {
 		start := time.Now()
 		out.Hits, err = lexicalHits(ctx, tx, scope, query, in.Status, limit)
 		out.timing.Lexical = since(start)
+		if err == nil && in.includeIssues {
+			out.Issues, err = issueLexicalHits(ctx, tx, scope, query, issueLimit)
+		}
 		return out, err
 	}
 	if s.Embedder == nil {
@@ -101,7 +105,19 @@ func (s *Store) searchProjects(ctx context.Context, tx *sql.Tx, projectIDs []str
 		start = time.Now()
 		out.Hits, err = lexicalHits(ctx, tx, scope, query, in.Status, limit)
 		out.timing.Lexical = since(start)
+		if err == nil && in.includeIssues {
+			out.Issues, err = issueLexicalHits(ctx, tx, scope, query, issueLimit)
+		}
 		return out, err
+	}
+	var issueSemantic []IssueSearchHit
+	if in.includeIssues {
+		if out.UnindexedIssueChunks, err = unindexedIssueChunks(ctx, tx, scope, s.Embedder.Model()); err != nil {
+			return out, err
+		}
+		if issueSemantic, err = issueVectorHits(ctx, tx, scope, s.Embedder.Model(), vectorLiteral(vectors[0]), max(issueLimit, min(20, issueLimit*3))); err != nil {
+			return out, err
+		}
 	}
 	start = time.Now()
 	semantic, err := many[SearchHit](ctx, tx, `WITH scoped AS MATERIALIZED (
@@ -123,6 +139,9 @@ func (s *Store) searchProjects(ctx context.Context, tx *sql.Tx, projectIDs []str
 	}
 	if in.Mode == "semantic" {
 		out.Hits = semantic[:min(limit, len(semantic))]
+		if in.includeIssues {
+			out.Issues = issueSemantic[:min(issueLimit, len(issueSemantic))]
+		}
 		return out, nil
 	}
 	start = time.Now()
@@ -132,6 +151,13 @@ func (s *Store) searchProjects(ctx context.Context, tx *sql.Tx, projectIDs []str
 		return out, err
 	}
 	out.Hits = fuseRanks(lexical, semantic, limit)
+	if in.includeIssues {
+		issueLexical, err := issueLexicalHits(ctx, tx, scope, query, max(issueLimit, min(20, issueLimit*3)))
+		if err != nil {
+			return out, err
+		}
+		out.Issues = fuseIssueRanks(issueLexical, issueSemantic, issueLimit)
+	}
 	return out, nil
 }
 

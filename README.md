@@ -139,7 +139,7 @@ Authorization: Bearer <발급받은 MCP 키>
 | `get_document`, `list_documents` | 본문 조회, 종류·상태·태그·기간·작성자 필터 목록과 재확인 필요 표시 |
 | `get_document_history` | 최근 50개 수정 버전의 작성자·이유 조회 |
 | `link_documents`, `unlink_documents`, `get_document_links` | 문서 간 관계(`supersedes`, `implements`, `related`) 추가·삭제·조회 |
-| `search_knowledge` | 프로젝트 내 하이브리드·의미·키워드 검색 |
+| `search_knowledge` | 프로젝트 내 하이브리드·의미·키워드 검색(관련 질의·이슈는 `issues`로 따로) |
 | `search_across_projects` | 참여 중인 여러 프로젝트를 한 번에 검색(`project_ids` 생략 시 전체, 최대 50개) |
 | `get_embedding_status` | 프로젝트별 임베딩 대기·처리·완료·실패 건수 조회 |
 | `reindex_project_embeddings` | 소유자 전용: 현재 본문으로 청크를 다시 만들고 벡터 재생성 예약(새 버전은 만들지 않음) |
@@ -222,6 +222,8 @@ Authorization: Bearer <발급받은 MCP 키>
   "unindexed_chunks": 0
 }
 ```
+
+관련 질의·이슈가 있으면 `issues`(최대 5건)와 벡터가 아직 없는 질의 조각 수 `unindexed_issue_chunks`가 더해집니다. 질의 본문·답변도 문서와 같은 방식으로 청크·임베딩합니다([안내](docs/issues.md#검색)).
 
 `mode`는 `hybrid`, `semantic`, `lexical` 중 선택합니다. `warning`의 실제 메시지는 영어입니다. 검색 점수는 모드마다 다르며 확률이나 신뢰도 백분율이 아닙니다.
 

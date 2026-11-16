@@ -506,6 +506,9 @@ func upsertGitHubIssue(ctx context.Context, tx *sql.Tx, a Identity, plan githubI
 		if err != nil {
 			return ImportedIssue{}, err
 		}
+		if err := rebuildIssueChunks(ctx, tx, id); err != nil {
+			return ImportedIssue{}, err
+		}
 		return ImportedIssue{ID: id, SourceKey: key, SourceURL: sourceURL, Title: title, Status: status, Action: "created"}, nil
 	}
 	if err != nil {
@@ -528,6 +531,9 @@ func upsertGitHubIssue(ctx context.Context, tx *sql.Tx, a Identity, plan githubI
 		updated_at=clock_timestamp() WHERE id=$1`,
 		id, title, body, merged, sourceURL, sourceState, updatedAt, newStatus, resolution)
 	if err != nil {
+		return ImportedIssue{}, err
+	}
+	if err := rebuildIssueChunks(ctx, tx, id); err != nil {
 		return ImportedIssue{}, err
 	}
 	return ImportedIssue{ID: id, SourceKey: key, SourceURL: sourceURL, Title: title, Status: newStatus, Action: "updated"}, nil

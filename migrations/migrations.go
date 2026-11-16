@@ -121,3 +121,6 @@ var DiscordIssueChannels string
 
 //go:embed 040_backfill_used_implements.sql
 var BackfillUsedImplements string
+
+//go:embed 041_issue_chunks.sql
+var IssueChunks string
