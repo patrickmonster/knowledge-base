@@ -43,7 +43,6 @@ const (
 	discordTimestampSkew  = 5 * time.Minute
 	discordLinkCodeTTL    = 10 * time.Minute
 	discordLinkCodeLength = 8
-	discordMaxGuilds      = 20
 	discordMessageLimit   = 2000 // Discord's maximum message length in characters
 	discordTodoLines      = 15
 	discordProjectLines   = 25
@@ -57,7 +56,6 @@ const (
 
 var (
 	discordSnowflake   = regexp.MustCompile(`^[0-9]{5,25}$`)
-	discordGuildID     = regexp.MustCompile(`^[0-9]{17,20}$`)
 	discordPublicKeyRe = regexp.MustCompile(`^[0-9a-f]{64}$`)
 	discordSlug        = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,63}$`)
 )
@@ -73,17 +71,15 @@ var discordPriorityLabels = map[string]string{"high": "높음", "medium": "보�
 // DiscordSettings is the server-wide configuration. EndpointURL is the
 // address to paste into the Discord developer portal.
 type DiscordSettings struct {
-	Enabled         bool     `json:"enabled"`
-	PublicKey       string   `json:"public_key"`
-	AllowedGuildIDs []string `json:"allowed_guild_ids"`
-	UpdatedAt       string   `json:"updated_at,omitempty"`
-	EndpointURL     string   `json:"endpoint_url,omitempty"`
+	Enabled     bool   `json:"enabled"`
+	PublicKey   string `json:"public_key"`
+	UpdatedAt   string `json:"updated_at,omitempty"`
+	EndpointURL string `json:"endpoint_url,omitempty"`
 }
 
 type DiscordSettingsInput struct {
-	Enabled         bool     `json:"enabled"`
-	PublicKey       string   `json:"public_key"`
-	AllowedGuildIDs []string `json:"allowed_guild_ids"`
+	Enabled   bool   `json:"enabled"`
+	PublicKey string `json:"public_key"`
 }
 
 type DiscordLinkStatus struct {
@@ -269,12 +265,9 @@ func discordBool(opts []discordOption, name string) bool {
 
 func (s *Store) discordSettings(ctx context.Context, q Querier) (DiscordSettings, error) {
 	out, err := one[DiscordSettings](ctx, q, `SELECT jsonb_build_object('enabled',enabled,'public_key',public_key,
-		'allowed_guild_ids',to_jsonb(allowed_guild_ids),'updated_at',updated_at) FROM discord_settings`)
+		'updated_at',updated_at) FROM discord_settings`)
 	if errors.Is(err, sql.ErrNoRows) {
-		return DiscordSettings{AllowedGuildIDs: []string{}}, nil
-	}
-	if out.AllowedGuildIDs == nil {
-		out.AllowedGuildIDs = []string{}
+		return DiscordSettings{}, nil
 	}
 	return out, err
 }
@@ -295,28 +288,8 @@ func cleanDiscordSettings(in DiscordSettingsInput) (DiscordSettingsInput, error)
 	if in.PublicKey != "" && !discordPublicKeyRe.MatchString(in.PublicKey) {
 		return in, problem("INVALID_INPUT", "The public key is 64 hexadecimal characters (Discord developer portal → General Information → Public Key).")
 	}
-	seen := map[string]bool{}
-	guilds := []string{}
-	for _, g := range in.AllowedGuildIDs {
-		g = strings.TrimSpace(g)
-		if g == "" || seen[g] {
-			continue
-		}
-		if !discordGuildID.MatchString(g) {
-			return in, problem("INVALID_INPUT", "Server IDs are 17–20 digit numbers.")
-		}
-		seen[g] = true
-		guilds = append(guilds, g)
-	}
-	if len(guilds) > discordMaxGuilds {
-		return in, problem("INVALID_INPUT", fmt.Sprintf("At most %d servers can be allowed.", discordMaxGuilds))
-	}
-	in.AllowedGuildIDs = guilds
 	if in.Enabled && in.PublicKey == "" {
 		return in, problem("INVALID_INPUT", "Save the public key before turning Discord on.")
-	}
-	if in.Enabled && len(guilds) == 0 {
-		return in, problem("INVALID_INPUT", "Allow at least one Discord server before turning Discord on.")
 	}
 	return in, nil
 }
@@ -330,10 +303,10 @@ func (s *Store) SetDiscordSettings(ctx context.Context, actor Identity, in Disco
 	}
 	ctx = auditInput(ctx, map[string]any{"enabled": in.Enabled})
 	return s.Perform(ctx, actor, "update_discord_settings", "", false, true, func(tx *sql.Tx) (any, error) {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO discord_settings(singleton,enabled,public_key,allowed_guild_ids,updated_by,updated_at)
-			VALUES(true,$1,$2,$3,$4,clock_timestamp())
-			ON CONFLICT(singleton) DO UPDATE SET enabled=$1,public_key=$2,allowed_guild_ids=$3,updated_by=$4,updated_at=clock_timestamp()`,
-			in.Enabled, in.PublicKey, in.AllowedGuildIDs, actor.User.ID); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO discord_settings(singleton,enabled,public_key,updated_by,updated_at)
+			VALUES(true,$1,$2,$3,clock_timestamp())
+			ON CONFLICT(singleton) DO UPDATE SET enabled=$1,public_key=$2,updated_by=$3,updated_at=clock_timestamp()`,
+			in.Enabled, in.PublicKey, actor.User.ID); err != nil {
 			return nil, err
 		}
 		out, err := s.discordSettings(ctx, tx)
@@ -447,15 +420,6 @@ func (s *Store) ReceiveDiscordInteraction(ctx context.Context, req DiscordReques
 	}
 	if !fresh {
 		return discordResponse{}, problem("CONFLICT", "This interaction was already handled.")
-	}
-	allowed := false
-	for _, g := range settings.AllowedGuildIDs {
-		if g == ix.GuildID {
-			allowed = true
-		}
-	}
-	if !allowed {
-		return discordReply("이 Discord 서버에서는 사용할 수 없습니다. 관리자가 허용한 서버에서 사용하세요."), nil
 	}
 	user := ix.userID()
 	if !discordSnowflake.MatchString(user) {

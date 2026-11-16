@@ -4,7 +4,7 @@
 //  - discordLinkCard: any person links their own Discord account with a
 //    single-use code (내 계정).
 //  - discordAdminCard: a global administrator saves the application public key
-//    and the allowed servers (운영 현황). The public key is not a secret.
+//    and turns the commands on (운영 현황). The public key is not a secret.
 async function discordLinkCard(){
   const c=card('Discord 연결');
   let st;
@@ -22,15 +22,13 @@ async function discordLinkCard(){
 
 async function discordAdminCard(){
   const c=card('Discord 연동'),s=await api('/api/admin/discord');
-  c.append(el('p','Discord 슬래시 명령을 받는 설정입니다(요청·응답 방식, 봇 토큰은 서버에 저장하지 않습니다). 순서: ① 아래에 공개 키와 서버 ID를 저장하고 켭니다 ② Discord 개발자 포털 → General Information → Interactions Endpoint URL에 아래 주소를 입력합니다.','small muted'));
+  c.append(el('p','Discord 슬래시 명령을 받는 설정입니다(요청·응답 방식, 봇 토큰은 서버에 저장하지 않습니다). 순서: ① 아래에 공개 키를 저장하고 켭니다 ② Discord 개발자 포털 → General Information → Interactions Endpoint URL에 아래 주소를 입력합니다.','small muted'));
   c.append(el('p','Interactions Endpoint URL'),el('code',s.endpoint_url||''));
   const f=el('form');
   const key=field(f,'애플리케이션 공개 키 (Public Key, 64자리 16진수)','public_key','text',s.public_key||'');key.required=false;key.maxLength=64;key.autocomplete='off';
-  const guilds=el('textarea');guilds.name='allowed_guild_ids';guilds.rows=3;guilds.value=(s.allowed_guild_ids||[]).join('\n');
-  const gl=el('label','허용할 Discord 서버 ID (한 줄에 하나, 최대 20개)');gl.append(guilds);f.append(gl);
   const cl=el('label','켜기'),cb=el('input');cb.type='checkbox';cb.name='enabled';cb.checked=!!s.enabled;cl.prepend(cb);f.append(cl);
-  f.append(el('p','켜려면 공개 키와 서버를 하나 이상 저장해야 합니다. 허용하지 않은 서버에서는 명령이 동작하지 않습니다.','small muted'));
-  formSubmit(f,'저장',async()=>{await api('/api/admin/discord',{enabled:cb.checked,public_key:key.value.trim(),allowed_guild_ids:guilds.value.split(/\s+/).filter(Boolean)});notify('저장했습니다.');await render('overview');});
+  f.append(el('p','켜려면 공개 키를 저장해야 합니다. 봇이 들어 있는 모든 Discord 서버에서 명령을 쓸 수 있고, 연결(/kb link)한 사람만 데이터를 볼 수 있습니다.','small muted'));
+  formSubmit(f,'저장',async()=>{await api('/api/admin/discord',{enabled:cb.checked,public_key:key.value.trim()});notify('저장했습니다.');await render('overview');});
   c.append(f);
   if(s.updated_at)c.append(el('p','마지막 저장: '+new Date(s.updated_at).toLocaleString(),'small muted'));
   return c;
