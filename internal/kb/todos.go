@@ -23,7 +23,7 @@ const (
 )
 
 var (
-	todoStatuses   = []string{"not_started", "in_progress", "completed", "idea"}
+	todoStatuses   = []string{"not_started", "in_progress", "in_review", "completed", "idea"}
 	todoPriorities = []string{"high", "medium", "low"}
 )
 
@@ -65,7 +65,7 @@ type TodoPullRequest struct {
 
 type ListTodosInput struct {
 	ProjectID  string `json:"project_id"`
-	Status     string `json:"status,omitempty" jsonschema:"not_started, in_progress, completed or idea; omit for all"`
+	Status     string `json:"status,omitempty" jsonschema:"not_started, in_progress, in_review, completed or idea; omit for all"`
 	Priority   string `json:"priority,omitempty" jsonschema:"high, medium or low; omit for all"`
 	Category   string `json:"category,omitempty" jsonschema:"Exact category (case-insensitive); omit for all"`
 	AssigneeID string `json:"assignee_id,omitempty"`
@@ -79,7 +79,7 @@ type SaveTodoInput struct {
 	ExpectedRevision int    `json:"expected_revision,omitempty"`
 	Title            string `json:"title"`
 	Body             string `json:"body,omitempty"`
-	Status           string `json:"status,omitempty" jsonschema:"not_started (default), in_progress, completed or idea"`
+	Status           string `json:"status,omitempty" jsonschema:"not_started (default), in_progress, in_review, completed or idea"`
 	Priority         string `json:"priority,omitempty" jsonschema:"high, medium (default) or low"`
 	Category         string `json:"category,omitempty" jsonschema:"Free label such as Work or Personal, up to 50 characters"`
 	Progress         *int   `json:"progress,omitempty" jsonschema:"0-100; omit for no progress bar"`
@@ -90,7 +90,7 @@ type SaveTodoInput struct {
 type MoveTodoInput struct {
 	ProjectID string `json:"project_id"`
 	TodoID    string `json:"todo_id"`
-	Status    string `json:"status" jsonschema:"Target column: not_started, in_progress, completed or idea"`
+	Status    string `json:"status" jsonschema:"Target column: not_started, in_progress, in_review, completed or idea"`
 	Priority  string `json:"priority" jsonschema:"Target row: high, medium or low"`
 	BeforeID  string `json:"before_id,omitempty" jsonschema:"Place before this to-do in the target cell; omit to place last"`
 }
@@ -135,7 +135,7 @@ func validateTodo(in *SaveTodoInput) error {
 		in.Status = "not_started"
 	}
 	if !oneOf(in.Status, todoStatuses) {
-		return problem("INVALID_INPUT", "status must be not_started, in_progress, completed or idea.")
+		return problem("INVALID_INPUT", "status must be not_started, in_progress, in_review, completed or idea.")
 	}
 	if in.Priority == "" {
 		in.Priority = "medium"
@@ -165,7 +165,7 @@ func listTodos(ctx context.Context, tx *sql.Tx, a Identity, in ListTodosInput) (
 		return nil, err
 	}
 	if in.Status != "" && !oneOf(in.Status, todoStatuses) {
-		return nil, problem("INVALID_INPUT", "status must be not_started, in_progress, completed or idea.")
+		return nil, problem("INVALID_INPUT", "status must be not_started, in_progress, in_review, completed or idea.")
 	}
 	if in.Priority != "" && !oneOf(in.Priority, todoPriorities) {
 		return nil, problem("INVALID_INPUT", "priority must be high, medium or low.")
@@ -192,7 +192,7 @@ func listTodos(ctx context.Context, tx *sql.Tx, a Identity, in ListTodosInput) (
 		AND ($2='' OR t.status=$2) AND ($3='' OR t.priority=$3) AND ($4='' OR lower(t.category)=lower($4))
 		AND ($5='' OR t.assignee_id=$5::uuid)
 		ORDER BY CASE t.priority WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END,
-		CASE t.status WHEN 'not_started' THEN 0 WHEN 'in_progress' THEN 1 WHEN 'completed' THEN 2 ELSE 3 END,
+		CASE t.status WHEN 'not_started' THEN 0 WHEN 'in_progress' THEN 1 WHEN 'in_review' THEN 2 WHEN 'completed' THEN 3 ELSE 4 END,
 		t.position, t.created_at, t.id LIMIT $6`, p.ID, in.Status, in.Priority, strings.TrimSpace(in.Category), in.AssigneeID, limit)
 }
 
@@ -302,7 +302,7 @@ func moveTodo(ctx context.Context, tx *sql.Tx, a Identity, in MoveTodoInput) (an
 		return nil, err
 	}
 	if !oneOf(in.Status, todoStatuses) {
-		return nil, problem("INVALID_INPUT", "status must be not_started, in_progress, completed or idea.")
+		return nil, problem("INVALID_INPUT", "status must be not_started, in_progress, in_review, completed or idea.")
 	}
 	if !oneOf(in.Priority, todoPriorities) {
 		return nil, problem("INVALID_INPUT", "priority must be high, medium or low.")
@@ -381,7 +381,7 @@ func deleteTodo(ctx context.Context, tx *sql.Tx, a Identity, in TodoRef) (any, e
 }
 
 func registerTodoTools(t Tools, s *Store) {
-	add(t, s, "list_todos", "List a project's to-dos (할 일) for the board: each has status (not_started, in_progress, completed, idea), priority (high, medium, low), category, optional progress 0-100, assignee and due date, ordered by priority, status and board position. Filter by status, priority, category, assignee_id or mine. Up to 500.", false, func(in ListTodosInput) string { return in.ProjectID }, listTodos)
+	add(t, s, "list_todos", "List a project's to-dos (할 일) for the board: each has status (not_started, in_progress, in_review, completed, idea), priority (high, medium, low), category, optional progress 0-100, assignee and due date, ordered by priority, status and board position. Filter by status, priority, category, assignee_id or mine. Up to 500.", false, func(in ListTodosInput) string { return in.ProjectID }, listTodos)
 	add(t, s, "save_todo", "Add a to-do, or change one with todo_id and expected_revision. Changing replaces every field, so send the current values you want to keep (omitted progress, assignee_id and due_date are cleared). Editor access required.", true, func(in SaveTodoInput) string { return in.ProjectID }, saveTodo)
 	add(t, s, "move_todo", "Move a to-do to a status column and priority row on the board, before before_id or last. Moving to completed fills an existing progress bar. Editor access required.", true, func(in MoveTodoInput) string { return in.ProjectID }, moveTodo)
 	add(t, s, "delete_todo", "Delete a to-do permanently. Editor access required.", true, func(in TodoRef) string { return in.ProjectID }, deleteTodo)

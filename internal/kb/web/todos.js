@@ -3,7 +3,7 @@
 // 할 일 보드: project to-dos in status columns × priority rows. Cards drag
 // between cells (move_todo) with the mouse or, after a long press, a finger,
 // and open an edit dialog (save_todo/delete_todo).
-const todoStatuses=[['not_started','시작 전'],['in_progress','진행 중'],['completed','완료'],['idea','아이디어']];
+const todoStatuses=[['not_started','시작 전'],['in_progress','진행 중'],['in_review','검토대기'],['completed','완료'],['idea','아이디어']];
 const todoPriorities=[['high','높음'],['medium','보통'],['low','낮음']];
 const todoStatusLabel=Object.fromEntries(todoStatuses), todoPriorityLabel=Object.fromEntries(todoPriorities);
 const todoCollapseKey='kb.todo.collapsed';
@@ -38,7 +38,8 @@ async function todosPage(){
   bar.append(filters);
   if(canWrite)bar.append(btn('+ 새 할 일',()=>todoDialog(root,project,ctx,{status:'not_started',priority:'medium'}),'primary'));
   const board=el('div',undefined,'todo-board');
-  root.append(bar,board);
+  const issuePanel=el('section',undefined,'todo-issues');
+  root.append(bar,board,issuePanel);
   const ctx={todos:[],members:[],reload:refresh};
   let generation=0;
   const collapsed=todoCollapsed();
@@ -91,6 +92,7 @@ async function todosPage(){
     ]);
     if(ticket!==generation)return;
     ctx.todos=todos;ctx.members=members;
+    drawIssuePanel(project,issuePanel,todos);
     const cats=[...new Set(todos.map(t=>t.category).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
     const chosen=category.value;
     category.replaceChildren(new Option('모든 분류',''),...cats.map(c=>new Option(c,c)));
@@ -302,6 +304,32 @@ async function todosPage(){
   mine.addEventListener('change',draw);
   await refresh();
   return root;
+}
+
+// Open questions and issues under the board, so they are visible next to the
+// cards. Failures leave the board itself untouched.
+async function drawIssuePanel(project,panel,todos){
+  try{
+    const issues=await tool('list_issues',{project_id:project.id,limit:30});
+    const byTodo=new Map(todos.map(t=>[t.id,t]));
+    const blocking=issues.filter(i=>i.blocking&&i.status==='open').length;
+    const head=el('div',undefined,'todo-issues-head');
+    head.append(el('h2','열린 이슈 · 질의'),el('span',`${issues.length}건${issues.length>=30?' 이상':''}`+(blocking?` · 작업 보류 ${blocking}건`:''),'small muted'));
+    head.append(btn('이슈 · 질의 화면으로',()=>render('issues'),'secondary'));
+    const list=el('ul',undefined,'todo-issue-list');
+    if(!issues.length)list.append(el('li','열린 이슈·질의가 없습니다.','muted'));
+    for(const i of issues){
+      const li=el('li');
+      li.append(el('span',issueKindLabels[i.kind]||i.kind,'pill'),document.createTextNode(' '),el('span',issueStatusLabels[i.status]||i.status,'pill issue-'+i.status));
+      if(i.blocking&&i.status==='open')li.append(document.createTextNode(' '),el('span','작업 보류','pill error'));
+      li.append(document.createTextNode(' '+i.title+' '));
+      const t=i.todo||(i.todo_id&&byTodo.get(i.todo_id));
+      const meta=[t&&('할 일 · '+t.title),'담당 '+(i.assignee_name||'미지정')].filter(Boolean).join(' · ');
+      li.append(el('span',meta,'small muted'));
+      list.append(li);
+    }
+    panel.replaceChildren(head,list);
+  }catch(e){panel.replaceChildren(el('p','이슈·질의를 불러오지 못했습니다: '+e.message,'small muted'));}
 }
 
 // Linked AI tasks (start_task todo_id / link_task_todo) and their latest pull request.
