@@ -139,6 +139,12 @@ type TaskContext struct {
 	RelatedProjects []SearchedProject `json:"related_projects,omitempty"`
 	RelatedSources  []SearchHit       `json:"related_sources,omitempty"`
 	RelatedWarning  string            `json:"related_warning,omitempty"`
+	// UpstreamProjects are the approved upstreams this project follows (design,
+	// planning, specs): read-only sources of truth. UpstreamSources are their
+	// current active knowledge for the task, each naming its project.
+	UpstreamProjects []SearchedProject `json:"upstream_projects,omitempty"`
+	UpstreamSources  []SearchHit       `json:"upstream_sources,omitempty"`
+	UpstreamWarning  string            `json:"upstream_warning,omitempty"`
 }
 
 type SearchResult struct {

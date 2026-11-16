@@ -189,7 +189,7 @@ func registerAttachmentTools(t Tools, s *Store) {
 		return s.attachmentUsage(ctx, tx, in.ProjectID)
 	})
 	add(t, s, "list_attachments", "List project files and upload status. Optional document_id or issue_id filters files linked to that document or issue.", false, func(in ListAttachmentsInput) string { return in.ProjectID }, func(ctx context.Context, tx *sql.Tx, a Identity, in ListAttachmentsInput) (any, error) {
-		if _, err := projectAccess(ctx, tx, a.User.ID, in.ProjectID, false); err != nil {
+		if _, err := projectReadAccess(ctx, tx, a.User.ID, in.ProjectID); err != nil {
 			return nil, err
 		}
 		limit, err := pagination(in.Limit, in.Offset)
@@ -241,7 +241,11 @@ func registerAttachmentTools(t Tools, s *Store) {
 	})
 }
 func readAttachment(ctx context.Context, tx *sql.Tx, a Identity, in AttachmentInput, write bool) (Attachment, error) {
-	if _, err := projectAccess(ctx, tx, a.User.ID, in.ProjectID, write); err != nil {
+	access := func() error { _, err := projectAccess(ctx, tx, a.User.ID, in.ProjectID, true); return err }
+	if !write {
+		access = func() error { _, err := projectReadAccess(ctx, tx, a.User.ID, in.ProjectID); return err }
+	}
+	if err := access(); err != nil {
 		return Attachment{}, err
 	}
 	if err := validID(in.AttachmentID); err != nil {

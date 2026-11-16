@@ -11,7 +11,7 @@ import (
 
 func (s *Store) searchKnowledge(ctx context.Context, tx *sql.Tx, actor Identity, in SearchInput) (SearchResult, error) {
 	// Authorization precedes even query embedding, so unauthorized requests never invoke the model.
-	if _, err := projectAccess(ctx, tx, actor.User.ID, in.ProjectID, false); err != nil {
+	if _, err := projectReadAccess(ctx, tx, actor.User.ID, in.ProjectID); err != nil {
 		return SearchResult{Hits: []SearchHit{}}, err
 	}
 	return s.searchProjects(ctx, tx, []string{in.ProjectID}, in)

@@ -174,6 +174,7 @@ async function issuesPage() {
     const c=card(), head=el('div',undefined,'issue-head');
     head.append(el('span',issueKindLabels[i.kind],'pill'),el('span',issueStatusLabels[i.status],'pill issue-'+i.status));
     if (i.blocking&&i.status==='open') head.append(el('span','작업 보류','pill error'));
+    if (i.origin_project_name) head.append(el('span','하위 프로젝트 · '+i.origin_project_name,'pill'));
     head.append(el('h2',i.title));
     c.append(head);
     const meta=[i.area_name&&('영역 '+i.area_name),'담당 '+(i.assignee_name||'미지정'),'작성 '+i.created_by_name,new Date(i.updated_at).toLocaleString()];

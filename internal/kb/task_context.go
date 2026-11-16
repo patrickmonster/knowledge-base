@@ -49,14 +49,31 @@ func (s *Store) taskContext(ctx context.Context, tx *sql.Tx, a Identity, in Cont
 	if out.Todos, err = taskTodos(ctx, tx, in.ProjectID, in.Task); err != nil {
 		return TaskContext{}, err
 	}
-	// Related projects get a reserved quarter of the excerpt budget so the
-	// total stays within excerpt_budget and this project's sources keep most
-	// of it.
+	upstreams, err := approvedUpstreams(ctx, tx, in.ProjectID)
+	if err != nil {
+		return TaskContext{}, err
+	}
+	// An upstream always comes along as upstream_sources; naming it again in
+	// related_project_ids would only repeat its material.
+	related = slices.DeleteFunc(related, func(id string) bool {
+		return slices.ContainsFunc(upstreams, func(p SearchedProject) bool { return p.ID == id })
+	})
+	// Related and upstream projects each get a reserved quarter of the excerpt
+	// budget so the total stays within excerpt_budget and this project's
+	// sources keep the rest.
 	budget := in.ExcerptBudget
 	if len(related) > 0 {
 		budget -= in.ExcerptBudget / 4
 	}
+	if len(upstreams) > 0 {
+		budget -= in.ExcerptBudget / 4
+	}
 	out.Sources, out.Truncated = fitExcerpts(capHistorySources(results.Hits, taskSourceLimit, maxTaskHistorySources), budget)
+	if len(upstreams) > 0 {
+		if err := s.addUpstreamSources(ctx, tx, &out, upstreams, in.ExcerptBudget/4); err != nil {
+			return TaskContext{}, err
+		}
+	}
 	if len(related) > 0 {
 		if err := s.addRelatedSources(ctx, tx, a, &out, related, in.ExcerptBudget/4); err != nil {
 			return TaskContext{}, err
@@ -84,6 +101,39 @@ func (s *Store) addRelatedSources(ctx context.Context, tx *sql.Tx, a Identity, o
 		out.RelatedWarning = res.Warning
 	}
 	out.Guidance += " related_sources come from other projects (see project_slug); they do not describe this project, so prefer sources when they disagree and confirm before applying them here."
+	return nil
+}
+
+// addUpstreamSources searches the approved upstreams with the task text. The
+// caller is a member of the task's project (taskContext checked it) and the
+// upstream approved that project, so no membership in the upstream is needed;
+// for the same reason a key scoped to the task's project reaches them here.
+// Only active documents count: the upstream's current knowledge, not its drafts.
+func (s *Store) addUpstreamSources(ctx context.Context, tx *sql.Tx, out *TaskContext, upstreams []SearchedProject, budget int) error {
+	ids := make([]string, len(upstreams))
+	byID := map[string]SearchedProject{}
+	for i, p := range upstreams {
+		ids[i] = p.ID
+		byID[p.ID] = p
+	}
+	res, err := s.searchProjects(ctx, tx, ids, SearchInput{Query: out.Task, Limit: upstreamSourceLimit * 2, Status: "active"})
+	if err != nil {
+		return err
+	}
+	if res.Hits, err = demoteSuperseded(ctx, tx, res.Hits); err != nil {
+		return err
+	}
+	markRecheck(res.Hits, time.Now())
+	for i := range res.Hits {
+		p := byID[res.Hits[i].ProjectID]
+		res.Hits[i].ProjectSlug, res.Hits[i].ProjectName = p.Slug, p.Name
+	}
+	out.UpstreamProjects = upstreams
+	var truncated bool
+	out.UpstreamSources, truncated = fitExcerpts(capHistorySources(res.Hits, upstreamSourceLimit, maxUpstreamHistorySources), budget)
+	out.Truncated = out.Truncated || truncated
+	out.UpstreamWarning = res.Warning
+	out.Guidance += " upstream_sources come from upstream projects this project follows (see project_slug): they are the source of truth for what they cover (for example design or planning), so follow them over this project's sources when they disagree. They are read-only here: do not edit upstream documents from this work; report a problem with create_issue(project_id=<upstream id>, from_project_id=<this project>)."
 	return nil
 }
 
@@ -148,6 +198,11 @@ const (
 	// related projects, at most maxRelatedHistorySources of them history.
 	relatedSourceLimit       = 4
 	maxRelatedHistorySources = 1
+	// upstreamSourceLimit is the number of upstream_sources across all
+	// upstreams. History is excluded: downstreams need the upstream's current
+	// knowledge, not how the upstream got there.
+	upstreamSourceLimit       = 4
+	maxUpstreamHistorySources = 0
 	// taskSourceLimit is the number of sources start_task and get_task_context
 	// return; the search asks for twice as many so history hits can be capped.
 	taskSourceLimit = 8

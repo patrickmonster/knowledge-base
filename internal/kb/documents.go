@@ -68,7 +68,7 @@ type DocumentRef struct {
 }
 
 func getDocument(ctx context.Context, tx *sql.Tx, actor Identity, in DocumentRef) (Document, error) {
-	if _, err := projectAccess(ctx, tx, actor.User.ID, in.ProjectID, false); err != nil {
+	if _, err := projectReadAccess(ctx, tx, actor.User.ID, in.ProjectID); err != nil {
 		return Document{}, err
 	}
 	if err := validID(in.DocumentID); err != nil {
@@ -250,7 +250,7 @@ func parseListTime(label, value string, upper bool) (*time.Time, error) {
 }
 
 func listDocuments(ctx context.Context, tx *sql.Tx, actor Identity, in ListInput) ([]map[string]any, error) {
-	if _, err := projectAccess(ctx, tx, actor.User.ID, in.ProjectID, false); err != nil {
+	if _, err := projectReadAccess(ctx, tx, actor.User.ID, in.ProjectID); err != nil {
 		return nil, err
 	}
 	limit, err := pagination(in.Limit, in.Offset)

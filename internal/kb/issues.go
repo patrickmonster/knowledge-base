@@ -73,6 +73,10 @@ type Issue struct {
 	DocumentID     *string  `json:"document_id"`
 	TaskID         *string  `json:"task_id"`
 	TodoID         *string  `json:"todo_id"`
+	// OriginProjectID is the downstream project an upstream issue came from
+	// (create_issue from_project_id); OriginProjectName names it.
+	OriginProjectID   *string `json:"origin_project_id"`
+	OriginProjectName *string `json:"origin_project_name,omitempty"`
 	// Todo is the to-do on the board this item belongs to.
 	Todo                *IssueTodo     `json:"todo,omitempty"`
 	KnowledgeDocumentID *string        `json:"knowledge_document_id"`
@@ -128,7 +132,10 @@ type CreateIssueInput struct {
 	DocumentID string   `json:"document_id,omitempty" jsonschema:"Related knowledge document"`
 	TaskID     string   `json:"task_id,omitempty" jsonschema:"start_task run that raised this question; its linked to-do is used when todo_id is omitted"`
 	TodoID     string   `json:"todo_id,omitempty" jsonschema:"To-do on the board (list_todos) this question or issue belongs to"`
-	RequestKey string   `json:"request_key,omitempty" jsonschema:"Optional idempotency key; retries with the same key and inputs return the same issue"`
+	// FromProjectID marks an issue raised on an upstream project from a
+	// downstream that follows it.
+	FromProjectID string `json:"from_project_id,omitempty" jsonschema:"When project_id is an upstream this project follows (design, planning): the downstream project the problem was found in. Required when you are not a member of the upstream and follow it through more than one project"`
+	RequestKey    string `json:"request_key,omitempty" jsonschema:"Optional idempotency key; retries with the same key and inputs return the same issue"`
 }
 
 type IssueListInput struct {
@@ -140,8 +147,10 @@ type IssueListInput struct {
 	CreatedBy  string `json:"created_by,omitempty"`
 	Query      string `json:"query,omitempty" jsonschema:"Words matched against title, body, answer, area and tags"`
 	TodoID     string `json:"todo_id,omitempty" jsonschema:"Only items linked to this to-do"`
-	Limit      int    `json:"limit,omitempty"`
-	Offset     int    `json:"offset,omitempty"`
+	// OriginProjectID filters issues raised from one downstream project.
+	OriginProjectID string `json:"origin_project_id,omitempty" jsonschema:"Only items raised from this downstream project (create_issue from_project_id)"`
+	Limit           int    `json:"limit,omitempty"`
+	Offset          int    `json:"offset,omitempty"`
 }
 
 type IssueRef struct {
@@ -178,7 +187,8 @@ type UpdateIssueInput struct {
 const issueSelect = `SELECT to_jsonb(i)||jsonb_build_object('area_name',a.name,'assignee_name',ua.name,'created_by_name',uc.name,'answered_by_name',ub.name,
 	'comment_count',(SELECT count(*) FROM issue_comments c WHERE c.issue_id=i.id),
 	'attachment_count',(SELECT count(*) FROM attachments f WHERE f.issue_id=i.id AND f.status='ready'),'citation','issue://'||i.project_id||'/'||i.id,
-	'todo',(SELECT jsonb_build_object('id',t.id,'title',t.title,'status',t.status) FROM todos t WHERE t.id=i.todo_id))
+	'todo',(SELECT jsonb_build_object('id',t.id,'title',t.title,'status',t.status) FROM todos t WHERE t.id=i.todo_id),
+	'origin_project_name',(SELECT op.name FROM projects op WHERE op.id=i.origin_project_id))
 	FROM issues i LEFT JOIN work_areas a ON a.id=i.area_id LEFT JOIN users ua ON ua.id=i.assignee_id
 	JOIN users uc ON uc.id=i.created_by LEFT JOIN users ub ON ub.id=i.answered_by`
 
@@ -362,7 +372,8 @@ func belongsToProject(ctx context.Context, q Querier, table, id, projectID strin
 }
 
 func createIssue(ctx context.Context, tx *sql.Tx, a Identity, in CreateIssueInput) (any, error) {
-	if _, err := projectAccess(ctx, tx, a.User.ID, in.ProjectID, true); err != nil {
+	origin, err := issueAccess(ctx, tx, a, in)
+	if err != nil {
 		return nil, err
 	}
 	if in.Kind == "" {
@@ -424,10 +435,10 @@ func createIssue(ctx context.Context, tx *sql.Tx, a Identity, in CreateIssueInpu
 		in.TodoID = todo.String
 	}
 	id := uuid.NewString()
-	result, err := tx.ExecContext(ctx, `INSERT INTO issues(id,project_id,kind,title,body,blocking,area_id,assignee_id,tags,document_id,task_id,request_key,created_by,todo_id)
-		VALUES($1,$2,$3,$4,$5,$6,NULLIF($7,'')::uuid,NULLIF($8,'')::uuid,$9,NULLIF($10,'')::uuid,NULLIF($11,'')::uuid,NULLIF($12,''),$13,NULLIF($14,'')::uuid)
+	result, err := tx.ExecContext(ctx, `INSERT INTO issues(id,project_id,kind,title,body,blocking,area_id,assignee_id,tags,document_id,task_id,request_key,created_by,todo_id,origin_project_id)
+		VALUES($1,$2,$3,$4,$5,$6,NULLIF($7,'')::uuid,NULLIF($8,'')::uuid,$9,NULLIF($10,'')::uuid,NULLIF($11,'')::uuid,NULLIF($12,''),$13,NULLIF($14,'')::uuid,NULLIF($15,'')::uuid)
 		ON CONFLICT(project_id,created_by,request_key) DO NOTHING`,
-		id, in.ProjectID, in.Kind, in.Title, in.Body, in.Blocking, in.AreaID, in.AssigneeID, tags, in.DocumentID, in.TaskID, in.RequestKey, a.User.ID, in.TodoID)
+		id, in.ProjectID, in.Kind, in.Title, in.Body, in.Blocking, in.AreaID, in.AssigneeID, tags, in.DocumentID, in.TaskID, in.RequestKey, a.User.ID, in.TodoID, origin)
 	if err != nil {
 		return nil, err
 	}
@@ -455,8 +466,54 @@ func createIssue(ctx context.Context, tx *sql.Tx, a Identity, in CreateIssueInpu
 	return one[Issue](ctx, tx, issueSelect+` WHERE i.id=$1`, id)
 }
 
+// issueAccess authorizes create_issue and returns the origin project to
+// record. Members with write access may create issues as before; from_project_id
+// must then name an approved downstream of the project that they belong to.
+// Members of an approved downstream who are not members of the upstream may
+// also create issues there, but only plain reports: no task or to-do of the
+// upstream, which they cannot see.
+func issueAccess(ctx context.Context, tx *sql.Tx, a Identity, in CreateIssueInput) (string, error) {
+	_, err := projectAccess(ctx, tx, a.User.ID, in.ProjectID, true)
+	member := err == nil
+	if err != nil && errorCode(err) != "NOT_FOUND" {
+		return "", err
+	}
+	if in.FromProjectID != "" {
+		if err := validID(in.FromProjectID); err != nil {
+			return "", err
+		}
+	}
+	via, verr := readerVia(ctx, tx, a.User.ID, in.ProjectID)
+	if verr != nil {
+		return "", verr
+	}
+	if !member {
+		if len(via) == 0 {
+			return "", err
+		}
+		if in.TaskID != "" || in.TodoID != "" {
+			return "", problem("INVALID_INPUT", "task_id and todo_id belong to the upstream's members; describe the downstream work in the body instead.")
+		}
+		if in.FromProjectID == "" {
+			if len(via) > 1 {
+				return "", problem("INVALID_INPUT", "from_project_id is required: you follow this project through more than one project.")
+			}
+			return via[0], nil
+		}
+	}
+	if in.FromProjectID == "" {
+		return "", nil
+	}
+	for _, id := range via {
+		if id == in.FromProjectID {
+			return id, nil
+		}
+	}
+	return "", problem("INVALID_INPUT", "from_project_id must be a project you belong to that follows this project (list_project_upstreams).")
+}
+
 func getIssue(ctx context.Context, tx *sql.Tx, a Identity, in IssueRef, comments bool) (Issue, error) {
-	if _, err := projectAccess(ctx, tx, a.User.ID, in.ProjectID, false); err != nil {
+	if _, err := projectReadAccess(ctx, tx, a.User.ID, in.ProjectID); err != nil {
 		return Issue{}, err
 	}
 	if err := validID(in.IssueID); err != nil {
@@ -501,7 +558,7 @@ func getIssue(ctx context.Context, tx *sql.Tx, a Identity, in IssueRef, comments
 }
 
 func listIssues(ctx context.Context, tx *sql.Tx, a Identity, in IssueListInput) (any, error) {
-	if _, err := projectAccess(ctx, tx, a.User.ID, in.ProjectID, false); err != nil {
+	if _, err := projectReadAccess(ctx, tx, a.User.ID, in.ProjectID); err != nil {
 		return nil, err
 	}
 	limit, err := pagination(in.Limit, in.Offset)
@@ -518,7 +575,7 @@ func listIssues(ctx context.Context, tx *sql.Tx, a Identity, in IssueListInput) 
 	if in.Kind != "" && in.Kind != "question" && in.Kind != "issue" {
 		return nil, problem("INVALID_INPUT", "kind must be question or issue.")
 	}
-	for _, id := range []string{in.AreaID, in.AssigneeID, in.CreatedBy, in.TodoID} {
+	for _, id := range []string{in.AreaID, in.AssigneeID, in.CreatedBy, in.TodoID, in.OriginProjectID} {
 		if id != "" {
 			if err := validID(id); err != nil {
 				return nil, err
@@ -532,9 +589,28 @@ func listIssues(ctx context.Context, tx *sql.Tx, a Identity, in IssueListInput) 
 	return many[Issue](ctx, tx, issueSelect+` WHERE i.project_id=$1 AND i.status=ANY($2)
 		AND ($3='' OR i.kind=$3) AND ($4='' OR i.area_id=NULLIF($4,'')::uuid) AND ($5='' OR i.assignee_id=NULLIF($5,'')::uuid)
 		AND ($6='' OR i.created_by=NULLIF($6,'')::uuid) AND ($10='' OR i.todo_id=NULLIF($10,'')::uuid)
+		AND ($11='' OR i.origin_project_id=NULLIF($11,'')::uuid)
 		AND NOT EXISTS (SELECT 1 FROM unnest($7::text[]) t WHERE (i.title||' '||i.body||' '||i.answer||' '||coalesce(a.name,'')||' '||array_to_string(i.tags,' ')) NOT ILIKE '%'||t||'%')
 		ORDER BY (i.status='open' AND i.blocking) DESC, i.updated_at DESC, i.id LIMIT $8 OFFSET $9`,
-		in.ProjectID, statuses, in.Kind, in.AreaID, in.AssigneeID, in.CreatedBy, terms, limit, in.Offset, in.TodoID)
+		in.ProjectID, statuses, in.Kind, in.AreaID, in.AssigneeID, in.CreatedBy, terms, limit, in.Offset, in.TodoID, in.OriginProjectID)
+}
+
+func lockOwnUpstreamIssue(ctx context.Context, tx *sql.Tx, a Identity, projectID, issueID string) (Issue, error) {
+	p, err := projectReadAccess(ctx, tx, a.User.ID, projectID)
+	if err != nil {
+		return Issue{}, err
+	}
+	if p.Role != upstreamReaderRole {
+		return Issue{}, notFound(sql.ErrNoRows)
+	}
+	if err := validID(issueID); err != nil {
+		return Issue{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `SELECT 1 FROM issues WHERE id=$1 AND project_id=$2 FOR UPDATE`, issueID, projectID); err != nil {
+		return Issue{}, err
+	}
+	issue, err := one[Issue](ctx, tx, issueSelect+` WHERE i.id=$1 AND i.project_id=$2 AND i.created_by=$3`, issueID, projectID, a.User.ID)
+	return issue, notFound(err)
 }
 
 func lockIssue(ctx context.Context, tx *sql.Tx, a Identity, projectID, issueID string) (Issue, error) {
@@ -597,6 +673,11 @@ func commentIssue(ctx context.Context, tx *sql.Tx, a Identity, in CommentIssueIn
 		return nil, err
 	}
 	issue, err := lockIssue(ctx, tx, a, in.ProjectID, in.IssueID)
+	if errorCode(err) == "NOT_FOUND" {
+		// A downstream member who reads this project through an upstream link
+		// may follow up on the issues they raised here.
+		issue, err = lockOwnUpstreamIssue(ctx, tx, a, in.ProjectID, in.IssueID)
+	}
 	if err != nil {
 		return nil, err
 	}
