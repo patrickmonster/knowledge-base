@@ -91,3 +91,6 @@ var ProjectRepositories string
 
 //go:embed 030_search_thresholds.sql
 var SearchThresholds string
+
+//go:embed 031_todo_import.sql
+var TodoImport string

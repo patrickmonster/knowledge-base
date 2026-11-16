@@ -15,6 +15,8 @@ import (
 // web console or a writable MCP key.
 const (
 	maxTodoList = 500
+	// maxProjectTodos caps the to-dos one project holds.
+	maxProjectTodos = 5000
 	// todoGap spaces positions so a card can be dropped between two others
 	// without renumbering the cell; renumbering happens once gaps run out.
 	todoGap = 1024.0
@@ -252,7 +254,7 @@ func saveTodo(ctx context.Context, tx *sql.Tx, a Identity, in SaveTodoInput) (an
 		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM todos WHERE project_id=$1`, p.ID).Scan(&count); err != nil {
 			return nil, err
 		}
-		if count >= 5000 {
+		if count >= maxProjectTodos {
 			return nil, problem("QUOTA_EXCEEDED", "A project can hold at most 5000 to-dos; delete finished ones first.")
 		}
 		pos, err := lastPosition(ctx, tx, p.ID, in.Status, in.Priority, "")

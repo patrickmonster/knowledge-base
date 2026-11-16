@@ -10,9 +10,9 @@ async function portability(project) {
   exp.append(el('p','백업을 보조하거나 다른 서버·프로젝트로 옮길 때 사용합니다. 정기 백업(DB 볼륨 백업)을 대신하지 않습니다.','muted'));
   const links=el('div',undefined,'actions');
   for (const [label,query,hint] of [
-    ['JSON (버전 기록 포함)','format=json','문서 전체 버전, 관계, 공통 작업 영역, 이슈·질의와 댓글'],
+    ['JSON (버전 기록 포함)','format=json','문서 전체 버전, 관계, 할 일, 공통 작업 영역, 이슈·질의와 댓글'],
     ['JSON (현재 버전만)','format=json&revisions=false','파일이 작아집니다'],
-    ['Markdown (zip)','format=markdown','문서별 .md 파일 + 색인 README + 가져오기용 export.json'],
+    ['Markdown (zip)','format=markdown','문서별 .md 파일 + 할 일 목록(todos.md) + 색인 README + 가져오기용 export.json'],
   ]) {
     const a=el('a',label,'button-link');a.href=base+'/export?'+query;a.setAttribute('download','');a.title=hint;links.append(a);
   }
@@ -23,8 +23,8 @@ async function portability(project) {
   if (project.role!=='owner') {
     imp.append(el('p','가져오기는 프로젝트 소유자만 할 수 있습니다.','small muted'));
   } else {
-    imp.append(el('p','이 서버에서 내보낸 JSON 또는 Markdown zip을 이 프로젝트에 가져옵니다. 문서와 문서 관계를 새로 만들고, 같은 파일을 다시 가져오면 이미 가져온 문서는 건너뜁니다.','muted'));
-    imp.append(el('p','각 문서는 현재 내용으로 첫 버전이 만들어지며 작성자는 가져온 사람으로 기록됩니다. 공통 작업 영역·이슈는 원본 서버 사용자를 참조하므로 가져오지 않습니다. 가져온 문서는 임베딩 대기열에 들어가 검색 준비에 시간이 걸릴 수 있습니다. 최대 32 MiB, 문서 5,000개.','small muted'));
+    imp.append(el('p','이 서버에서 내보낸 JSON 또는 Markdown zip을 이 프로젝트에 가져옵니다. 문서, 문서 관계, 할 일을 새로 만들고, 같은 파일을 다시 가져오면 이미 가져온 문서와 할 일은 건너뜁니다.','muted'));
+    imp.append(el('p','각 문서는 현재 내용으로 첫 버전이 만들어지며 작성자는 가져온 사람으로 기록됩니다. 할 일은 보드 위치·분류·진행률·마감일을 유지하되 담당자와 작업·PR·질의 연결은 빼고 가져옵니다. 공통 작업 영역·이슈는 원본 서버 사용자를 참조하므로 가져오지 않습니다. 가져온 문서는 임베딩 대기열에 들어가 검색 준비에 시간이 걸릴 수 있습니다. 최대 32 MiB, 문서 5,000개.','small muted'));
     const f=el('form'), l=el('label','내보낸 파일 (.json 또는 .zip)'), file=el('input');
     file.type='file';file.accept='.json,.zip,application/json,application/zip';file.required=true;l.append(file);f.append(l);
     const out=el('div');
@@ -38,8 +38,8 @@ async function portability(project) {
       let body;try{body=await response.json();}catch{throw Error('가져오기 결과를 읽지 못했습니다.');}
       if (!response.ok) throw Error(body.error?.message||'가져오지 못했습니다.');
       const r=body.data;
-      out.replaceChildren(table(['항목','건수'],[['새로 만든 문서',r.documents_created],['이미 있어 건너뛴 문서',r.documents_skipped],['만든 관계',r.links_created],['건너뛴 관계',r.links_skipped],['가져오지 않은 영역',r.work_areas_ignored],['가져오지 않은 이슈·질의',r.issues_ignored]]),...r.warnings.map(w=>el('p',w,'small muted')));
-      notify(`문서 ${r.documents_created}건을 가져왔습니다.`);f.reset();refreshReviewBadge();
+      out.replaceChildren(table(['항목','건수'],[['새로 만든 문서',r.documents_created],['이미 있어 건너뛴 문서',r.documents_skipped],['만든 관계',r.links_created],['건너뛴 관계',r.links_skipped],['새로 만든 할 일',r.todos_created??0],['이미 있어 건너뛴 할 일',r.todos_skipped??0],['가져오지 않은 영역',r.work_areas_ignored],['가져오지 않은 이슈·질의',r.issues_ignored]]),...r.warnings.map(w=>el('p',w,'small muted')));
+      notify(`문서 ${r.documents_created}건, 할 일 ${r.todos_created??0}건을 가져왔습니다.`);f.reset();refreshReviewBadge();
     });
     imp.append(f,out);
   }
