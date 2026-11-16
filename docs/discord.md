@@ -44,13 +44,12 @@ curl -X PUT "https://discord.com/api/v10/applications/<APPLICATION_ID>/guilds/<G
        {"type": 3, "name": "project", "description": "프로젝트 slug"},
        {"type": 3, "name": "status", "description": "상태",
         "choices": [{"name": "시작 전", "value": "not_started"}, {"name": "진행 중", "value": "in_progress"},
+                    {"name": "검토대기", "value": "in_review"},
                     {"name": "완료", "value": "completed"}, {"name": "아이디어", "value": "idea"}]},
        {"type": 5, "name": "mine", "description": "내 담당만"}]}
   ]
 }]
 ```
-
-`status` 선택지에는 보드에 추가된 상태가 있으면 같이 넣으세요(서버는 `todos`의 상태값을 그대로 받습니다). 서버에서 실제로 쓸 수 있는 값이 아니면 400 대신 안내 메시지를 돌려줍니다.
 
 ## 계정 연결
 
