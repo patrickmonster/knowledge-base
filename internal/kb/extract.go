@@ -563,7 +563,7 @@ func extractXLSX(file string) (ExtractResult, error) {
 	if _, ok := z.files["EncryptedPackage"]; ok {
 		return ExtractResult{}, extractErr(ExtractEncrypted)
 	}
-	sheets, err := xlsxSheets(z)
+	sheets, date1904, err := xlsxSheets(z)
 	if err != nil {
 		return ExtractResult{}, err
 	}
@@ -571,23 +571,37 @@ func extractXLSX(file string) (ExtractResult, error) {
 	if err != nil {
 		return ExtractResult{}, err
 	}
+	styles, err := xlsxCellStyles(z)
+	if err != nil {
+		return ExtractResult{}, err
+	}
+	book := xlsxBook{shared: shared, styles: styles, date1904: date1904}
 	var t textBuilder
 	for _, sh := range sheets {
 		if t.full() {
 			break
 		}
 		t.write("\n\n## 시트: " + sh.name + "\n\n")
-		if err := xlsxSheetText(z, sh.target, shared, &t); err != nil {
+		if err := xlsxSheetText(z, sh.target, book, &t); err != nil {
 			return ExtractResult{}, err
 		}
 	}
 	return t.result(len(sheets)), nil
 }
 
-func xlsxSheets(z *zipArchive) ([]xlsxSheet, error) {
+// xlsxBook holds the workbook-wide data needed to turn cell values into text.
+type xlsxBook struct {
+	shared   []string
+	styles   []dateKind // indexed by the cell's s attribute
+	date1904 bool
+}
+
+// xlsxSheets lists the sheets in workbook order and reports whether the
+// workbook uses the 1904 date system.
+func xlsxSheets(z *zipArchive) ([]xlsxSheet, bool, error) {
 	rels := map[string]string{}
 	if rc, ok, err := z.open("xl/_rels/workbook.xml.rels"); err != nil {
-		return nil, err
+		return nil, false, err
 	} else if ok {
 		d := xmlDecoder(rc)
 		for {
@@ -597,7 +611,7 @@ func xlsxSheets(z *zipArchive) ([]xlsxSheet, error) {
 			}
 			if err != nil {
 				rc.Close()
-				return nil, asExtractErr(err)
+				return nil, false, asExtractErr(err)
 			}
 			if e, ok := tok.(xml.StartElement); ok && e.Name.Local == "Relationship" {
 				var id, target string
@@ -621,13 +635,14 @@ func xlsxSheets(z *zipArchive) ([]xlsxSheet, error) {
 	}
 	rc, ok, err := z.open("xl/workbook.xml")
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if !ok {
-		return nil, extractErr(ExtractInvalidFile)
+		return nil, false, extractErr(ExtractInvalidFile)
 	}
 	defer rc.Close()
 	var sheets []xlsxSheet
+	date1904 := false
 	d := xmlDecoder(rc)
 	for {
 		tok, err := d.Token()
@@ -635,9 +650,17 @@ func xlsxSheets(z *zipArchive) ([]xlsxSheet, error) {
 			break
 		}
 		if err != nil {
-			return nil, asExtractErr(err)
+			return nil, false, asExtractErr(err)
 		}
 		e, ok := tok.(xml.StartElement)
+		if ok && e.Name.Local == "workbookPr" {
+			for _, a := range e.Attr {
+				if a.Name.Local == "date1904" {
+					date1904 = a.Value == "1" || strings.EqualFold(a.Value, "true")
+				}
+			}
+			continue
+		}
 		if !ok || e.Name.Local != "sheet" {
 			continue
 		}
@@ -660,7 +683,7 @@ func xlsxSheets(z *zipArchive) ([]xlsxSheet, error) {
 			sheets = append(sheets, xlsxSheet{name: name, target: target})
 		}
 	}
-	return sheets, nil
+	return sheets, date1904, nil
 }
 
 func xlsxSharedStrings(z *zipArchive) ([]string, error) {
@@ -729,7 +752,7 @@ func columnIndex(ref string) int {
 	return n - 1
 }
 
-func xlsxSheetText(z *zipArchive, target string, shared []string, t *textBuilder) error {
+func xlsxSheetText(z *zipArchive, target string, book xlsxBook, t *textBuilder) error {
 	rc, ok, err := z.open(target)
 	if err != nil {
 		return err
@@ -745,6 +768,7 @@ func xlsxSheetText(z *zipArchive, target string, shared []string, t *textBuilder
 	}
 	var row []cell
 	var ctype, ref string
+	style := 0
 	var val bytes.Buffer
 	inV, inIs, inT := false, false, false
 	header := true
@@ -798,7 +822,7 @@ func xlsxSheetText(z *zipArchive, target string, shared []string, t *textBuilder
 			case "row":
 				row, next = row[:0], 0
 			case "c":
-				ctype, ref = "", ""
+				ctype, ref, style = "", "", 0
 				val.Reset()
 				for _, a := range e.Attr {
 					switch a.Name.Local {
@@ -806,6 +830,10 @@ func xlsxSheetText(z *zipArchive, target string, shared []string, t *textBuilder
 						ctype = a.Value
 					case "r":
 						ref = a.Value
+					case "s":
+						if n, err := strconv.Atoi(a.Value); err == nil {
+							style = n
+						}
 					}
 				}
 			case "v":
@@ -829,7 +857,7 @@ func xlsxSheetText(z *zipArchive, target string, shared []string, t *textBuilder
 					col = next
 				}
 				next = col + 1
-				if v := cellValue(ctype, val.String(), shared); v != "" && len(row) < 4*maxSheetColumns {
+				if v := book.cellValue(ctype, style, val.String()); v != "" && len(row) < 4*maxSheetColumns {
 					row = append(row, cell{col: col, val: strings.Join(strings.Fields(v), " ")})
 				}
 			case "row":
@@ -845,19 +873,26 @@ func xlsxSheetText(z *zipArchive, target string, shared []string, t *textBuilder
 	return nil
 }
 
-func cellValue(ctype, raw string, shared []string) string {
+func (b xlsxBook) cellValue(ctype string, style int, raw string) string {
 	switch ctype {
 	case "s":
 		i, err := strconv.Atoi(strings.TrimSpace(raw))
-		if err != nil || i < 0 || i >= len(shared) {
+		if err != nil || i < 0 || i >= len(b.shared) {
 			return ""
 		}
-		return shared[i]
+		return b.shared[i]
 	case "b":
 		if strings.TrimSpace(raw) == "1" {
 			return "TRUE"
 		}
 		return "FALSE"
+	case "", "n":
+		// Numbers formatted as dates are stored as serials; show the date.
+		if style >= 0 && style < len(b.styles) {
+			if v, ok := formatExcelDate(raw, b.styles[style], b.date1904); ok {
+				return v
+			}
+		}
 	}
 	return raw
 }

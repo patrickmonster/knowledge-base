@@ -146,7 +146,7 @@ open / answered ──update_issue──▶ closed(닫힘: 취소·불필요)
 `search_knowledge`·`search_across_projects`(웹 **지식 검색**)는 문서 결과(`hits`)와 별도로 관련 질의·이슈를 `issues`에 최대 5건 돌려줍니다. 각 항목은 `issue_id`, `kind`, `title`, `status`, `blocking`, 가장 가까운 조각(`excerpt`), `score`, `citation`(`issue://<project_id>/<issue_id>`)을 담고, 횡단 검색은 `project_slug`·`project_name`을 더합니다. 전체 내용은 `get_issue`로 읽습니다.
 
 - 대상: 제목·태그와 본문, 현재 답변(`## 답변`), 해결 메모(`## 해결`). 닫힌(`closed`) 항목은 빠지고 열림·답변됨·해결됨은 상태와 함께 나옵니다. 문서 검색의 `status` 필터는 질의에 적용하지 않습니다.
-- 질의를 만들거나 제목·본문·태그·해결 메모를 바꾸거나 답변하면 같은 트랜잭션에서 검색 조각(`issue_chunks`, 040 마이그레이션)을 다시 만들고, 임베딩 작업자가 문서와 같은 모델·재시도 규칙으로 벡터를 채웁니다. GitHub에서 가져온 이슈도 같습니다. 마이그레이션 전에 있던 질의는 작업자가 조각을 만듭니다(작업자는 임베딩이 켜져 있을 때만 돕니다).
+- 질의를 만들거나 제목·본문·태그·해결 메모를 바꾸거나 답변하면 같은 트랜잭션에서 검색 조각(`issue_chunks`, 041 마이그레이션)을 다시 만들고, 임베딩 작업자가 문서와 같은 모델·재시도 규칙으로 벡터를 채웁니다. GitHub에서 가져온 이슈도 같습니다. 마이그레이션 전에 있던 질의는 작업자가 조각을 만듭니다(작업자는 임베딩이 켜져 있을 때만 돕니다).
 - `mode`별 동작은 문서와 같습니다: `semantic`은 벡터 유사도, `lexical`은 키워드, 기본 `hybrid`는 두 순위를 RRF로 합칩니다. 질문 임베딩이 실패하면 키워드 결과만 냅니다. 벡터가 아직 없는 질의 조각 수는 `unindexed_issue_chunks`로 알립니다.
 - `get_embedding_status`의 `issues`가 질의 조각의 준비·대기·실패 수와 아직 조각을 만들지 않은 질의 수(`unchunked`)를 따로 보여 줍니다. `reindex_project_embeddings`는 질의 조각도 다시 만듭니다(`queued_issue_chunks`).
 - 작업 시작 맥락(`start_task`·`get_task_context`)의 관련 질의는 위 '작업 시작 연동'의 단어 매칭을 그대로 씁니다.

@@ -15,7 +15,7 @@ type embeddingJob struct {
 }
 
 // embeddingQueue is a chunk table the worker fills with vectors. Both tables
-// share the queue columns from migrations 003 and 040.
+// share the queue columns from migrations 003 and 041.
 type embeddingQueue struct {
 	table string
 	// text selects {id,text} model inputs from the claimed rows c (id, owner, content).
