@@ -42,7 +42,9 @@ curl -X PUT "https://discord.com/api/v10/applications/<APPLICATION_ID>/guilds/<G
   -d @discord-commands.json
 ```
 
-`discord-commands.json`:
+서버 ID를 비운 **전체 등록**은 DM에서도 동작하도록 명령마다 `integration_types`(0 서버 설치, 1 사용자 설치)와 `contexts`(0 서버, 1 봇 DM, 2 그 밖의 DM)를 함께 보냅니다. 웹 화면은 등록 직전에 `GET /applications/@me`의 `integration_types_config`로 개발자 포털 **Installation → Installation Contexts**에서 켠 설치 방식을 읽어 맞춥니다(서버 설치 → `contexts` `[0,1]`, 사용자 설치도 켜짐 → `integration_types` `[0,1]`, `contexts` `[0,1,2]`). 읽지 못하면 서버 설치만 있다고 보고 `[0]`·`[0,1]`로 등록합니다. 터미널로 전체 등록할 때는 아래 JSON의 각 명령에 같은 두 필드를 직접 넣으세요. 서버 등록은 그 서버에서만 보이므로 두 필드를 보내지 않습니다.
+
+`discord-commands.json`(서버 등록용):
 
 ```json
 [{
@@ -63,6 +65,14 @@ curl -X PUT "https://discord.com/api/v10/applications/<APPLICATION_ID>/guilds/<G
   ]
 }, {"name": "이슈로 등록", "type": 3, "description": ""}]
 ```
+
+### "알 수 없는 연동"(Unknown Integration)이 뜰 때
+
+명령을 눌렀는데 Discord가 빨간 글씨로 **알 수 없는 연동**을 보여 주면 요청이 서버에 오기 전에 Discord가 거절한 것입니다(서버 로그·감사 로그에 남지 않습니다). 흔한 원인은 명령 정의에 `integration_types`·`contexts`가 없는 상태로 전체 등록된 명령을 **봇 DM**이나 **사용자 설치**(내 앱에 추가)로 쓰는 경우입니다.
+
+1. 배포된 서버에서 **운영 현황 → Discord 연동 → 슬래시 명령 등록**을 서버 ID를 **비운 채** 다시 실행합니다(전체 덮어쓰기라 안전). 반영까지 최대 1시간 걸리며, Discord 앱을 새로 고치면(Ctrl+R) 빨리 보이기도 합니다.
+2. DM이나 다른 서버에서도 쓰려면 개발자 포털 **Installation → Installation Contexts**에서 **User Install**을 켠 뒤 1번을 다시 실행합니다. 서버에서만 쓸 거라면 봇을 그 서버에 초대(`applications.commands`)하고 서버 채널에서 명령을 씁니다.
+3. 예전에 서버 ID로 등록한 명령과 전체 등록한 명령이 함께 있으면 같은 `/kb`가 두 번 보일 수 있습니다. 서버 등록을 지우려면 터미널에서 그 서버로 빈 목록(`[]`)을 PUT 합니다.
 
 ## 계정 연결
 

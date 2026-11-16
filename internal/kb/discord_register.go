@@ -69,6 +69,51 @@ type discordCommand struct {
 	Type        int                    `json:"type,omitempty"`
 	Description string                 `json:"description"`
 	Options     []discordCommandOption `json:"options,omitempty"`
+	// IntegrationTypes (0 server install, 1 user install) and Contexts (0
+	// server, 1 DM with the bot, 2 other DMs and group DMs) say where Discord
+	// lets the command run. They are set only for a global registration;
+	// without them Discord answers a command used in a DM with "Unknown
+	// Integration" (알 수 없는 연동) when the app is installed to the user.
+	IntegrationTypes []int `json:"integration_types,omitempty"`
+	Contexts         []int `json:"contexts,omitempty"`
+}
+
+// Install types and interaction contexts (Discord application command fields).
+const (
+	discordInstallGuild = 0
+	discordInstallUser  = 1
+
+	discordContextGuild     = 0
+	discordContextBotDM     = 1
+	discordContextPrivateCh = 2
+)
+
+// discordInstallTypes is which install types the application has turned on in
+// the developer portal (Installation → Installation Contexts). Discord rejects
+// a command that names a type the application does not support.
+type discordInstallTypes struct {
+	Guild bool
+	User  bool
+}
+
+// withPlaces sets where a globally registered command may run: every install
+// type the application supports, servers and the bot DM always, and other DMs
+// only for a user install (that is the only install that reaches them).
+func withPlaces(cmds []discordCommand, inst discordInstallTypes) []discordCommand {
+	types := []int{}
+	if inst.Guild || !inst.User {
+		types = append(types, discordInstallGuild)
+	}
+	contexts := []int{discordContextGuild, discordContextBotDM}
+	if inst.User {
+		types = append(types, discordInstallUser)
+		contexts = append(contexts, discordContextPrivateCh)
+	}
+	for i := range cmds {
+		cmds[i].IntegrationTypes = types
+		cmds[i].Contexts = contexts
+	}
+	return cmds
 }
 
 // discordCommandDefinition is the /kb command with its subcommands
@@ -147,20 +192,26 @@ func callDiscordRegister(ctx context.Context, base, app, guild, token string) ([
 	if guild != "" {
 		url = base + "/applications/" + app + "/guilds/" + guild + "/commands"
 	}
-	payload, err := json.Marshal(discordCommandDefinition())
+	ctx, cancel := context.WithTimeout(ctx, discordRegisterTimeout)
+	defer cancel()
+	client := &http.Client{Timeout: discordRegisterTimeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	cmds := discordCommandDefinition()
+	if guild == "" {
+		// A server registration only exists in that server; a global one also
+		// runs in DMs, which needs the install types and contexts spelled out.
+		cmds = withPlaces(cmds, discordAppInstallTypes(ctx, client, base, token))
+	}
+	payload, err := json.Marshal(cmds)
 	if err != nil {
 		return nil, err
 	}
-	ctx, cancel := context.WithTimeout(ctx, discordRegisterTimeout)
-	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPut, url, bytes.NewReader(payload))
 	if err != nil {
 		return nil, problem("INVALID_INPUT", "요청을 만들지 못했습니다.")
 	}
 	req.Header.Set("Authorization", "Bot "+token)
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "DiscordBot (knowledge-base, 1.0)")
-	client := &http.Client{Timeout: discordRegisterTimeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	req.Header.Set("User-Agent", discordUserAgent)
 	resp, err := client.Do(req)
 	if err != nil {
 		// The error text can carry the URL; say only what the operator can act on.
@@ -185,6 +236,42 @@ func callDiscordRegister(ctx context.Context, base, app, guild, token string) ([
 		names = append(names, c.Name)
 	}
 	return names, nil
+}
+
+const discordUserAgent = "DiscordBot (knowledge-base, 1.0)"
+
+// discordAppInstallTypes reads which install types the application supports
+// (GET /applications/@me, integration_types_config). If Discord does not say,
+// it assumes a server install only, which every application supports; a
+// wrong token then fails on the registration itself with a clear message.
+func discordAppInstallTypes(ctx context.Context, client *http.Client, base, token string) discordInstallTypes {
+	fallback := discordInstallTypes{Guild: true}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/applications/@me", nil)
+	if err != nil {
+		return fallback
+	}
+	req.Header.Set("Authorization", "Bot "+token)
+	req.Header.Set("User-Agent", discordUserAgent)
+	resp, err := client.Do(req)
+	if err != nil {
+		return fallback
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return fallback
+	}
+	var app struct {
+		Config map[string]json.RawMessage `json:"integration_types_config"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, discordRegisterMaxReply)).Decode(&app); err != nil || len(app.Config) == 0 {
+		return fallback
+	}
+	_, guildOK := app.Config["0"]
+	_, userOK := app.Config["1"]
+	if !guildOK && !userOK {
+		return fallback
+	}
+	return discordInstallTypes{Guild: guildOK, User: userOK}
 }
 
 // RegisterDiscordCommands registers /kb with Discord. Web session, global
