@@ -32,7 +32,9 @@ func TestRenderExportMarkdown(t *testing.T) {
 
 func sampleExport() ProjectExport {
 	return ProjectExport{Format: exportFormat, Version: exportVersion, ExportedAt: "2026-11-14T00:00:00Z", Project: ExportedProject{ID: "p", Slug: "src", Name: "원본"},
-		Documents: []ExportDocument{{ID: "22222222-2222-2222-2222-222222222222", Title: "문서", Kind: "brief", Status: "active", Content: "본문", Revisions: []ExportRevision{{Revision: 1}}}}}
+		Documents: []ExportDocument{{ID: "22222222-2222-2222-2222-222222222222", Title: "문서", Kind: "brief", Status: "active", Content: "본문", Revisions: []ExportRevision{{Revision: 1}}}},
+		Todos: []Todo{{ID: "33333333-3333-3333-3333-333333333333", Title: "표 | 깨기", Status: "in_progress", Priority: "high", Category: "Work", Position: 2048, AssigneeName: "담당"},
+			{ID: "44444444-4444-4444-4444-444444444444", Title: "먼저", Status: "in_progress", Priority: "high", Position: 1024}}}
 }
 
 func TestParseImport(t *testing.T) {
@@ -61,8 +63,25 @@ func TestParseImport(t *testing.T) {
 	for _, f := range zr.File {
 		names[f.Name] = true
 	}
-	if !names["README.md"] || !names["export.json"] || !names["documents/brief/문서-22222222.md"] {
+	if !names["README.md"] || !names["export.json"] || !names["todos.md"] || !names["documents/brief/문서-22222222.md"] {
 		t.Fatalf("unexpected zip entries: %v", names)
+	}
+	if len(data.Todos) != 2 || data.Todos[0].Title != "표 | 깨기" {
+		t.Fatalf("zip export.json lost to-dos: %+v", data.Todos)
+	}
+	md := renderTodosMarkdown(data.Todos)
+	first, second := strings.Index(md, "| high | 먼저 |"), strings.Index(md, `| high | 표 \| 깨기 | Work |  | 담당 |`)
+	if !strings.Contains(md, "## in_progress") || first < 0 || second < first {
+		t.Fatalf("to-do table is not in board order or not escaped:\n%s", md)
+	}
+	many := sampleExport()
+	many.Todos = make([]Todo, maxProjectTodos+1)
+	raw, err = json.Marshal(many)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := parseImport(raw, false); errorCode(err) != "INVALID_INPUT" {
+		t.Fatalf("too many to-dos accepted: %v", err)
 	}
 	var empty bytes.Buffer
 	zw := zip.NewWriter(&empty)
@@ -157,10 +176,20 @@ func TestTeamRolloutTools(t *testing.T) {
 		t.Fatal("instructions do not pick the project by repository")
 	}
 
+	// To-dos travel with the export: one assigned and completed, one linked to a question.
+	progress := 40
+	done := mustCall(t, tools, editor, "save_todo", SaveTodoInput{ProjectID: p.ID, Title: "끝난 일", Status: "completed", Priority: "high", Category: "Ops", Progress: &progress, AssigneeID: editor.User.ID, DueDate: "2026-12-01"}).(Todo)
+	idea := mustCall(t, tools, editor, "save_todo", SaveTodoInput{ProjectID: p.ID, Title: "아이디어", Body: "내용", Status: "idea", Priority: "low"}).(Todo)
+	later := mustCall(t, tools, editor, "save_todo", SaveTodoInput{ProjectID: p.ID, Title: "아이디어 둘", Status: "idea", Priority: "low"}).(Todo)
+	mustCall(t, tools, admin, "link_issue_todo", LinkIssueTodoInput{ProjectID: p.ID, IssueID: q.ID, TodoID: idea.ID})
+
 	// Export, then import into another project twice: the second run skips everything.
 	export, err := s.ExportProject(ctx, editor, p.ID, true)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if len(export.Todos) != 3 || export.Todos[0].AssigneeName == "" || export.Todos[1].OpenIssueCount != 1 {
+		t.Fatalf("to-dos missing from export: %+v", export.Todos)
 	}
 	if len(export.Documents) != 3 || len(export.Links) != 2 || len(export.Issues) != 1 || len(export.Documents[0].Revisions) == 0 {
 		t.Fatalf("incomplete export: %d docs, %d links, %d issues", len(export.Documents), len(export.Links), len(export.Issues))
@@ -185,16 +214,33 @@ func TestTeamRolloutTools(t *testing.T) {
 	if first.DocumentsCreated != 3 || first.LinksCreated != 2 || first.IssuesIgnored != 1 || len(first.Warnings) == 0 {
 		t.Fatalf("unexpected first import: %+v", first)
 	}
+	if first.TodosCreated != 3 || first.TodosSkipped != 0 || len(first.Warnings) < 3 {
+		t.Fatalf("to-dos not imported: %+v", first)
+	}
+	copied := mustCall(t, tools, admin, "list_todos", ListTodosInput{ProjectID: target.ID}).([]Todo)
+	if len(copied) != 3 {
+		t.Fatalf("imported to-dos: %+v", copied)
+	}
+	// Board order: high row first, then the two ideas in their original order.
+	c := copied[0]
+	if c.Title != "끝난 일" || c.ID == done.ID || c.Status != "completed" || c.Priority != "high" || c.Category != "Ops" || c.Progress == nil || *c.Progress != 40 ||
+		c.DueDate != "2026-12-01" || c.AssigneeID != "" || c.CreatedBy != admin.User.ID || c.CompletedAt == "" || c.Position != done.Position {
+		t.Fatalf("imported to-do lost fields or kept a source user: %+v", c)
+	}
+	if copied[1].Title != "아이디어" || copied[1].Body != "내용" || copied[2].Title != "아이디어 둘" || copied[1].Position != idea.Position || copied[2].Position != later.Position ||
+		copied[1].OpenIssueCount != 0 || copied[1].CompletedAt != "" {
+		t.Fatalf("imported ideas: %+v", copied[1:])
+	}
 	second, err := s.ImportProject(ctx, admin, target.ID, data)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if second.DocumentsCreated != 0 || second.DocumentsSkipped != 3 || second.LinksCreated != 0 {
+	if second.DocumentsCreated != 0 || second.DocumentsSkipped != 3 || second.LinksCreated != 0 || second.TodosCreated != 0 || second.TodosSkipped != 3 {
 		t.Fatalf("re-import duplicated data: %+v", second)
 	}
 	// Importing into the source project itself recognises the originals.
 	self, err := s.ImportProject(ctx, admin, p.ID, data)
-	if err != nil || self.DocumentsCreated != 0 || self.DocumentsSkipped != 3 {
+	if err != nil || self.DocumentsCreated != 0 || self.DocumentsSkipped != 3 || self.TodosCreated != 0 || self.TodosSkipped != 3 {
 		t.Fatalf("self import: %+v %v", self, err)
 	}
 	docs := mustCall(t, tools, admin, "list_documents", ListInput{ProjectID: target.ID, Status: "draft"}).([]map[string]any)
@@ -219,5 +265,21 @@ func TestTeamRolloutTools(t *testing.T) {
 	var leftovers int
 	if err := s.DB.QueryRow(`SELECT count(*) FROM documents WHERE project_id=$1`, other.ID).Scan(&leftovers); err != nil || leftovers != 0 {
 		t.Fatalf("failed import left %d documents (%v)", leftovers, err)
+	}
+	// An invalid to-do rolls the whole import back, documents included.
+	badTodo := data
+	badTodo.Todos = append([]Todo{}, data.Todos...)
+	badTodo.Todos[2].Status = "someday"
+	if _, err := s.ImportProject(ctx, admin, other.ID, badTodo); errorCode(err) != "INVALID_INPUT" || !strings.Contains(err.Error(), "todos[2]") {
+		t.Fatalf("invalid to-do accepted: %v", err)
+	}
+	if err := s.DB.QueryRow(`SELECT (SELECT count(*) FROM documents WHERE project_id=$1)+(SELECT count(*) FROM todos WHERE project_id=$1)`, other.ID).Scan(&leftovers); err != nil || leftovers != 0 {
+		t.Fatalf("failed import left %d rows (%v)", leftovers, err)
+	}
+	// Exports made before to-dos were included still import.
+	old := data
+	old.Todos = nil
+	if r, err := s.ImportProject(ctx, admin, other.ID, old); err != nil || r.DocumentsCreated != 3 || r.TodosCreated != 0 {
+		t.Fatalf("export without to-dos: %+v %v", r, err)
 	}
 }

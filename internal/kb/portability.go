@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"path"
 	"sort"
@@ -23,11 +24,16 @@ import (
 // Project export and import (프로젝트 단위 내보내기·가져오기).
 //
 // Export is a backup aid and a migration path: JSON holds the project, every
-// document (optionally with all revisions), links, work areas and issues;
-// Markdown is a zip of readable documents plus export.json for re-import.
-// Import (JSON or that zip) creates documents and links in an existing
-// project. Work areas and issues reference users of the source server, so they
-// are exported for reference but not imported.
+// document (optionally with all revisions), links, to-dos, work areas and
+// issues; Markdown is a zip of readable documents plus export.json for
+// re-import. Import (JSON or that zip) creates documents, links and to-dos in
+// an existing project. Work areas and issues reference users of the source
+// server, so they are exported for reference but not imported.
+//
+// To-dos keep their board cell, order, category, progress and due date. What
+// ties a to-do to the source server stays behind: the assignee (a user there),
+// linked task runs and pull requests (task runs are not exported) and linked
+// issues (not imported). The export still shows those for reference.
 
 // MaxImportBytes bounds the uploaded JSON or zip; maxImportUnzipped bounds
 // export.json inside a zip (zip bomb guard).
@@ -47,6 +53,7 @@ type ProjectExport struct {
 	Project    ExportedProject  `json:"project"`
 	Documents  []ExportDocument `json:"documents"`
 	Links      []ExportLink     `json:"links"`
+	Todos      []Todo           `json:"todos"`
 	WorkAreas  []WorkArea       `json:"work_areas"`
 	Issues     []Issue          `json:"issues"`
 }
@@ -98,6 +105,8 @@ type ImportResult struct {
 	DocumentsSkipped int      `json:"documents_skipped"`
 	LinksCreated     int      `json:"links_created"`
 	LinksSkipped     int      `json:"links_skipped"`
+	TodosCreated     int      `json:"todos_created"`
+	TodosSkipped     int      `json:"todos_skipped"`
 	WorkAreasIgnored int      `json:"work_areas_ignored"`
 	IssuesIgnored    int      `json:"issues_ignored"`
 	RevisionsIgnored int      `json:"revisions_ignored"`
@@ -156,6 +165,9 @@ func loadProjectExport(ctx context.Context, tx *sql.Tx, id Identity, projectID s
 	}
 	if out.Links, err = many[ExportLink](ctx, tx, `SELECT jsonb_build_object('source_id',source_id,'target_id',target_id,'relation',relation,'note',note,'created_at',created_at)
 		FROM document_links WHERE project_id=$1 ORDER BY created_at,source_id,target_id`, projectID); err != nil {
+		return out, err
+	}
+	if out.Todos, err = many[Todo](ctx, tx, todoSelect+` WHERE t.project_id=$1 ORDER BY t.created_at,t.id`, projectID); err != nil {
 		return out, err
 	}
 	if out.WorkAreas, err = many[WorkArea](ctx, tx, workAreaSelect+` WHERE w.project_id=$1 ORDER BY lower(w.name)`, projectID); err != nil {
@@ -279,6 +291,12 @@ func exportZip(data ProjectExport) ([]byte, error) {
 		}
 		fmt.Fprintf(&index, "| %s | %s | %s | [%s](%s) |\n", d.Kind, d.Status, strings.ReplaceAll(d.Title, "|", "\\|"), path.Base(file), file)
 	}
+	if len(data.Todos) > 0 {
+		if err := write("todos.md", renderTodosMarkdown(data.Todos)); err != nil {
+			return nil, err
+		}
+		fmt.Fprintf(&index, "\n## 할 일\n\n[todos.md](todos.md) — %d건\n", len(data.Todos))
+	}
 	if len(data.Issues) > 0 {
 		index.WriteString("\n## 이슈 · 질의\n\n")
 		for _, i := range data.Issues {
@@ -310,6 +328,42 @@ func exportZip(data ProjectExport) ([]byte, error) {
 		return nil, err
 	}
 	return buf.Bytes(), nil
+}
+
+// renderTodosMarkdown lists the board for reading: one table per status, in
+// board order (priority, then position).
+func renderTodosMarkdown(todos []Todo) string {
+	cell := func(s string) string {
+		return strings.ReplaceAll(strings.Join(strings.Fields(s), " "), "|", "\\|")
+	}
+	rank := map[string]int{"high": 0, "medium": 1, "low": 2}
+	list := append([]Todo{}, todos...)
+	sort.SliceStable(list, func(i, j int) bool {
+		if rank[list[i].Priority] != rank[list[j].Priority] {
+			return rank[list[i].Priority] < rank[list[j].Priority]
+		}
+		return list[i].Position < list[j].Position
+	})
+	var b strings.Builder
+	b.WriteString("# 할 일\n")
+	for _, status := range todoStatuses {
+		wrote := false
+		for _, t := range list {
+			if t.Status != status {
+				continue
+			}
+			if !wrote {
+				fmt.Fprintf(&b, "\n## %s\n\n| 우선순위 | 제목 | 분류 | 진행률 | 담당자 | 마감일 | 내용 |\n| --- | --- | --- | --- | --- | --- | --- |\n", status)
+				wrote = true
+			}
+			progress := ""
+			if t.Progress != nil {
+				progress = fmt.Sprintf("%d%%", *t.Progress)
+			}
+			fmt.Fprintf(&b, "| %s | %s | %s | %s | %s | %s | %s |\n", t.Priority, cell(t.Title), cell(t.Category), progress, cell(t.AssigneeName), t.DueDate, cell(truncateRunes(t.Body, 300)))
+		}
+	}
+	return b.String()
 }
 
 // parseImport accepts export JSON or a Markdown export zip containing export.json.
@@ -351,6 +405,9 @@ func parseImport(body []byte, zipped bool) (ProjectExport, error) {
 	}
 	if len(data.Documents) > maxExportDocuments {
 		return data, problem("INVALID_INPUT", fmt.Sprintf("At most %d documents can be imported at once.", maxExportDocuments))
+	}
+	if len(data.Todos) > maxProjectTodos {
+		return data, problem("INVALID_INPUT", fmt.Sprintf("At most %d to-dos can be imported at once.", maxProjectTodos))
 	}
 	return data, nil
 }
@@ -472,6 +529,9 @@ func importProject(ctx context.Context, tx *sql.Tx, a Identity, projectID string
 			result.LinksSkipped++
 		}
 	}
+	if err := importTodos(ctx, tx, a, projectID, data.Todos, &result); err != nil {
+		return result, err
+	}
 	result.WorkAreasIgnored = len(data.WorkAreas)
 	result.IssuesIgnored = len(data.Issues)
 	if result.WorkAreasIgnored+result.IssuesIgnored > 0 {
@@ -481,6 +541,83 @@ func importProject(ctx context.Context, tx *sql.Tx, a Identity, projectID string
 		result.Warnings = append(result.Warnings, "문서의 이전 버전 기록은 가져오지 않고 현재 내용만 새 문서의 첫 버전으로 저장했습니다.")
 	}
 	return result, nil
+}
+
+// importTodos creates the export's to-dos in the target project. A to-do
+// already there (the original itself or an earlier import) is skipped, so
+// changes made after the first import are never overwritten.
+func importTodos(ctx context.Context, tx *sql.Tx, a Identity, projectID string, todos []Todo, result *ImportResult) error {
+	if len(todos) == 0 {
+		return nil
+	}
+	var count int
+	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM todos WHERE project_id=$1`, projectID).Scan(&count); err != nil {
+		return err
+	}
+	seen := map[string]bool{}
+	var unassigned, unlinked int
+	for n, t := range todos {
+		label := fmt.Sprintf("todos[%d]", n)
+		if err := validID(t.ID); err != nil {
+			return problem("INVALID_INPUT", label+": id must be a canonical lowercase UUID.")
+		}
+		if seen[t.ID] {
+			return problem("INVALID_INPUT", label+": duplicate to-do id.")
+		}
+		seen[t.ID] = true
+		in := SaveTodoInput{Title: t.Title, Body: t.Body, Status: t.Status, Priority: t.Priority, Category: t.Category, Progress: t.Progress, DueDate: t.DueDate}
+		if err := validateTodo(&in); err != nil {
+			var known *Error
+			msg := "invalid to-do"
+			if errors.As(err, &known) {
+				msg = known.Message
+			}
+			return problem("INVALID_INPUT", label+" ("+truncateRunes(t.Title, 60)+"): "+msg)
+		}
+		if math.IsNaN(t.Position) || math.IsInf(t.Position, 0) {
+			return problem("INVALID_INPUT", label+": position must be a finite number.")
+		}
+		completedAt := ""
+		if in.Status == "completed" && t.CompletedAt != "" {
+			at, err := time.Parse(time.RFC3339Nano, t.CompletedAt)
+			if err != nil {
+				return problem("INVALID_INPUT", label+": completed_at must be an RFC 3339 time.")
+			}
+			completedAt = at.UTC().Format(time.RFC3339Nano)
+		}
+		var exists bool
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM todos WHERE project_id=$1 AND (id=$2 OR imported_from=$2))`, projectID, t.ID).Scan(&exists); err != nil {
+			return err
+		}
+		if exists {
+			result.TodosSkipped++
+			continue
+		}
+		if count >= maxProjectTodos {
+			return problem("QUOTA_EXCEEDED", fmt.Sprintf("A project can hold at most %d to-dos; the import would exceed it.", maxProjectTodos))
+		}
+		count++
+		if _, err := tx.ExecContext(ctx, `INSERT INTO todos(id,project_id,title,body,status,priority,category,progress,due_date,position,created_by,updated_by,completed_at,imported_from)
+			VALUES($1,$2,$3,$4,$5,$6,$7,$8,NULLIF($9,'')::date,$10,$11,$11,
+				CASE WHEN $5<>'completed' THEN NULL WHEN $12='' THEN now() ELSE $12::timestamptz END,$13)`,
+			uuid.NewString(), projectID, in.Title, in.Body, in.Status, in.Priority, in.Category, in.Progress, in.DueDate, t.Position, a.User.ID, completedAt, t.ID); err != nil {
+			return err
+		}
+		result.TodosCreated++
+		if t.AssigneeID != "" {
+			unassigned++
+		}
+		if t.TaskCount+t.OpenIssueCount+len(t.PullRequests) > 0 {
+			unlinked++
+		}
+	}
+	if unassigned > 0 {
+		result.Warnings = append(result.Warnings, fmt.Sprintf("할 일 %d건은 담당자가 원본 서버의 사용자여서 담당자 없이 가져왔습니다.", unassigned))
+	}
+	if unlinked > 0 {
+		result.Warnings = append(result.Warnings, fmt.Sprintf("할 일 %d건에 연결돼 있던 작업·PR·질의는 가져오지 않았습니다. 내보낸 파일에서 확인하세요.", unlinked))
+	}
+	return nil
 }
 
 func truncateRunes(s string, n int) string {
