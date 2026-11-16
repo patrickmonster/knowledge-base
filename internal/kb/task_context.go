@@ -3,6 +3,10 @@ package kb
 import (
 	"context"
 	"database/sql"
+	"fmt"
+	"slices"
+	"strings"
+	"time"
 )
 
 func (s *Store) taskContext(ctx context.Context, tx *sql.Tx, a Identity, in ContextInput) (TaskContext, error) {
@@ -15,6 +19,10 @@ func (s *Store) taskContext(ctx context.Context, tx *sql.Tx, a Identity, in Cont
 	}
 	if in.ExcerptBudget < 1000 || in.ExcerptBudget > 20000 {
 		return TaskContext{}, problem("INVALID_INPUT", "excerpt_budget must be 1000–20000 characters.")
+	}
+	related, err := relatedProjectIDs(in.ProjectID, in.RelatedProjectIDs)
+	if err != nil {
+		return TaskContext{}, err
 	}
 	results, err := s.searchCurrentKnowledge(ctx, tx, a, SearchInput{ProjectID: in.ProjectID, Query: in.Task, Limit: taskSourceLimit * 2}, searchSourceTask)
 	if err != nil {
@@ -41,25 +49,105 @@ func (s *Store) taskContext(ctx context.Context, tx *sql.Tx, a Identity, in Cont
 	if out.Todos, err = taskTodos(ctx, tx, in.ProjectID, in.Task); err != nil {
 		return TaskContext{}, err
 	}
-	remaining := in.ExcerptBudget
-	for _, hit := range capHistorySources(results.Hits, taskSourceLimit, maxTaskHistorySources) {
-		if remaining == 0 {
-			out.Truncated = true
-			break
+	// Related projects get a reserved quarter of the excerpt budget so the
+	// total stays within excerpt_budget and this project's sources keep most
+	// of it.
+	budget := in.ExcerptBudget
+	if len(related) > 0 {
+		budget -= in.ExcerptBudget / 4
+	}
+	out.Sources, out.Truncated = fitExcerpts(capHistorySources(results.Hits, taskSourceLimit, maxTaskHistorySources), budget)
+	if len(related) > 0 {
+		if err := s.addRelatedSources(ctx, tx, a, &out, related, in.ExcerptBudget/4); err != nil {
+			return TaskContext{}, err
 		}
-		r := []rune(hit.Excerpt)
-		if len(r) > remaining {
-			hit.Excerpt = string(r[:remaining])
-			hit.Truncated = true
-			out.Truncated = true
-		}
-		remaining -= len([]rune(hit.Excerpt))
-		out.Sources = append(out.Sources, hit)
 	}
 	return out, nil
 }
 
+// addRelatedSources searches the related projects with the task text through
+// searchAcrossProjects, so only projects the caller is a member of (and, for
+// a project-scoped key, none) can be searched; any other ID fails the whole
+// call as NOT_FOUND or FORBIDDEN. The hits stay apart from out.Sources and
+// each one names its project.
+func (s *Store) addRelatedSources(ctx context.Context, tx *sql.Tx, a Identity, out *TaskContext, related []string, budget int) error {
+	res, err := s.searchAcrossProjects(ctx, tx, a, CrossSearchInput{ProjectIDs: related, Query: out.Task, Limit: relatedSourceLimit * 2})
+	if err != nil {
+		return err
+	}
+	markRecheck(res.Hits, time.Now())
+	out.RelatedProjects = res.Projects
+	var truncated bool
+	out.RelatedSources, truncated = fitExcerpts(capHistorySources(res.Hits, relatedSourceLimit, maxRelatedHistorySources), budget)
+	out.Truncated = out.Truncated || truncated
+	if res.Warning != "" {
+		out.RelatedWarning = res.Warning
+	}
+	out.Guidance += " related_sources come from other projects (see project_slug); they do not describe this project, so prefer sources when they disagree and confirm before applying them here."
+	return nil
+}
+
+// relatedProjectIDs validates related_project_ids and returns them sorted
+// without duplicates or the task's own project, so retries compare equal.
+func relatedProjectIDs(projectID string, ids []string) ([]string, error) {
+	out := []string{}
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if err := validID(id); err != nil {
+			return nil, err
+		}
+		if id != projectID && !slices.Contains(out, id) {
+			out = append(out, id)
+		}
+	}
+	if len(out) > maxRelatedProjects {
+		return nil, problem("INVALID_INPUT", fmt.Sprintf("related_project_ids accepts at most %d other projects.", maxRelatedProjects))
+	}
+	slices.Sort(out)
+	return out, nil
+}
+
+// sameRelatedProjects reports whether a stored start_task context searched
+// exactly the normalized related project IDs, so a retry with other related
+// projects conflicts like any other changed input.
+func sameRelatedProjects(stored []SearchedProject, ids []string) bool {
+	got := make([]string, len(stored))
+	for i, p := range stored {
+		got[i] = p.ID
+	}
+	slices.Sort(got)
+	return slices.Equal(got, ids)
+}
+
+// fitExcerpts keeps hits in order until their excerpts fill budget runes,
+// cutting the last excerpt that does not fit.
+func fitExcerpts(hits []SearchHit, budget int) ([]SearchHit, bool) {
+	out := []SearchHit{}
+	truncated := false
+	for _, hit := range hits {
+		if budget <= 0 {
+			return out, true
+		}
+		r := []rune(hit.Excerpt)
+		if len(r) > budget {
+			hit.Excerpt = string(r[:budget])
+			hit.Truncated = true
+			truncated = true
+		}
+		budget -= len([]rune(hit.Excerpt))
+		out = append(out, hit)
+	}
+	return out, truncated
+}
+
 const (
+	// maxRelatedProjects bounds related_project_ids: related material is a
+	// supplement, not a cross-project search.
+	maxRelatedProjects = 5
+	// relatedSourceLimit is the number of related_sources returned across all
+	// related projects, at most maxRelatedHistorySources of them history.
+	relatedSourceLimit       = 4
+	maxRelatedHistorySources = 1
 	// taskSourceLimit is the number of sources start_task and get_task_context
 	// return; the search asks for twice as many so history hits can be capped.
 	taskSourceLimit = 8

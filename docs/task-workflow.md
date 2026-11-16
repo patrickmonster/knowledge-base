@@ -87,6 +87,23 @@
 - 웹 **진행 중 작업** 화면의 작업 카드에 브랜치·worktree·경로가 표시되고, **시작 자료 보기**에 시작 시점의 동시 작업 경고가 나옵니다.
 - 마이그레이션 `032_task_scope.sql`이 `task_runs`에 `branch`, `worktree`, `paths` 열을 추가합니다. 기존 작업은 빈 값입니다.
 
+## 관련 프로젝트 자료 (`related_sources`)
+
+작업이 다른 프로젝트의 자료(공용 라이브러리, 같은 서비스의 다른 저장소 등)에 기대면 `start_task`·`get_task_context`에 선택 입력 `related_project_ids`를 넘깁니다. 넘기지 않으면 지금처럼 이 프로젝트만 조회합니다.
+
+```json
+{
+  "related_project_ids": ["<관련 프로젝트 UUID>"]
+}
+```
+
+- **권한:** 내가 참여한 프로젝트만 지정할 수 있습니다. 참여하지 않은 프로젝트가 하나라도 있으면 `search_across_projects`와 같이 `NOT_FOUND`로 전체 요청을 거부합니다. 특정 프로젝트로 제한된 키로 다른 프로젝트를 지정하면 `FORBIDDEN`입니다. 관련 프로젝트는 조회 권한(viewer)만 있으면 됩니다.
+- **제한:** 이 프로젝트를 뺀 서로 다른 프로젝트 최대 5개. 중복과 이 프로젝트 자신은 무시합니다.
+- **분리 표시:** 이 프로젝트의 결과는 지금처럼 `sources`에 두고, 관련 프로젝트 결과는 `related_sources`(최대 4건, history 최대 1건)에 따로 담습니다. 각 결과에 `project_id`·`project_slug`·`project_name`이 붙고, 검색한 프로젝트는 `related_projects`, 검색 경고는 `related_warning`에 담깁니다. `guidance`는 관련 자료가 이 프로젝트의 상태를 뜻하지 않으며 `sources`와 다르면 `sources`를 우선하라고 안내합니다.
+- **발췌 예산:** 관련 프로젝트를 지정하면 `excerpt_budget`의 1/4을 `related_sources`에, 나머지를 `sources`에 씁니다. 전체 발췌량은 `excerpt_budget`을 넘지 않습니다.
+- **재시도:** `start_task`를 같은 `request_key`로 재시도할 때 관련 프로젝트 목록(순서 무관)이 다르면 다른 입력으로 보고 `CONFLICT`입니다. 시작 시점의 `related_sources`도 다른 맥락처럼 작업 기록에 저장됩니다.
+- 검색 시간 기록(`search_timings`)은 이 프로젝트의 맥락 검색만 남깁니다.
+
 ## 완료 요청 예시
 
 도구: `finish_task`. 아래 내용은 예시이며 실제 수행 결과로 바꿉니다.

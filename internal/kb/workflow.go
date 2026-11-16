@@ -25,6 +25,8 @@ type StartTaskInput struct {
 	Branch   string   `json:"branch,omitempty" jsonschema:"Git branch this task works on, up to 200 characters; other open tasks on the same branch are reported in context.concurrent_runs"`
 	Worktree string   `json:"worktree,omitempty" jsonschema:"Worktree or checkout directory this task works in, up to 500 characters; other open tasks in the same worktree are reported in context.concurrent_runs"`
 	Paths    []string `json:"paths,omitempty" jsonschema:"Repository-relative files or directories this task changes, at most 20; open tasks with an equal or enclosing/enclosed path are reported in context.concurrent_runs"`
+	// RelatedProjectIDs opts in to excerpts from other projects the caller can read (context.related_sources).
+	RelatedProjectIDs []string `json:"related_project_ids,omitempty" jsonschema:"Other projects you can read whose material should come along, at most 5 (opt-in). Their hits come back apart in related_sources, each naming its project, using up to a quarter of excerpt_budget; a project you are not a member of fails the call"`
 }
 type TaskRef struct {
 	ProjectID string `json:"project_id"`
@@ -203,6 +205,10 @@ func (s *Store) startTask(ctx context.Context, tx *sql.Tx, a Identity, in StartT
 	if err != nil {
 		return nil, err
 	}
+	related, err := relatedProjectIDs(in.ProjectID, in.RelatedProjectIDs)
+	if err != nil {
+		return nil, err
+	}
 	scopePaths, err := json.Marshal(append([]string{}, scope.Paths...))
 	if err != nil {
 		return nil, err
@@ -221,7 +227,7 @@ func (s *Store) startTask(ctx context.Context, tx *sql.Tx, a Identity, in StartT
 		return nil, err
 	}
 	// A retry that names a to-do must name the linked one; link_task_todo changes it afterwards.
-	if run.Title != in.Title || run.Task != in.Task || run.ExcerptBudget != in.ExcerptBudget || run.Branch != scope.Branch || run.Worktree != scope.Worktree || strings.Join(run.Paths, "\n") != strings.Join(scope.Paths, "\n") || (inserted == 0 && in.TodoID != "" && run.TodoID != in.TodoID) {
+	if run.Title != in.Title || run.Task != in.Task || run.ExcerptBudget != in.ExcerptBudget || run.Branch != scope.Branch || run.Worktree != scope.Worktree || strings.Join(run.Paths, "\n") != strings.Join(scope.Paths, "\n") || (inserted == 0 && !sameRelatedProjects(run.Context.RelatedProjects, related)) || (inserted == 0 && in.TodoID != "" && run.TodoID != in.TodoID) {
 		return nil, problem("CONFLICT", "request_key was already used with different task inputs.")
 	}
 	if inserted > 0 && in.TodoID != "" {
@@ -231,7 +237,7 @@ func (s *Store) startTask(ctx context.Context, tx *sql.Tx, a Identity, in StartT
 		run.TodoID = in.TodoID
 	}
 	if inserted > 0 {
-		run.Context, err = s.taskContext(ctx, tx, a, ContextInput{ProjectID: in.ProjectID, Task: in.Task, ExcerptBudget: in.ExcerptBudget})
+		run.Context, err = s.taskContext(ctx, tx, a, ContextInput{ProjectID: in.ProjectID, Task: in.Task, ExcerptBudget: in.ExcerptBudget, RelatedProjectIDs: related})
 		if err != nil {
 			return nil, err
 		}
