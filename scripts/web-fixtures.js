@@ -27,7 +27,7 @@ const taskContext=full=>({project:PROJECT,task:'작업 설명',retrieval:'hybrid
   ...(full?{warning:'임베딩 대기 중',rules:ruleSet(true),issues:{assigned_to_you:[{id:'issue-1',kind:'question',title:'질의',status:'open',blocking:true,area_name:null,assignee_id:ME.id,assignee_name:ME.name,created_by_name:OTHER.name,updated_at:T,citation:'kb://x'}],your_questions:[],related:[],shared_areas:[],blocking_open:1,guidance:'안내'},todos:{linked:{id:'todo-1',title:'할 일',status:'in_progress',priority:'high',progress:null,open_issues:0,blocking_issues:0},candidates:[],guidance:'안내'}}:{})});
 const completion=()=>({task_id:'run-2',outcome:'completed',documents:[{id:'doc-4',kind:'history',title:'작업 이력',status:'active',revision:1,citation:'kb://x'}],guidance:'안내',pull_requests:['https://github.com/example/demo/pull/12']});
 const taskRun=(id,over={})=>({id,project_id:PROJECT.id,created_by:ME.id,created_by_name:ME.name,request_key:'key-'+id,title:'작업 '+id,task:'작업 설명',excerpt_budget:8000,status:'open',completion:null,started_at:T,completed_at:null,age_days:0,open_issues:0,pull_requests:[],todo:null,...over});
-const taskRuns=()=>[taskRun('run-1',{age_days:9,open_issues:2,todo:{id:'todo-1',title:'할 일 todo-1',status:'in_progress'}}),taskRun('run-2',{status:'completed',completed_at:T,completion:completion(),pull_requests:[{...pull('deployed'),task_id:'run-2',project_id:PROJECT.id,created_at:T}]}),taskRun('run-3',{status:'abandoned',closed_at:T,closed_reason:'중단 사유',closed_by:ME.id,closed_by_name:ME.name})];
+const taskRuns=()=>[taskRun('run-1',{age_days:9,open_issues:2,todo:{id:'todo-1',title:'할 일 todo-1',status:'in_progress'}}),taskRun('run-2',{status:'completed',completed_at:T,feedback_at:T,feedback_note:'배포 절차가 없음',completion:completion(),pull_requests:[{...pull('deployed'),task_id:'run-2',project_id:PROJECT.id,created_at:T}]}),taskRun('run-3',{status:'abandoned',closed_at:T,closed_reason:'중단 사유',closed_by:ME.id,closed_by_name:ME.name})];
 const webhook=()=>({id:'hook-1',project_id:PROJECT.id,repository:'example/demo',import_issues:true,issue_kind:'issue',area_id:'area-1',assignee_id:OTHER.id,tags:['github'],track_pull_requests:true,enabled:true,created_by:ME.id,created_by_name:ME.name,created_at:T,updated_at:T,last_delivery_at:T,last_event:'issues',last_outcome:'processed',last_error:null,payload_url:'http://localhost/api/webhooks/github/hook-1',secret_set:true,recent:[{delivery_id:'d-1',event:'ping',outcome:'processed',detail:null,received_at:T},{delivery_id:'d-2',event:'issues',outcome:'failed',detail:'오류',received_at:T}]});
 const channel=()=>({id:'channel-1',project_id:PROJECT.id,kind:'webhook',name:'Discord',target_hint:'https://discord.com/…',events:['issue.assigned','issue.answered'],enabled:true,created_by:ME.id,created_at:T,updated_at:T,last_status:'failed',last_error:'HTTP 500',last_event_at:T,pending:1});
 const usageStats=full=>({project_id:PROJECT.id,days:30,timezone:'Asia/Seoul',from:'2026-10-17',to:'2026-11-15',
@@ -44,6 +44,9 @@ const usageStats=full=>({project_id:PROJECT.id,days:30,timezone:'Asia/Seoul',fro
   guidance:'안내'});
 const retrievalMetrics=full=>({project_id:PROJECT.id,days:30,tasks_started:full?8:0,tasks_with_feedback:full?5:0,offered:40,offered_used:12,used_total:14,used_not_offered:2,misleading:1,precision:full?0.3:null,coverage:full?0.85:null,hit_rate:full?0.8:null,mean_reciprocal_rank:full?0.6:null,
   most_used:full?[{document_id:'doc-1',title:'시스템 구조',kind:'reference',offered:8,used:6,misleading:0}]:[],offered_never_used:full?[{document_id:'doc-2',title:'이전 결정',kind:'decision',offered:5,used:0,misleading:0}]:[],misleading_sources:full?[{document_id:'doc-5',title:'관련 문서',kind:'brief',offered:3,used:1,misleading:1}]:[],recent_missing:full?['배포 절차가 없음']:[],guidance:'안내'});
+const recheckAssignment=over=>({document_id:'doc-1',project_id:PROJECT.id,owner_id:OTHER.id,owner_name:OTHER.name,interval_days:30,note:'배포 주소 확인',last_checked_at:null,last_checked_by:null,check_note:'',created_by:ME.id,created_at:T,updated_at:T,next_due_at:'2026-08-01T00:00:00Z',...over});
+const recheckDue=over=>({document_id:'doc-1',title:'시스템 구조',kind:'reference',status:'active',revision:2,owner_id:OTHER.id,owner_name:OTHER.name,interval_days:30,note:'배포 주소 확인',last_verified_at:T,days_overdue:12,citation:'kb://project-1/documents/doc-1?revision=2',...over});
+const recheckDigest=full=>({project_id:PROJECT.id,generated_at:T,by_owner:full?[{owner_id:OTHER.id,owner_name:OTHER.name,total:3,due:[recheckDue()]}]:[],unassigned_total:full?2:0,unassigned:[],summary:full?'## 재확인 요약\n':'## 재확인 요약\n\n재확인할 문서가 없습니다.\n',guidance:'안내'});
 const vectorPoints=()=>Array.from({length:12},(_,i)=>({id:'chunk-'+i,document_id:'doc-'+(i%3+1),title:'문서 '+(i%3+1),kind:['reference','decision','history'][i%3],position:i,revision:1,excerpt:'발췌 '+i,x:Math.cos(i),y:Math.sin(i),z:Math.cos(i*2)}));
 const revisions=()=>[{document_id:'doc-1',revision:2,reason:'내용 보완',actor_id:ME.id,created_at:T},{document_id:'doc-1',revision:1,reason:'',actor_id:OTHER.id,created_at:T}];
 
@@ -75,6 +78,8 @@ function mockAPI(variant){
     get_agents_template:()=>({filename:'AGENTS.md',project_id:PROJECT.id,project_slug:PROJECT.slug,content:'# 작업 지침\n',notes:full?['사용자 수준 지침에 넣으세요.']:[]}),
     get_usage_stats:()=>usageStats(full),
     get_retrieval_metrics:()=>retrievalMetrics(full),
+    list_recheck_assignments:()=>list([recheckAssignment()]),
+    get_recheck_digest:()=>recheckDigest(full),
     // Writes: answers are only as detailed as the pages read them.
     create_project:()=>PROJECT,
     add_project_repository:()=>({project_id:PROJECT.id,repositories:PROJECT.repositories,changed:true}),
@@ -108,6 +113,8 @@ function mockAPI(variant){
     set_notification_channel:()=>channel(),
     test_notification_channel:()=>({queued:true}),
     set_search_thresholds:()=>usageStats(true).hnsw_review.thresholds,
+    assign_recheck_owner:b=>b.remove?{document_id:b.document_id,removed:true}:recheckAssignment({document_id:b.document_id,owner_id:b.owner_id,interval_days:b.interval_days,note:b.note||''}),
+    confirm_recheck:b=>recheckAssignment({document_id:b.document_id,last_checked_at:T,check_note:b.note}),
   };
   const routes={
     'GET /api/me':()=>({user:ME,csrf_token:'csrf-mock',mcp_url:'http://localhost/mcp'}),

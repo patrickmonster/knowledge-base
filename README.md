@@ -23,6 +23,7 @@ Go로 만든 팀 공용 지식 서버입니다. 프로젝트별 기획·결정·
 - 작업 PR 병합·배포 자동 기록: `finish_task`에 남긴 PR을 GitHub에서 확인해 병합·배포(서버 자신의 저장소)되면 history에 상태 갱신 블록 추가, 미기록 PR은 작업 시작 맥락에 표시
 - 지식 품질과 AI 작업 흐름: 중복·충돌 결정 감지, 재확인 담당자·주기 요약, start_task 맥락 활용도 피드백과 검색 품질 지표, finish_task 결정 후보 추출, 오래 열린 작업 정리, 용어집(glossary)과 검색 동의어 확장([안내](docs/knowledge-quality.md))
 - 사용 통계 대시보드: 프로젝트별 도구 호출·활성 사용자·검색·문서 열람·작성·작업 수의 일별 추이, 문서 종류별 증가 추이, 결과 0건 검색어, 검색 방식별 검색 시간(HNSW 도입 판단용), 많이 쓴 도구·활동 사용자·많이 열람한 문서, 보유 현황, 검색 품질(`get_usage_stats`, 웹 '사용 통계')
+- 재확인 · 맥락 피드백 화면: 오래된 문서·담당자·주기·마지막 확인과 담당 지정·확인 기록(편집자 이상), 검색 품질 지표와 작업별 피드백(웹 '재확인 · 피드백', 조회자는 읽기 전용)
 - 공식 Go MCP SDK 기반 Streamable HTTP `/mcp`
 - Railway용 Dockerfile, 배포 전 마이그레이션, `/healthz`, 배포 커밋·스키마 버전 확인 `/version`
 
@@ -327,6 +328,7 @@ TEST_DATABASE_URL='<test-only PostgreSQL URL>' TEST_OLLAMA_URL=http://localhost:
 - `internal/kb/github_webhooks.go`: GitHub 웹훅 설정(웹 전용)과 수신·서명 검증, 이슈·PR 이벤트 반영
 - `internal/kb/deployments.go`: 작업 PR의 병합·배포 확인과 history 상태 갱신 블록(`check_task_deployments`, 주기 확인)
 - `internal/kb/usage.go`, `web/usage.js`: 사용 통계 집계와 대시보드
+- `web/rechecks.js`: 재확인·맥락 피드백 화면(기존 재확인·검색 품질 MCP 도구를 웹에서 호출)
 - `migrations/003_embeddings.sql`: 벡터 컬럼과 작업 대기열
 - `migrations/`: 버전 관리되는 DB 스키마
 

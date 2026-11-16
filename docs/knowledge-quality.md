@@ -23,6 +23,7 @@ MCP 도구와 기존 작업 흐름(`start_task`·`finish_task`)에 붙는 품질
 - `include_unassigned=true`이면 담당자가 없고 90일 넘게 수정되지 않은 active reference·brief도 함께 보여 줍니다.
 - **주기 알림**: `start_task`의 `context.rechecks`에 호출자가 담당한 기한 지난 문서(최대 10건)가 표시됩니다. 담당자가 작업을 시작할 때마다 알림을 받는 방식입니다. 이메일·웹훅 발송은 아직 없으며(로드맵 11·17번) 필요하면 예약 작업이 `get_recheck_digest`를 주기적으로 호출해 `summary`를 전달합니다.
 - history 문서는 시점 기록이므로 담당자를 지정할 수 없습니다.
+- 웹 **재확인 · 피드백** 화면에서 기준 일수(`stale_days`)별 재확인 필요 문서, 담당자·주기·다음 기한·마지막 확인, 담당자별 기한 지난 문서와 `get_recheck_digest` 요약 복사를 볼 수 있습니다. 담당 지정·변경·해제(`assign_recheck_owner`)와 "확인함" 기록(`confirm_recheck`)은 편집자 이상에게만 버튼이 보이며, 권한 판정은 도구와 같은 서버 규칙입니다. 조회자는 읽기 전용입니다.
 
 ## 3. start_task 맥락 활용도 피드백
 
@@ -34,6 +35,7 @@ MCP 도구와 기존 작업 흐름(`start_task`·`finish_task`)에 붙는 품질
   - `hit_rate` = 제공 출처를 하나 이상 사용한 작업 비율, `mean_reciprocal_rank`
   - `most_used`, `offered_never_used`(2회 이상 제공, 사용 0), `misleading_sources`, 최근 `recent_missing`
 - 피드백은 작업을 시작한 사용자만 기록합니다. 기록하지 않은 작업은 지표에서 빠지므로 표본 수(`tasks_with_feedback`)를 함께 보세요.
+- 같은 화면의 **맥락 피드백** 카드는 `get_retrieval_metrics`(7·30·90일·1년)의 정확도·포괄률·적중률·MRR, 사용·미사용·오해 소지 비율(미사용은 제공 건수에서 사용·오해 소지를 뺀 추정치), 많이 쓴 문서·쓰이지 않은 문서·오해 소지 문서, 찾지 못한 지식과 `list_task_runs`의 최근 작업별 피드백 기록을 보여 줍니다. 기록 자체는 웹에서 하지 않는 조회 전용입니다.
 
 ## 4. finish_task 결정 후보 추출
 
