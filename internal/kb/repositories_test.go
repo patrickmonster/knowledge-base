@@ -106,13 +106,28 @@ func TestProjectRepositories(t *testing.T) {
 	if !one.Matched || one.Project == nil || one.Project.ID != a.ID || one.Project.Role != "editor" || one.Repository != "github.com/owner/app" || one.Guidance != resolveMatch {
 		t.Fatalf("resolve one: %+v", one)
 	}
+	// A match carries the caller's rules, so an agent that goes straight from
+	// resolving to committing has seen them; without rules the field is absent.
+	if one.Rules != nil {
+		t.Fatalf("resolve without rules: %+v", one.Rules)
+	}
+	mustCall(t, tools, owner, "save_rule", SaveRuleInput{ProjectID: a.ID, Scope: "project", Category: "commit", Title: "branch per task", Body: "b"})
+	off := mustCall(t, tools, owner, "save_rule", SaveRuleInput{ProjectID: a.ID, Scope: "project", Title: "switched off", Body: "b"}).(Rule)
+	mustCall(t, tools, owner, "set_rule_enabled", SetRuleEnabledInput{ProjectID: a.ID, RuleID: off.ID, Enabled: false})
+	mustCall(t, tools, editor, "save_rule", SaveRuleInput{ProjectID: a.ID, Scope: "personal", Title: "mine", Body: "b"})
+	mustCall(t, tools, owner, "save_rule", SaveRuleInput{ProjectID: a.ID, Scope: "personal", Title: "the owner's own", Body: "b"})
+	ruled := mustCall(t, tools, editor, "resolve_project", ResolveProjectInput{Repository: "owner/app"}).(ResolvedProject)
+	if ruled.Rules == nil || len(ruled.Rules.ProjectRules) != 1 || ruled.Rules.ProjectRules[0].Title != "branch per task" ||
+		len(ruled.Rules.PersonalRules) != 1 || ruled.Rules.PersonalRules[0].Title != "mine" || ruled.Rules.Guidance != rulesGuidance {
+		t.Fatalf("resolve rules: %+v", ruled.Rules)
+	}
 	for _, who := range []Identity{owner, outsider} {
 		repo := "owner/unknown"
 		if who.User.ID == outsider.User.ID {
 			repo = "owner/app" // registered, but not in a project the caller can see
 		}
 		none := mustCall(t, tools, who, "resolve_project", ResolveProjectInput{Repository: repo}).(ResolvedProject)
-		if none.Matched || none.Project != nil || len(none.Candidates) != 0 || none.Guidance != resolveNoMatch {
+		if none.Matched || none.Project != nil || none.Rules != nil || len(none.Candidates) != 0 || none.Guidance != resolveNoMatch {
 			t.Fatalf("resolve none (%s): %+v", repo, none)
 		}
 	}
@@ -125,7 +140,7 @@ func TestProjectRepositories(t *testing.T) {
 		t.Fatalf("both: %+v", both)
 	}
 	several := mustCall(t, tools, owner, "resolve_project", ResolveProjectInput{Repository: "owner/app"}).(ResolvedProject)
-	if several.Matched || several.Project != nil || len(several.Candidates) != 2 || several.Guidance != resolveSeveral {
+	if several.Matched || several.Project != nil || several.Rules != nil || len(several.Candidates) != 2 || several.Guidance != resolveSeveral {
 		t.Fatalf("resolve several: %+v", several)
 	}
 
@@ -169,7 +184,7 @@ func TestProjectRepositories(t *testing.T) {
 // The server instructions carry the whole workflow, so a repository needs no
 // AGENTS.md, and they tell an unrelated server among several to stay out.
 func TestServerInstructionsPickProjectByRepository(t *testing.T) {
-	for _, want := range []string{"resolve_project", "matched=false", "do not ask the user", "without any file in the repository", "Leave no trace of this server in the repository"} {
+	for _, want := range []string{"resolve_project", "matched=false", "do not ask the user", "without any file in the repository", "Leave no trace of this server in the repository", "follow the rules it returns", "only commits, pushes, opens a pull request"} {
 		if !strings.Contains(serverInstructions, want) {
 			t.Errorf("server instructions miss %q", want)
 		}

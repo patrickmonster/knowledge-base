@@ -94,17 +94,23 @@ type ResolveProjectInput struct {
 // belongs to. Several knowledge servers may be connected to one client and the
 // agent may ask all of them; a server without the repository answers
 // matched=false so the agent leaves it alone instead of stopping to ask.
+//
+// A match carries the project's rules. Rules are otherwise pulled by start_task
+// or list_rules, and an agent that resolves the project and then goes straight
+// to editing and committing never saw them; this is the one call every agent
+// makes, so the rules ride along with it.
 type ResolvedProject struct {
 	Repository string    `json:"repository"`
 	Matched    bool      `json:"matched"`
 	Project    *Project  `json:"project,omitempty"`
+	Rules      *RuleSet  `json:"rules,omitempty"`
 	Candidates []Project `json:"candidates,omitempty"`
 	Guidance   string    `json:"guidance"`
 }
 
 const (
 	resolveNoMatch = "This server has no project for this repository. Do not use this server for this task: do not call start_task, list_rules or finish_task here, do not ask the user about it, and continue the work. Another connected knowledge server may match."
-	resolveMatch   = "Use this project for this task on this server: start_task(project_id), follow context.rules, finish_task when done. With role viewer, only read (search, documents, rules); skip start_task and finish_task."
+	resolveMatch   = "Use this project for this task on this server. rules are this project's work rules as of now: follow them from the first step (branch, commit, pull request, completion record), also when you have not called start_task yet; no rules field means none are set. Before each change task call start_task(project_id), which returns the rules again in context.rules (they can change), and finish_task when done. With role viewer, only read (search, documents, rules); skip start_task and finish_task."
 	resolveSeveral = "Several projects on this server are registered for this repository. Ask the user which one to use (or none); do not guess from names."
 )
 
@@ -127,6 +133,9 @@ func resolveProject(ctx context.Context, tx *sql.Tx, a Identity, in ResolveProje
 		out.Guidance = resolveNoMatch
 	case 1:
 		out.Matched, out.Project, out.Guidance = true, &projects[0], resolveMatch
+		if out.Rules, err = taskRules(ctx, tx, a.User.ID, projects[0]); err != nil {
+			return ResolvedProject{}, err
+		}
 	default:
 		out.Candidates, out.Guidance = projects, resolveSeveral
 	}
@@ -150,7 +159,7 @@ func manageProjectRepository(ctx context.Context, tx *sql.Tx, a Identity, in Pro
 }
 
 func registerRepositoryTools(t Tools, s *Store) {
-	add(t, s, "resolve_project", "Find the project on this server registered for a git checkout. Call it first, with the checkout's git remote, on every connected knowledge server. matched=true: use project.id for this task. matched=false: this server is unrelated to the repository; leave it alone without asking the user. candidates: ask the user which project. Read-only and safe to call on any server.", false, nil, func(ctx context.Context, tx *sql.Tx, a Identity, in ResolveProjectInput) (any, error) {
+	add(t, s, "resolve_project", "Find the project on this server registered for a git checkout. Call it first, with the checkout's git remote, on every connected knowledge server. matched=true: use project.id for this task and follow the returned rules (the project's work rules for branches, commits and pull requests) right away. matched=false: this server is unrelated to the repository; leave it alone without asking the user. candidates: ask the user which project. Read-only and safe to call on any server.", false, nil, func(ctx context.Context, tx *sql.Tx, a Identity, in ResolveProjectInput) (any, error) {
 		return resolveProject(ctx, tx, a, in)
 	})
 	add(t, s, "add_project_repository", "Owner or admin: register a source repository (git remote or owner/name) for the project, so list_projects(repository) finds it. Stored normalized as host/owner/name. Registering the same repository again changes nothing.", true, func(in ProjectRepositoryInput) string { return in.ProjectID }, func(ctx context.Context, tx *sql.Tx, a Identity, in ProjectRepositoryInput) (any, error) {
