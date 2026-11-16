@@ -1,7 +1,8 @@
 'use strict';
 
 // 할 일 보드: project to-dos in status columns × priority rows. Cards drag
-// between cells (move_todo) and open an edit dialog (save_todo/delete_todo).
+// between cells (move_todo) with the mouse or, after a long press, a finger,
+// and open an edit dialog (save_todo/delete_todo).
 const todoStatuses=[['not_started','시작 전'],['in_progress','진행 중'],['completed','완료'],['idea','아이디어']];
 const todoPriorities=[['high','높음'],['medium','보통'],['low','낮음']];
 const todoStatusLabel=Object.fromEntries(todoStatuses), todoPriorityLabel=Object.fromEntries(todoPriorities);
@@ -48,6 +49,7 @@ async function todosPage(){
     return ctx.todos.filter(t=>(!category.value||t.category===category.value)&&(!mine.checked||t.assignee_id===me.id));
   }
   function draw(){
+    if(touchDrag)endTouchDrag(false);
     const items=visible();
     summary.textContent=`${items.length}건`+(ctx.todos.length>=500?' · 최대 500건까지 표시':'');
     const inner=el('div',undefined,'todo-board-inner');
@@ -118,8 +120,9 @@ async function todosPage(){
     c.addEventListener('keydown',e=>{if(e.key==='Enter'&&e.target===c){e.preventDefault();todoDialog(root,project,ctx,t);}});
     if(canWrite){
       c.draggable=true;
-      c.addEventListener('dragstart',e=>{e.dataTransfer.setData('text/plain',t.id);e.dataTransfer.effectAllowed='move';c.classList.add('dragging');});
-      c.addEventListener('dragend',()=>{c.classList.remove('dragging');board.querySelectorAll('.drop-before,.drop-target').forEach(n=>n.classList.remove('drop-before','drop-target'));});
+      c.addEventListener('dragstart',e=>{if(touchDrag){e.preventDefault();return;}e.dataTransfer.setData('text/plain',t.id);e.dataTransfer.effectAllowed='move';c.classList.add('dragging');});
+      c.addEventListener('dragend',()=>{c.classList.remove('dragging');clearDropMarks();});
+      touchDraggable(c,t);
     }
     return c;
   }
@@ -140,12 +143,98 @@ async function todosPage(){
       e.preventDefault();
       const id=e.dataTransfer.getData('text/plain'),before=beforeCard(cell,e.clientY);
       cell.classList.remove('drop-target');
-      const t=ctx.todos.find(x=>x.id===id);if(!t)return;
-      const body={project_id:project.id,todo_id:id,status:cell.dataset.status,priority:cell.dataset.priority};
-      if(before&&before.dataset.id!==id)body.before_id=before.dataset.id;
-      try{await tool('move_todo',body);}catch(err){notify(err.message,true);}
-      await refresh().catch(err=>notify(err.message,true));
+      await moveCard(id,cell,before);
     });
+  }
+  function clearDropMarks(){board.querySelectorAll('.drop-before,.drop-target').forEach(n=>n.classList.remove('drop-before','drop-target'));}
+  async function moveCard(id,cell,before){
+    if(!ctx.todos.some(x=>x.id===id))return;
+    const body={project_id:project.id,todo_id:id,status:cell.dataset.status,priority:cell.dataset.priority};
+    if(before&&before.dataset.id!==id)body.before_id=before.dataset.id;
+    try{await tool('move_todo',body);}catch(err){notify(err.message,true);}
+    await refresh().catch(err=>notify(err.message,true));
+  }
+
+  // Touch: HTML5 drag events do not fire for fingers. A long press picks the
+  // card up (a short swipe still scrolls the board), a copy follows the finger
+  // and lifting it drops the card into the cell underneath.
+  const touchHoldMs=350,touchSlop=10,touchEdge=56,touchScrollStep=14;
+  let touchDrag=null;
+  function touchDraggable(c,t){
+    let timer=0,press=null;
+    const cancelPress=()=>{clearTimeout(timer);timer=0;press=null;};
+    c.addEventListener('touchstart',e=>{
+      cancelPress();
+      if(touchDrag||e.touches.length!==1||e.target.closest('input,label,button,a'))return;
+      const p=e.touches[0];press={x:p.clientX,y:p.clientY,id:p.identifier};
+      timer=setTimeout(()=>{timer=0;if(press&&c.isConnected)beginTouchDrag(c,t,press);press=null;},touchHoldMs);
+    },{passive:true});
+    c.addEventListener('touchmove',e=>{
+      if(touchDrag&&touchDrag.card===c){
+        e.preventDefault();
+        const p=[...e.touches].find(x=>x.identifier===touchDrag.touchID);
+        if(p)trackTouchDrag(p.clientX,p.clientY);
+        return;
+      }
+      if(!press)return;
+      const p=e.touches[0];
+      if(e.touches.length!==1||Math.hypot(p.clientX-press.x,p.clientY-press.y)>touchSlop)cancelPress();
+    },{passive:false});
+    const end=e=>{
+      cancelPress();
+      if(!touchDrag||touchDrag.card!==c)return;
+      if([...e.touches].some(x=>x.identifier===touchDrag.touchID))return;
+      e.preventDefault(); // no click (edit dialog) after a drag
+      endTouchDrag(e.type==='touchend');
+    };
+    c.addEventListener('touchend',end);
+    c.addEventListener('touchcancel',end);
+    c.addEventListener('contextmenu',e=>{if(timer||touchDrag)e.preventDefault();});
+  }
+  function beginTouchDrag(c,t,press){
+    const r=c.getBoundingClientRect(),ghost=c.cloneNode(true);
+    ghost.classList.add('todo-ghost');ghost.removeAttribute('tabindex');ghost.setAttribute('aria-hidden','true');
+    ghost.style.width=r.width+'px';
+    document.body.append(ghost);
+    c.classList.add('dragging');
+    touchDrag={card:c,id:t.id,touchID:press.id,ghost,dx:press.x-r.left,dy:press.y-r.top,x:press.x,y:press.y,cell:null,before:null,raf:0};
+    try{navigator.vibrate&&navigator.vibrate(10);}catch{}
+    trackTouchDrag(press.x,press.y);
+    touchDrag.raf=requestAnimationFrame(touchAutoScroll);
+  }
+  function trackTouchDrag(x,y){
+    const d=touchDrag;if(!d)return;
+    d.x=x;d.y=y;
+    d.ghost.style.transform=`translate(${Math.round(x-d.dx)}px,${Math.round(y-d.dy)}px)`;
+    const under=document.elementFromPoint(x,y),cell=under&&board.contains(under)?under.closest('.todo-cell'):null;
+    clearDropMarks();
+    d.cell=cell;d.before=null;
+    if(!cell)return;
+    cell.classList.add('drop-target');
+    d.before=beforeCard(cell,y);
+    if(d.before)d.before.classList.add('drop-before');
+  }
+  // Holding the card near an edge scrolls the board sideways or the page up and down.
+  function touchAutoScroll(){
+    const d=touchDrag;if(!d)return;
+    const b=board.getBoundingClientRect(),beforeLeft=board.scrollLeft,beforeTop=window.scrollY;
+    if(d.x<b.left+touchEdge)board.scrollLeft-=touchScrollStep;
+    else if(d.x>b.right-touchEdge)board.scrollLeft+=touchScrollStep;
+    if(d.y<touchEdge)window.scrollBy(0,-touchScrollStep);
+    else if(d.y>window.innerHeight-touchEdge)window.scrollBy(0,touchScrollStep);
+    if(board.scrollLeft!==beforeLeft||window.scrollY!==beforeTop)trackTouchDrag(d.x,d.y);
+    d.raf=requestAnimationFrame(touchAutoScroll);
+  }
+  function endTouchDrag(commit){
+    const d=touchDrag;if(!d)return;
+    touchDrag=null;
+    cancelAnimationFrame(d.raf);
+    d.ghost.remove();d.card.classList.remove('dragging');clearDropMarks();
+    if(!commit||!d.cell)return;
+    // Dropped where it already was: nothing to save.
+    let next=d.card.nextElementSibling;if(next&&!next.classList.contains('todo-card'))next=null;
+    if(d.cell===d.card.parentElement&&d.before===next)return;
+    moveCard(d.id,d.cell,d.before);
   }
   category.addEventListener('change',draw);
   mine.addEventListener('change',draw);
