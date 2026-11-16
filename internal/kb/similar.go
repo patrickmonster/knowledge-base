@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 	"unicode/utf8"
@@ -17,9 +18,15 @@ import (
 // relates to it, or conflicts and needs the user's call.
 
 const (
-	// similarDecisionThreshold is the minimum similarity reported.
-	similarDecisionThreshold = 0.18
-	// supersedeThreshold suggests supersedes instead of related.
+	// similarDecisionThreshold is the minimum similarity reported. Measured on
+	// the project's own decisions (2026-11-16, 10 decisions, 45 pairs, with
+	// identifiers and boilerplate ignored): decisions on different topics score
+	// up to 0.054, topically related ones 0.067–0.105 (one related pair, 0.057,
+	// stays below the line). Re-measure when there are many more decisions.
+	similarDecisionThreshold = 0.06
+	// supersedeThreshold suggests supersedes instead of related. Trimmed or
+	// rewritten versions of one decision score 0.69–0.97 on the same data and no
+	// pair of different decisions passes 0.11, so 0.4 stays.
 	supersedeThreshold  = 0.4
 	maxSimilarDecisions = 5
 )
@@ -44,12 +51,21 @@ var similarityStopwords = map[string]bool{
 	"결정": true, "배경": true, "내용": true, "검토": true, "대안": true, "선택": true, "이유": true, "영향": true, "후속": true,
 	"작업": true, "재검토": true, "조건": true, "근거": true, "출처": true, "없음": true, "미확인": true, "확인": true, "필요": true,
 	"한다": true, "있다": true, "없다": true, "하는": true, "the": true, "and": true, "for": true, "with": true, "this": true, "that": true,
+	"rev": true, "draft": true, "main": true, "md": true, "history": true, "readme": true, "commit": true,
 }
+
+// similarityBoilerplate matches bookkeeping phrases found in almost every
+// decision (who chose, that it was reconstructed, how it was verified). They
+// are removed from the text before tokenizing, because their Hangul bigrams
+// (사용자가 → 사용, 용자, 자가) would otherwise still be shared.
+var similarityBoilerplate = regexp.MustCompile(`사용자가|사용자는|사용자|직접 선택|선택했다|선택하지|재구성|그대로|검토한다|않았다|않는다`)
+
+var similarityIdentifier = regexp.MustCompile(`^(?:[0-9]+|[0-9a-f]{6,}.*)$`)
 
 // similarityTerms returns the distinctive lexemes of text, ignoring Markdown
 // headings, citations and stopwords.
 func similarityTerms(text string) map[string]bool {
-	lines := strings.Split(IndexableText("decision", text), "\n")
+	lines := strings.Split(similarityBoilerplate.ReplaceAllString(IndexableText("decision", text), " "), "\n")
 	kept := lines[:0]
 	for _, line := range lines {
 		if !strings.HasPrefix(strings.TrimSpace(line), "#") {
@@ -58,7 +74,7 @@ func similarityTerms(text string) map[string]bool {
 	}
 	out := map[string]bool{}
 	for _, term := range Lexemes(strings.Join(kept, "\n")) {
-		if utf8.RuneCountInString(term) < 2 || similarityStopwords[term] {
+		if utf8.RuneCountInString(term) < 2 || similarityStopwords[term] || similarityIdentifier.MatchString(term) {
 			continue
 		}
 		out[term] = true

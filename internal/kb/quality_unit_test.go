@@ -116,3 +116,24 @@ func TestRenderRecheckDigest(t *testing.T) {
 		t.Fatal("empty digest message missing")
 	}
 }
+
+// Identifiers and bookkeeping words that every decision carries (commit and
+// document IDs, dates, "rev", "draft") must not make unrelated decisions look
+// alike, while a different decision on the same topic must still be reported.
+func TestDecisionSimilarityIgnoresBoilerplate(t *testing.T) {
+	boiler := "\n\n## 근거와 출처\n\nhistory f877b42a rev 1, 03a647b3의 절차, commit 4ad825f (main). 2026-11-14 사용자가 직접 선택했다. 재구성 draft."
+	a := "## 결정 내용\n\n개발 환경 서버를 제거하고 운영 환경 하나로 쓴다. 개발 볼륨은 비용 때문에 보관한다." + boiler
+	b := "## 결정 내용\n\n알림 채널은 Discord 웹훅으로 보낸다. SMTP 이메일은 설정하지 않는다." + boiler
+	if score, shared := decisionSimilarity("결정: 개발 서버 제거", a, "결정: 알림은 Discord 웹훅", b); score >= similarDecisionThreshold {
+		t.Fatalf("boilerplate inflated similarity: %.3f %v", score, shared)
+	}
+	c := "## 결정 내용\n\n개발 환경 볼륨은 백업한 뒤 삭제한다. 개발 서버는 이미 제거했고 볼륨 보관 비용이 계속 나온다." + boiler
+	if score, shared := decisionSimilarity("결정: 개발 서버 제거", a, "결정: 개발 볼륨 백업 후 삭제", c); score < similarDecisionThreshold || score >= supersedeThreshold {
+		t.Fatalf("related decision score %.3f not in [%.3f,%.3f): %v", score, similarDecisionThreshold, supersedeThreshold, shared)
+	}
+	for _, id := range []string{"4ad825f", "03a647b3의", "2026", "47"} {
+		if similarityTerms(id)[id] {
+			t.Fatalf("identifier %q counted as a term", id)
+		}
+	}
+}
