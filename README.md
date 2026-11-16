@@ -283,8 +283,16 @@ npm --prefix .railway run setup -- --project your-team-knowledge --repo your-org
 ## 검증
 
 ```sh
+gofmt -l .        # 출력이 있으면 gofmt -w 로 정리 (CI에서 검사)
 go vet ./...
 go test ./...
+```
+
+웹 화면(`internal/kb/web`) 테스트는 Node로 실행합니다. 스모크 테스트(`scripts/web-smoke.test.js`)는 jsdom에서 모든 화면을 목 API(`scripts/web-fixtures.js`)로 열고 버튼을 눌러, 예외·오류 알림·화면에 찍힌 `undefined`·`NaN`을 잡습니다. 서버 응답 형태를 바꾸면 `web-fixtures.js`도 함께 고칩니다.
+
+```sh
+npm ci --prefix scripts
+npm --prefix scripts test
 ```
 
 실제 PostgreSQL + pgvector 통합 테스트는 **테스트 전용 DB** 연결을 지정해야 실행됩니다. 각 테스트는 임의의 전용 스키마를 만들고 종료 시 제거합니다. 미지정 시 통합 테스트가 건너뛰어집니다.

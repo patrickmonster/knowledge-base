@@ -35,7 +35,7 @@ type CrossSearchResult struct {
 	UnindexedChunks int               `json:"unindexed_chunks"`
 	Projects        []SearchedProject `json:"projects"`
 	// Omitted reports accessible projects left out because of maxSearchProjects.
-	Omitted         int               `json:"omitted_projects,omitempty"`
+	Omitted int `json:"omitted_projects,omitempty"`
 }
 
 // projectScope renders already-validated project IDs as a Postgres array

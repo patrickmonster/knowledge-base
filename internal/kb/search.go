@@ -42,6 +42,7 @@ func QueryText(text string) string {
 	}
 	return strings.Join(terms, " | ")
 }
+
 // taskLinkHeading is the generated block finish_task appends to history documents.
 const taskLinkHeading = "## 작업 연결 정보"
 
