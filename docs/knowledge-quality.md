@@ -41,7 +41,7 @@ MCP 도구와 기존 작업 흐름(`start_task`·`finish_task`)에 붙는 품질
 
 ## 3. start_task 맥락 활용도 피드백
 
-- `finish_task`에 `used_sources`(실제로 근거로 쓴 문서 ID, 최대 50)와 `missing_knowledge`(찾지 못한 지식)를 함께 보냅니다. 별도로 `record_context_feedback`(misleading_sources 포함)으로 기록하거나 고칠 수 있습니다. 다시 기록하면 해당 작업의 피드백을 교체합니다.
+- `finish_task`에 `used_sources`(실제로 근거로 쓴 문서 ID, 최대 50)와 `missing_knowledge`(찾지 못한 지식)를 함께 보냅니다. 별도로 `record_context_feedback`(misleading_sources 포함)으로 기록하거나 고칠 수 있습니다. 다시 기록하면 해당 작업의 피드백을 교체합니다. `finish_task`의 `used_sources`에 들어 있는 결정·기획 문서는 히스토리와 `implements`로 자동 연결됩니다(`record_context_feedback`은 연결하지 않음).
 - `start_task`가 제공했지만 목록에 없는 출처는 `unused`로 기록합니다. 나중에 찾아 쓴 문서는 `offered=false`로 남습니다.
 - `get_retrieval_metrics(days=30)`:
   - `precision` = 제공한 출처 중 사용한 비율

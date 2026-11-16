@@ -311,6 +311,35 @@ func implementedDocuments(ctx context.Context, tx *sql.Tx, projectID string, ids
 	return out, nil
 }
 
+// withUsedImplements appends the decision and brief documents among a task's
+// used_sources to its implements targets, skipping ones already listed. Other
+// kinds in used_sources are evidence only and stay unlinked.
+func withUsedImplements(ctx context.Context, tx *sql.Tx, projectID string, implemented []Document, used []string) ([]Document, error) {
+	if len(used) == 0 {
+		return implemented, nil
+	}
+	seen := map[string]bool{}
+	for _, d := range implemented {
+		seen[d.ID] = true
+	}
+	ids := []string{}
+	for _, id := range used {
+		if !seen[id] {
+			seen[id] = true
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 {
+		return implemented, nil
+	}
+	docs, err := many[Document](ctx, tx, `SELECT to_jsonb(d)-'content' FROM documents d JOIN unnest($2::text[]) WITH ORDINALITY u(id,n) ON d.id::text=u.id
+	WHERE d.project_id=$1 AND d.kind IN ('decision','brief') ORDER BY u.n`, projectID, ids)
+	if err != nil {
+		return nil, err
+	}
+	return append(implemented, docs...), nil
+}
+
 type LinksQuery struct {
 	ProjectID  string `json:"project_id"`
 	DocumentID string `json:"document_id"`

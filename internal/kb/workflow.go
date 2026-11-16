@@ -94,8 +94,8 @@ type FinishTaskInput struct {
 	References       string          `json:"references" jsonschema:"Verified source IDs, revisions, links or commits; distinguish uncommitted and undeployed work"`
 	Tags             []string        `json:"tags,omitempty" jsonschema:"History topic tags; at most 18, plus automatic task ID and history tags"`
 	Documents        []TemplateDraft `json:"documents,omitempty" jsonschema:"Optional brief or decision documents, at most 10; drafts by default, active only when confirmed"`
-	Implements       []string        `json:"implements,omitempty" jsonschema:"IDs of existing decision or brief documents this task carried out, at most 20; the history is linked to them with implements"`
-	UsedSources      *[]string       `json:"used_sources,omitempty" jsonschema:"Document IDs you actually relied on as evidence, at most 50; start_task sources you do not list count as unused. Send an empty list when none helped (omitting it records no feedback). Measures retrieval quality"`
+	Implements       []string        `json:"implements,omitempty" jsonschema:"IDs of existing decision or brief documents this task carried out, at most 20; the history is linked to them with implements. Decisions and briefs in used_sources are linked the same way"`
+	UsedSources      *[]string       `json:"used_sources,omitempty" jsonschema:"Document IDs you actually relied on as evidence, at most 50; start_task sources you do not list count as unused. Send an empty list when none helped (omitting it records no feedback). Measures retrieval quality; decision and brief documents listed here are also linked to the history with implements"`
 	MissingKnowledge string          `json:"missing_knowledge,omitempty" jsonschema:"Knowledge you needed but could not find, up to 2000 characters"`
 	PullRequests     []string        `json:"pull_requests,omitempty" jsonschema:"GitHub pull requests carrying this task's changes, at most 10: https://github.com/owner/repo/pull/N or owner/repo#N. The server tracks merge and deployment and prepends a status block to the history when they happen"`
 }
@@ -349,6 +349,14 @@ func (s *Store) finishTask(ctx context.Context, tx *sql.Tx, a Identity, in Finis
 			return nil, err
 		}
 		feedback = &result
+	}
+	// Decisions and briefs the task relied on (used_sources) are linked like
+	// explicit implements, so histories do not stay unconnected when the
+	// caller only reported its evidence. recordContextFeedback has already
+	// checked that every used document exists in this project.
+	implemented, err = withUsedImplements(ctx, tx, in.ProjectID, implemented, used)
+	if err != nil {
+		return nil, err
 	}
 	links := ""
 	for _, draft := range in.Documents {

@@ -112,7 +112,7 @@
 
 추가 문서는 `documents` 배열에 최대 10개까지 넣습니다. `kind`는 `brief` 또는 `decision`이며 `title`, `sections`가 필요합니다. `sections`의 모든 필수 키는 `get_document_templates`로 확인합니다. 기본 상태는 `draft`입니다. draft는 사람이 웹 **검토 대기** 화면에서 승인(active)하거나 반려(archived)합니다. 히스토리는 자동으로 한 개 생성되므로 배열에 넣지 않습니다.
 
-이번 작업이 기존 결정·기획을 실행한 것이면 `implements`에 그 문서 ID를 최대 20개 넣습니다. 히스토리와 해당 문서가 `implements` 관계로 연결되어 결정 쪽에서 `get_document_links`의 `implemented_by`로 작업 기록을 찾을 수 있습니다. 새 결정이 옛 결정을 대체하면 저장 후 `link_documents(relation: supersedes, source_id: 새 결정, target_id: 옛 결정)`로 연결합니다.
+이번 작업이 기존 결정·기획을 실행한 것이면 `implements`에 그 문서 ID를 최대 20개 넣습니다. 히스토리와 해당 문서가 `implements` 관계로 연결되어 결정 쪽에서 `get_document_links`의 `implemented_by`로 작업 기록을 찾을 수 있습니다. `used_sources`에 넣은 문서 중 결정(decision)·기획(brief)도 같은 방식으로 `implements` 연결되고 히스토리의 '실행한 기획·결정' 목록에 들어갑니다(20개 제한은 `implements` 입력에만 적용). 다른 종류(history·reference 등)는 검색 품질 피드백으로만 쓰이고 연결되지 않습니다. 새 결정이 옛 결정을 대체하면 저장 후 `link_documents(relation: supersedes, source_id: 새 결정, target_id: 옛 결정)`로 연결합니다.
 
 완료 시 문서·문서 버전·임베딩 대기열·작업 상태·감사 로그가 같은 트랜잭션에 저장됩니다. 한 문서의 검증이나 저장이 실패하면 모두 롤백합니다. 같은 완료 입력을 다시 보내면 기존 문서 ID와 최초 저장 버전을 반환하며 문서를 복제하지 않습니다. 다른 입력으로 이미 종료한 작업을 재완료하면 `CONFLICT`입니다. 보완은 기존 문서를 읽고 `update_document(expected_revision, reason)`로 처리합니다. 완료 응답은 최초 저장 영수증이므로 나중의 문서 수정이 응답을 바꾸지는 않습니다.
 
