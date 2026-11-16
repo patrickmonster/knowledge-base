@@ -12,3 +12,6 @@ coverage.out
 .railway/*.local.json
 *.pem
 *.key
+
+# 저장 실패 대기 기록은 저장소 밖(~/.knowledge-pending/)에 둔다
+exports/knowledge-pending-*

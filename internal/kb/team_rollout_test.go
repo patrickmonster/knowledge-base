@@ -5,6 +5,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -109,6 +111,23 @@ func TestRenderAgentsTemplate(t *testing.T) {
 	}
 	if out.Filename != "AGENTS.md" || len(out.Notes) == 0 {
 		t.Fatalf("unexpected template metadata: %+v", out)
+	}
+}
+
+// TestRepositoryAgentsPendingLocation keeps this repository's AGENTS.md on the
+// same failed-save location as the template and the server instructions:
+// outside the repository, never under exports/.
+func TestRepositoryAgentsPendingLocation(t *testing.T) {
+	body, err := os.ReadFile(filepath.Join("..", "..", "AGENTS.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(body)
+	if strings.Contains(text, "exports/knowledge-pending") {
+		t.Fatal("AGENTS.md still keeps pending records in the repository")
+	}
+	if !strings.Contains(text, "~/.knowledge-pending/") || !strings.Contains(serverInstructions, "outside the repository") {
+		t.Fatal("AGENTS.md and server instructions disagree on where pending records go")
 	}
 }
 
