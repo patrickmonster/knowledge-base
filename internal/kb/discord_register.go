@@ -63,9 +63,12 @@ type discordCommandOption struct {
 }
 
 type discordCommand struct {
-	Name        string                 `json:"name"`
+	Name string `json:"name"`
+	// Type is omitted for a slash command (1); 3 is a message command, which
+	// Discord requires to have no description and no options.
+	Type        int                    `json:"type,omitempty"`
 	Description string                 `json:"description"`
-	Options     []discordCommandOption `json:"options"`
+	Options     []discordCommandOption `json:"options,omitempty"`
 }
 
 // discordCommandDefinition is the /kb command with its subcommands
@@ -87,6 +90,9 @@ func discordCommandDefinition() []discordCommand {
 				{Type: 3, Name: "status", Description: "상태", Choices: statuses},
 				{Type: 5, Name: "mine", Description: "내 담당만"}}},
 		},
+	}, {
+		// Apps → 이슈로 등록 on a message (message commands may use spaces and Korean).
+		Name: discordMessageCommandName, Type: discordCommandTypeMessage,
 	}}
 }
 
