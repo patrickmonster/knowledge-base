@@ -3,6 +3,7 @@ package kb
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -221,5 +222,78 @@ func TestRegisterDiscordCommandsAdminOnly(t *testing.T) {
 	var found bool
 	if err := s.DB.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM audit_events WHERE details::text LIKE '%'||$1||'%')`, registerTestToken).Scan(&found); err != nil || found {
 		t.Fatalf("the token reached the audit log: %v %v", found, err)
+	}
+}
+
+// A global registration says where the commands run, from the install types
+// the application has turned on; a server registration leaves that out.
+func TestDiscordRegisterPlaces(t *testing.T) {
+	ctx := context.Background()
+	const app, guild = "123456789012345678", "223456789012345678"
+	register := func(appInfoStatus int, appInfo, guildID string) (sent []discordCommand, appInfoCalls int) {
+		t.Helper()
+		var put []byte
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			if r.Method == http.MethodGet && r.URL.Path == "/applications/@me" {
+				appInfoCalls++
+				if r.Header.Get("Authorization") != "Bot "+registerTestToken {
+					t.Errorf("app info auth %q", r.Header.Get("Authorization"))
+				}
+				w.WriteHeader(appInfoStatus)
+				io.WriteString(w, appInfo)
+				return
+			}
+			put, _ = io.ReadAll(r.Body)
+			io.WriteString(w, `[{"id":"1","name":"kb"}]`)
+		}))
+		defer srv.Close()
+		if _, err := callDiscordRegister(ctx, srv.URL, app, guildID, registerTestToken); err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal(put, &sent); err != nil || len(sent) != 2 {
+			t.Fatalf("body %s %v", put, err)
+		}
+		return sent, appInfoCalls
+	}
+	check := func(name string, cmds []discordCommand, types, contexts string) {
+		t.Helper()
+		for _, c := range cmds {
+			if got := fmt.Sprint(c.IntegrationTypes); got != types {
+				t.Errorf("%s %s integration_types %s, want %s", name, c.Name, got, types)
+			}
+			if got := fmt.Sprint(c.Contexts); got != contexts {
+				t.Errorf("%s %s contexts %s, want %s", name, c.Name, got, contexts)
+			}
+		}
+	}
+
+	both, calls := register(200, `{"id":"1","integration_types_config":{"0":{},"1":{"oauth2_install_params":null}}}`, "")
+	if calls != 1 {
+		t.Fatalf("app info calls %d", calls)
+	}
+	check("server and user install", both, "[0 1]", "[0 1 2]")
+
+	userOnly, _ := register(200, `{"integration_types_config":{"1":{}}}`, "")
+	check("user install only", userOnly, "[1]", "[0 1 2]")
+
+	serverOnly, _ := register(200, `{"integration_types_config":{"0":{}}}`, "")
+	check("server install only", serverOnly, "[0]", "[0 1]")
+
+	// When Discord does not say, a server install (which every app has) is assumed.
+	failed, _ := register(500, `nope`, "")
+	check("app info failed", failed, "[0]", "[0 1]")
+	empty, _ := register(200, `{}`, "")
+	check("no config", empty, "[0]", "[0 1]")
+
+	// A server registration lives only in that server: no lookup, no fields.
+	inGuild, calls := register(200, `{"integration_types_config":{"1":{}}}`, guild)
+	if calls != 0 {
+		t.Errorf("server registration looked up the app %d times", calls)
+	}
+	check("server registration", inGuild, "[]", "[]")
+	raw, _ := json.Marshal(inGuild)
+	if strings.Contains(string(raw), "integration_types") || strings.Contains(string(raw), "contexts") {
+		t.Errorf("server registration sent places: %s", raw)
 	}
 }

@@ -61,13 +61,13 @@ function discordRegisterForm(){
   const f=el('form');
   f.append(el('h3','슬래시 명령 등록'),el('p','Discord에 /kb 명령을 한 번 등록합니다(명령이 바뀔 때 다시 실행해도 안전합니다). 봇 토큰은 이 요청에만 쓰고 서버에 저장하지 않으며, 입력란은 곧바로 비워집니다.','small muted'));
   const app=field(f,'애플리케이션 ID (개발자 포털 → General Information)','application_id','text',mem('app'));app.inputMode='numeric';app.autocomplete='off';
-  const guild=field(f,'서버 ID (비우면 모든 서버에 등록 · 반영에 최대 1시간)','guild_id','text',mem('guild'));guild.required=false;guild.inputMode='numeric';guild.autocomplete='off';
+  const guild=field(f,'서버 ID (비우면 모든 서버와 DM에 등록 · 반영에 최대 1시간)','guild_id','text',mem('guild'));guild.required=false;guild.inputMode='numeric';guild.autocomplete='off';
   const tok=field(f,'봇 토큰 (개발자 포털 → Bot → Reset Token)','bot_token','password');tok.autocomplete='off';tok.maxLength=200;
   formSubmit(f,'명령 등록',async()=>{
     try{
       const r=await api('/api/admin/discord/register-commands',{application_id:app.value.trim(),guild_id:guild.value.trim(),bot_token:tok.value});
       keep('app',app.value.trim());keep('guild',guild.value.trim());
-      notify('등록했습니다: /'+(r.commands||[]).join(', /')+(r.scope==='guild'?' (그 서버에 바로 반영)':' (모든 서버, 반영에 최대 1시간)'));
+      notify('등록했습니다: /'+(r.commands||[]).join(', /')+(r.scope==='guild'?' (그 서버에 바로 반영)':' (모든 서버와 DM, 반영에 최대 1시간)'));
     }finally{tok.value='';}
   });
   return f;
