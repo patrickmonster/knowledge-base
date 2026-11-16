@@ -93,11 +93,18 @@ async function tasksPage() {
       const b=btn(`할 일 · ${r.todo.title} (${todoStatusLabel[r.todo.status]||r.todo.status})`,()=>render('todos'),'secondary task-todo');
       b.title='할 일 보드로 이동';facts.append(b);
     }
-    if (r.open_issues) {
-      const b=btn(`열린 질의 ${r.open_issues}건`,()=>render('issues'),'secondary task-issues');
+    const issues=r.issues||[], issueTotal=r.issue_count||issues.length;
+    if (issueTotal) {
+      const b=btn(`질의·이슈 ${issueTotal}건`+(r.open_issues?` · 미해결 ${r.open_issues}`:''),()=>openTaskIssues(p,r,issues.map(i=>i.id)),'secondary task-issues');
+      b.title=issueTotal>issues.length?`이 작업에서 남긴 질의 중 최근 ${issues.length}건을 이슈 · 질의 화면에서 봅니다.`:'이 작업에서 남긴 질의를 이슈 · 질의 화면에서 봅니다.';
       facts.append(b);
+      // Unresolved ones get their own shortcut; the list is unresolved first.
+      for (const i of issues.filter(i=>i.status==='open'||i.status==='answered').slice(0,3)) {
+        const one=btn(`${issueKindLabels[i.kind]||i.kind} · ${i.title} (${issueStatusLabels[i.status]||i.status}${i.blocking&&i.status==='open'?' · 보류':''})`,()=>openTaskIssues(p,r,[i.id]),'secondary task-issue');
+        one.title='이 질의로 이동';facts.append(one);
+      }
     }
-    for (const d of r.completion?.documents||[]) facts.append(el('span',`${d.kind==='history'?'작업 이력':d.kind}: ${d.title}`,'pill'));
+    for (const d of r.completion?.documents||[]) facts.append(taskDocumentButton(p.id,d));
     if (facts.childElementCount) c.append(facts);
     const actions=el('div',undefined,'actions');
     actions.append(btn('시작 자료 보기',()=>taskDialog(c,p,r)));
@@ -145,6 +152,14 @@ async function todoLinkForm(cardEl,p,r,after){
   cardEl.append(form);select.focus();
 }
 
+// Opens the issue page showing only the given questions of a task.
+function openTaskIssues(p,r,ids){return openPage('issues',{project_id:p.id,issue_ids:ids,label:`작업 “${r.title}”의 질의·이슈`});}
+// A completion document (history, brief, decision) that opens in the document page.
+function taskDocumentButton(projectID,d){
+  const b=btn(`${documentKinds[d.kind]||d.kind} · ${d.title}`,()=>{document.querySelector('dialog.review-dialog[open]')?.close();return openPage('documents',{project_id:projectID,document_id:d.id});},'secondary task-doc');
+  b.title='문서 화면에서 열기';return b;
+}
+
 function isStale(r){return r.status==='open'&&r.age_days>=staleTaskDays;}
 function ageLabel(days){return days<1?'오늘':`${days}일 전`;}
 
@@ -187,7 +202,7 @@ function taskDetail(run) {
   if (done) {
     out.push(el('h3',`완료 기록 · ${taskOutcomeLabels[done.outcome]||done.outcome}`));
     const ul=el('ul');
-    (done.documents||[]).forEach(d=>ul.append(el('li',`${d.kind} · ${d.title} (버전 ${d.revision})`)));
+    (done.documents||[]).forEach(d=>{const li=el('li');li.append(taskDocumentButton(run.project_id,d),document.createTextNode(` 버전 ${d.revision}`));ul.append(li);});
     (done.pull_requests||[]).forEach(u=>{const li=el('li'),a=el('a',u);a.href=u;a.target='_blank';a.rel='noopener noreferrer';li.append(a);ul.append(li);});
     out.push(ul);
   }

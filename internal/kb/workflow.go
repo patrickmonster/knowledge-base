@@ -148,8 +148,9 @@ func registerWorkflowTools(t Tools, s *Store) {
 
 // taskListSelect returns each task without its context snapshot, plus the
 // names of its creator and closer, the pull requests named in finish_task with
-// their tracked state, and the number of unresolved issues linked to it, so
-// the web console's task board needs one call per page.
+// their tracked state, the number of unresolved issues linked to it and the
+// first linked issues (unresolved first) so the web console's task board can
+// jump to them, in one call per page.
 const taskListSelect = `SELECT (to_jsonb(r)-'context'-'completion_hash')||jsonb_build_object(
 	'age_days',floor(extract(epoch FROM now()-r.started_at)/86400)::int,
 	'created_by_name',u.name,
@@ -157,6 +158,10 @@ const taskListSelect = `SELECT (to_jsonb(r)-'context'-'completion_hash')||jsonb_
 	'pull_requests',COALESCE((SELECT jsonb_agg(jsonb_build_object('repository',pr.repository,'number',pr.number,'url',pr.url,'state',pr.state) ORDER BY pr.repository,pr.number)
 		FROM task_pull_requests pr WHERE pr.task_id=r.id),'[]'::jsonb),
 	'open_issues',(SELECT count(*) FROM issues i WHERE i.task_id=r.id AND i.status IN ('open','answered')),
+	'issue_count',(SELECT count(*) FROM issues i WHERE i.task_id=r.id),
+	'issues',COALESCE((SELECT jsonb_agg(jsonb_build_object('id',x.id,'kind',x.kind,'title',x.title,'status',x.status,'blocking',x.blocking) ORDER BY x.settled,x.updated_at DESC,x.id)
+		FROM (SELECT i.id,i.kind,i.title,i.status,i.blocking,i.updated_at,i.status NOT IN ('open','answered') AS settled FROM issues i
+		WHERE i.task_id=r.id ORDER BY settled,i.updated_at DESC,i.id LIMIT 20) x),'[]'::jsonb),
 	'todo',(SELECT jsonb_build_object('id',t.id,'title',t.title,'status',t.status,'priority',t.priority) FROM todos t WHERE t.id=r.todo_id))
 	FROM task_runs r JOIN users u ON u.id=r.created_by LEFT JOIN users cu ON cu.id=r.closed_by`
 

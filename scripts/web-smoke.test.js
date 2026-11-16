@@ -95,3 +95,46 @@ test('an API failure is reported, not thrown',async t=>{
     assert.deepStrictEqual(c.problems,[],page);
   }
 });
+
+test('a task links to its questions and history document',async t=>{
+  const c=await open(t,'full');
+  const cards=async()=>{await show(c,'tasks');return[...c.document.querySelectorAll('#page .task-card')];};
+  // A card may read its question again for images, so compare distinct IDs.
+  const asked=()=>[...new Set(c.requests.filter(r=>r.path==='/api/tools/get_issue').map(r=>r.body.issue_id))];
+
+  // All questions of the open task: the issue page shows only those, then the full list again.
+  let [running]=await cards();
+  c.requests.length=0;
+  press(c,running.querySelector('button.task-issues'));await c.settle();check(c,'task › questions');
+  assert.strictEqual(c.get('pageName'),'issues');
+  assert.deepStrictEqual(asked().sort(),['issue-1','issue-2','issue-3']);
+  assert.match(c.document.querySelector('.issues-summary').textContent,/작업 “작업 run-1”의 질의·이슈 3건/);
+  assert.ok(!c.requests.some(r=>r.path==='/api/tools/list_issues'),'focused view does not list every question');
+  press(c,c.document.querySelector('.issues-focus-clear'));await c.settle();check(c,'issues › full list');
+  assert.ok(c.requests.some(r=>r.path==='/api/tools/list_issues'),'full list loads after clearing the focus');
+
+  // Unresolved questions get their own shortcut; resolved ones do not.
+  [running]=await cards();
+  const shortcuts=[...running.querySelectorAll('button.task-issue')];
+  assert.deepStrictEqual(shortcuts.map(b=>b.textContent),['이슈 · 질의 issue-2 (답변 대기 · 보류)','질의 · 질의 issue-1 (답변됨)']);
+  c.requests.length=0;
+  press(c,shortcuts[0]);await c.settle();check(c,'task › one question');
+  assert.deepStrictEqual(asked(),['issue-2']);
+
+  // The completed task's history opens in the document page.
+  await show(c,'tasks');
+  const status=c.document.querySelector('#page select[name="status"]');
+  status.value='completed';status.dispatchEvent(new c.window.Event('change'));await c.settle();
+  const done=[...c.document.querySelectorAll('#page .task-card')].find(n=>n.querySelector('button.task-doc'));
+  c.requests.length=0;
+  press(c,done.querySelector('button.task-doc'));await c.settle();check(c,'task › history');
+  assert.strictEqual(c.get('pageName'),'documents');
+  assert.ok(c.requests.some(r=>r.path==='/api/tools/get_document'&&r.body.document_id==='doc-4'),'history document is read');
+  assert.ok(c.document.querySelector('dialog.document-dialog[open]'),'history document dialog is open');
+
+  // Opening the page again from the menu shows the plain list.
+  c.requests.length=0;
+  await show(c,'documents');
+  assert.ok(!c.requests.some(r=>r.path==='/api/tools/get_document'),'the focus is used once');
+  assert.strictEqual(c.document.querySelector('dialog.document-dialog[open]'),null);
+});

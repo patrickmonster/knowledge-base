@@ -4,6 +4,7 @@ const documentKinds={brief:'기획',decision:'결정',history:'작업 이력',ar
 const documentStatuses={active:'active',draft:'draft',archived:'archived'};
 
 async function documentsPage() {
+  const focus=takePageFocus('documents');
   const root=el('div'), projects=[];
   for (let offset=0; offset<=100000; offset+=50) {
     const batch=await tool('list_projects',{limit:50,offset});
@@ -202,5 +203,16 @@ async function documentsPage() {
   project.addEventListener('change',async()=>{author.value='';await loadMembers();load(true).catch(e=>notify(e.message,true));});
   await loadMembers();
   await load(true);
+  if (focus?.document_id) await openFocused(focus.document_id);
   return root;
+
+  // Opens one document asked for by another page (e.g. a task's history) once
+  // the page is on screen; the list below stays as it is.
+  async function openFocused(id) {
+    try {
+      const doc=await tool('get_document',{project_id:project.value,document_id:id});
+      const days=Math.max(0,Math.floor((Date.now()-new Date(doc.updated_at).getTime())/86400000));
+      setTimeout(()=>{if(root.isConnected)openDocument({...doc,content:undefined,days_since_update:days});},0);
+    } catch(e) { notify(e.message,true); }
+  }
 }
