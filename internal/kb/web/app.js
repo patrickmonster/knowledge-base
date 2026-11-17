@@ -74,6 +74,7 @@ async function projects(){
       if(p.id===currentProjectID)title.append(el('span','현재 프로젝트','pill project-current'));
       info.append(title);
       if(p.description)info.append(el('p',p.description,'small muted'));
+      if(p.slug){const slug=el('div',undefined,'project-slug small muted');slug.append('주소용 이름 ',el('code',p.slug));info.append(slug);}
       info.append(el('code',p.id));
       const acts=el('div',undefined,'actions project-actions');
       if(p.id!==currentProjectID)acts.append(btn('이 프로젝트로 작업',async()=>{setCurrentProject(p.id);await render('documents');},''));
