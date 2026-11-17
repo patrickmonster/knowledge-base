@@ -123,7 +123,7 @@ func (a *App) attachmentImage(w http.ResponseWriter, r *http.Request) {
 }
 
 // attachmentPreview streams a project file to a signed-in member for the
-// preview on the 첨부 문서 page: raster images, PDF and plain text only.
+// preview on the 첨부 문서 page: raster images, PDF, plain text and HTML.
 func (a *App) attachmentPreview(w http.ResponseWriter, r *http.Request) {
 	a.attachmentInline(w, r, "preview_attachment", false)
 }
@@ -136,6 +136,18 @@ const maxPreviewTextBytes = 1 << 20
 // also sniff as text, so a renamed HTML or binary file is not shown.
 var previewTextExtensions = map[string]bool{".txt": true, ".md": true, ".csv": true, ".tsv": true, ".json": true, ".log": true, ".yaml": true, ".yml": true}
 
+// previewHTMLExtensions are the file names rendered as a page in a sandboxed
+// frame. The bytes must sniff as HTML or plain text.
+var previewHTMLExtensions = map[string]bool{".html": true, ".htm": true}
+
+// htmlPreviewCSP renders an HTML file without letting it act on this origin:
+// sandbox (no allow-scripts, no allow-same-origin) gives it an opaque origin
+// with scripts, forms, popups and top navigation off, even when the address is
+// opened directly in a tab. Inline styles and data: images and fonts are
+// allowed so the page keeps its look; nothing is fetched from any host, so a
+// file cannot track who opened it. Only this app's own pages may frame it.
+const htmlPreviewCSP = "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:; frame-ancestors 'self'"
+
 // inlineType decides from the first bytes, never from the stored name alone,
 // how a file may be shown in the browser. It returns the Content-Type to send
 // and the Content-Security-Policy for that response, or ok=false when the file
@@ -144,7 +156,8 @@ var previewTextExtensions = map[string]bool{".txt": true, ".md": true, ".csv": t
 // Images and text are sandboxed. A PDF opens in the browser's own viewer in a
 // new tab, which a sandbox would block; default-src 'none' still stops it from
 // loading anything, and the global X-Frame-Options keeps it out of frames.
-// SVG and HTML are never served inline: they would run script on this origin.
+// HTML (.html/.htm only) is served under htmlPreviewCSP, which turns script
+// off and isolates it from this origin. SVG is never served inline.
 func inlineType(filename string, head []byte, imagesOnly bool) (contentType, csp string, ok bool) {
 	kind := http.DetectContentType(head)
 	switch {
@@ -154,6 +167,8 @@ func inlineType(filename string, head []byte, imagesOnly bool) (contentType, csp
 		return "", "", false
 	case kind == "application/pdf":
 		return kind, "default-src 'none'; frame-ancestors 'none'", true
+	case previewHTMLExtensions[strings.ToLower(path.Ext(filename))] && (strings.HasPrefix(kind, "text/html") || strings.HasPrefix(kind, "text/plain")):
+		return "text/html; charset=utf-8", htmlPreviewCSP, true
 	case strings.HasPrefix(kind, "text/plain") && previewTextExtensions[strings.ToLower(path.Ext(filename))]:
 		return kind, "default-src 'none'; sandbox", true
 	}
@@ -234,6 +249,11 @@ func (a *App) attachmentInline(w http.ResponseWriter, r *http.Request, action st
 	h.Set("Content-Length", strconv.FormatInt(size, 10))
 	h.Set("Content-Disposition", mime.FormatMediaType("inline", map[string]string{"filename": f.Filename}))
 	h.Set("Content-Security-Policy", csp)
+	if csp == htmlPreviewCSP {
+		// The preview dialog frames the page; frame-ancestors 'self' already
+		// limits who may, and this keeps older browsers consistent with it.
+		h.Set("X-Frame-Options", "SAMEORIGIN")
+	}
 	// File content never changes for an attachment ID; access is rechecked after expiry.
 	h.Set("Cache-Control", "private, max-age=300")
 	io.Copy(w, io.LimitReader(reader, size))

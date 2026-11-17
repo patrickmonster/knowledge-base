@@ -21,14 +21,16 @@
 | PNG·JPG·GIF·WEBP | 창 안에 이미지 표시 |
 | `.txt`·`.md`·`.csv`·`.tsv`·`.json`·`.log`·`.yaml`·`.yml` | 글자 그대로 표시(Markdown·HTML로 해석하지 않음). 1 MiB를 넘으면 앞부분만 |
 | PDF | 추출 본문 표시 + **원본 PDF 새 탭에서 열기**(브라우저 기본 PDF 보기) |
+| `.html`·`.htm` | 창 안 샌드박스 프레임에 페이지로 표시 + **새 탭에서 크게 보기**. 스크립트는 실행하지 않고 외부 이미지·글꼴·스타일시트는 불러오지 않음(인라인 스타일과 `data:` 이미지·글꼴만 표시) |
 | `.docx`·`.xlsx` | 추출 본문 표시(서식·이미지·차트 제외, 아래 "본문 추출과 검색") |
 | 그 밖의 형식, 추출 본문이 없는 Word·Excel | 미리보기 없음 — 다운로드 |
 
 보안 규칙:
 
 - 원본은 `GET /api/attachments/{id}/preview?project_id=…`로만 읽습니다. 로그인 쿠키(웹 세션)와 프로젝트 조회 권한이 필요하고, MCP 키와 업로드 링크 토큰은 받지 않습니다. 주소에 비밀값이 없으므로 주소가 알려져도 권한 없는 사람은 열 수 없습니다. 미리보기는 버킷 다운로드 링크를 발급하지 않습니다(다운로드 링크는 지금처럼 **다운로드**를 누를 때만 5분짜리로 발급).
-- 무엇으로 보여 줄지는 파일명이 아니라 **파일 앞부분 바이트**로 서버가 다시 판단합니다. 래스터 이미지, PDF, (텍스트 확장자이면서 실제로 텍스트인) 파일만 내보내고 나머지는 `INVALID_INPUT`으로 거절합니다. SVG와 HTML은 이 주소에서 스크립트가 실행될 수 있어 이름을 바꿔 올려도 보여 주지 않습니다.
-- 응답은 `X-Content-Type-Options: nosniff`, `Content-Disposition: inline`, `Cache-Control: private, max-age=300`입니다. 이미지·텍스트는 `Content-Security-Policy: default-src 'none'; sandbox`, PDF는 브라우저 PDF 보기가 sandbox에서 동작하지 않아 `default-src 'none'; frame-ancestors 'none'`입니다. 전역 `X-Frame-Options: DENY`가 그대로 적용되어 다른 페이지에 끼워 넣을 수 없으므로 PDF는 창 안이 아니라 새 탭에서 엽니다.
+- 무엇으로 보여 줄지는 파일명이 아니라 **파일 앞부분 바이트**로 서버가 다시 판단합니다. 래스터 이미지, PDF, (텍스트 확장자이면서 실제로 텍스트인) 파일, (`.html`·`.htm` 이름이면서 HTML이나 텍스트로 판정되는) 파일만 내보내고 나머지는 `INVALID_INPUT`으로 거절합니다. `.txt` 등 텍스트 이름으로 올린 HTML은 계속 거절합니다. SVG는 보여 주지 않습니다.
+- HTML은 `Content-Type: text/html; charset=utf-8`과 `Content-Security-Policy: sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:; frame-ancestors 'self'`로 보냅니다. CSP `sandbox`(허용 항목 없음)로 문서가 고유(opaque) 출처가 되어 이 앱의 쿠키·API·화면에 접근할 수 없고, 스크립트·폼 전송·팝업·상위 창 이동이 막힙니다. 주소를 새 탭에서 직접 열어도 같은 제한이 걸립니다. 어떤 외부 주소에도 요청하지 않으므로 파일이 열람자를 추적할 수 없습니다. 웹 화면은 `sandbox=""` 속성을 단 iframe에 한 번 더 가두고, 이 응답만 `X-Frame-Options: SAMEORIGIN`으로 앱 자신의 화면에서 끼워 넣을 수 있게 합니다. 스크립트가 필요한 대화형 HTML은 미리보기에서 동작하지 않으니 다운로드해서 여세요.
+- 응답은 `X-Content-Type-Options: nosniff`, `Content-Disposition: inline`, `Cache-Control: private, max-age=300`입니다. 이미지·텍스트는 `Content-Security-Policy: default-src 'none'; sandbox`, HTML은 위 정책, PDF는 브라우저 PDF 보기가 sandbox에서 동작하지 않아 `default-src 'none'; frame-ancestors 'none'`입니다. 전역 `X-Frame-Options: DENY`가 그대로 적용되어 다른 페이지에 끼워 넣을 수 없으므로 PDF는 창 안이 아니라 새 탭에서 엽니다.
 - 추출 본문은 지식 문서와 같은 Markdown 렌더러(DOM만 생성, HTML 미해석)로 표시합니다.
 - 미리보기 읽기는 감사 로그에 `preview_attachment`로 남고 사용자당 분당 600회로 제한합니다(이슈 사진과 같은 한도).
 
@@ -73,7 +75,7 @@
 
 버킷 키는 서버가 만든 UUID 경로로 정하며 사용자 파일명을 경로로 사용하지 않습니다. 파일은 서버 임시 파일에 받아 길이를 확인한 후 전송하며 정상 종료 시 임시 파일을 지웁니다. 최대 업로드 요청 시간은 120초입니다. 업로드 이후 권한을 다시 확인한 다음 저장 완료를 확정합니다. 그 사이 권한이 취소되면 다운로드 가능 상태로 전환하지 않습니다.
 
-원본은 항상 `application/octet-stream`, `Content-Disposition: attachment`로 내려받습니다. HTML 등 능동 콘텐츠를 앱 화면 안에서 실행하지 않습니다. PDF 미리보기와 OCR은 포함하지 않습니다(악성 파일 검사는 아래 "총량 제한과 악성 파일 검사" 참고). 텍스트 본문 추출은 아래 절을 참고하세요.
+원본은 항상 `application/octet-stream`, `Content-Disposition: attachment`로 내려받습니다. HTML 등 능동 콘텐츠를 앱 화면 안에서 실행하지 않습니다(HTML 미리보기는 스크립트 없는 샌드박스 표시만). PDF 미리보기와 OCR은 포함하지 않습니다(악성 파일 검사는 아래 "총량 제한과 악성 파일 검사" 참고). 텍스트 본문 추출은 아래 절을 참고하세요.
 
 다운로드 링크는 유효 기간 동안 링크를 가진 사람이 사용할 수 있습니다. 발급 후 권한을 취소해도 최대 5분 동안 기존 링크가 남을 수 있습니다. 링크를 지식 본문이나 공개 기록에 저장하지 마세요. API 응답과 감사 로그에 버킷 키·비밀번호를 기록하지 않으며 감사 로그에는 파일 식별자와 작업 결과만 남깁니다.
 
