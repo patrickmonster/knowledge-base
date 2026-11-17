@@ -54,6 +54,14 @@ type Todo struct {
 	OpenIssueCount     int               `json:"open_issue_count"`
 	BlockingIssueCount int               `json:"blocking_issue_count"`
 	PullRequests       []TodoPullRequest `json:"pull_requests"`
+	// Relations (todo_relations.go): the parent this is a sub-item of, the
+	// to-dos it waits for, and how many of each are still open.
+	ParentID          string        `json:"parent_id,omitempty"`
+	ParentTitle       string        `json:"parent_title,omitempty"`
+	BlockedBy         []TodoRelated `json:"blocked_by"`
+	OpenBlockerCount  int           `json:"open_blocker_count"`
+	SubtaskCount      int           `json:"subtask_count"`
+	SubtasksCompleted int           `json:"subtasks_completed"`
 }
 
 type TodoPullRequest struct {
@@ -85,6 +93,10 @@ type SaveTodoInput struct {
 	Progress         *int   `json:"progress,omitempty" jsonschema:"0-100; omit for no progress bar"`
 	AssigneeID       string `json:"assignee_id,omitempty" jsonschema:"A project member's user ID; omit for unassigned"`
 	DueDate          string `json:"due_date,omitempty" jsonschema:"YYYY-MM-DD; omit for none"`
+	// Relations are kept when omitted, unlike the fields above, so callers
+	// that do not know them never clear them by accident.
+	ParentID  *string   `json:"parent_id,omitempty" jsonschema:"Make this a sub-item of that to-do (one level: the parent cannot itself be a sub-item); empty string clears; omit to keep"`
+	BlockedBy *[]string `json:"blocked_by,omitempty" jsonschema:"IDs of to-dos (same project) this one waits for, at most 20; replaces the list, [] clears; omit to keep. Cycles are rejected"`
 }
 
 type MoveTodoInput struct {
@@ -116,7 +128,7 @@ const todoSelect = `SELECT to_jsonb(t)||jsonb_build_object('assignee_name',COALE
 	'open_issue_count',(SELECT count(*) FROM issues i WHERE i.todo_id=t.id AND i.status IN ('open','answered')),
 	'blocking_issue_count',(SELECT count(*) FROM issues i WHERE i.todo_id=t.id AND i.status='open' AND i.blocking),
 	'pull_requests',COALESCE((SELECT jsonb_agg(jsonb_build_object('repository',pr.repository,'number',pr.number,'url',pr.url,'state',pr.state) ORDER BY pr.created_at DESC)
-		FROM task_pull_requests pr JOIN task_runs r ON r.id=pr.task_id WHERE r.todo_id=t.id),'[]'::jsonb))
+		FROM task_pull_requests pr JOIN task_runs r ON r.id=pr.task_id WHERE r.todo_id=t.id),'[]'::jsonb))||` + todoRelationsSelect + `
 	FROM todos t LEFT JOIN users a ON a.id=t.assignee_id LEFT JOIN users c ON c.id=t.created_by`
 
 func validateTodo(in *SaveTodoInput) error {
@@ -246,6 +258,9 @@ func saveTodo(ctx context.Context, tx *sql.Tx, a Identity, in SaveTodoInput) (an
 	if err := todoAssignee(ctx, tx, p.ID, in.AssigneeID); err != nil {
 		return nil, err
 	}
+	if err := normalizeTodoRelations(&in); err != nil {
+		return nil, err
+	}
 	if in.TodoID == "" {
 		if in.ExpectedRevision != 0 {
 			return nil, problem("INVALID_INPUT", "expected_revision is only used with todo_id.")
@@ -265,6 +280,9 @@ func saveTodo(ctx context.Context, tx *sql.Tx, a Identity, in SaveTodoInput) (an
 		if _, err := tx.ExecContext(ctx, `INSERT INTO todos(id,project_id,title,body,status,priority,category,progress,assignee_id,due_date,position,created_by,updated_by,completed_at)
 			VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,NULLIF($10,'')::date,$11,$12,$12,CASE WHEN $5='completed' THEN now() END)`,
 			id, p.ID, in.Title, in.Body, in.Status, in.Priority, in.Category, in.Progress, nullableID(in.AssigneeID), in.DueDate, pos, a.User.ID); err != nil {
+			return nil, err
+		}
+		if err := setTodoRelations(ctx, tx, p.ID, id, in.ParentID, in.BlockedBy); err != nil {
 			return nil, err
 		}
 		return getTodo(ctx, tx, id)
@@ -289,6 +307,9 @@ func saveTodo(ctx context.Context, tx *sql.Tx, a Identity, in SaveTodoInput) (an
 		due_date=NULLIF($9,'')::date,position=$10,updated_by=$11,updated_at=now(),revision=revision+1,
 		completed_at=CASE WHEN $4<>'completed' THEN NULL WHEN status='completed' THEN completed_at ELSE now() END
 		WHERE id=$1`, current.ID, in.Title, in.Body, in.Status, in.Priority, in.Category, in.Progress, nullableID(in.AssigneeID), in.DueDate, pos, a.User.ID); err != nil {
+		return nil, err
+	}
+	if err := setTodoRelations(ctx, tx, p.ID, current.ID, in.ParentID, in.BlockedBy); err != nil {
 		return nil, err
 	}
 	return getTodo(ctx, tx, current.ID)
@@ -381,8 +402,8 @@ func deleteTodo(ctx context.Context, tx *sql.Tx, a Identity, in TodoRef) (any, e
 }
 
 func registerTodoTools(t Tools, s *Store) {
-	add(t, s, "list_todos", "List a project's to-dos (할 일) for the board: each has status (not_started, in_progress, in_review, completed, idea), priority (high, medium, low), category, optional progress 0-100, assignee and due date, ordered by priority, status and board position. Filter by status, priority, category, assignee_id or mine. Up to 500.", false, func(in ListTodosInput) string { return in.ProjectID }, listTodos)
-	add(t, s, "save_todo", "Add a to-do, or change one with todo_id and expected_revision. Changing replaces every field, so send the current values you want to keep (omitted progress, assignee_id and due_date are cleared). Editor access required.", true, func(in SaveTodoInput) string { return in.ProjectID }, saveTodo)
+	add(t, s, "list_todos", "List a project's to-dos (할 일) for the board: each has status (not_started, in_progress, in_review, completed, idea), priority (high, medium, low), category, optional progress 0-100, assignee and due date, ordered by priority, status and board position. Each also shows its parent (parent_id, one level of sub-items), the to-dos it waits for (blocked_by, open_blocker_count) and its sub-item counts. Filter by status, priority, category, assignee_id or mine. Up to 500.", false, func(in ListTodosInput) string { return in.ProjectID }, listTodos)
+	add(t, s, "save_todo", "Add a to-do, or change one with todo_id and expected_revision. Changing replaces every field, so send the current values you want to keep (omitted progress, assignee_id and due_date are cleared); parent_id and blocked_by are kept when omitted. Relations stay inside the project, sub-items are one level deep and blocked_by cycles are rejected. Editor access required.", true, func(in SaveTodoInput) string { return in.ProjectID }, saveTodo)
 	add(t, s, "move_todo", "Move a to-do to a status column and priority row on the board, before before_id or last. Moving to completed fills an existing progress bar. Editor access required.", true, func(in MoveTodoInput) string { return in.ProjectID }, moveTodo)
 	add(t, s, "delete_todo", "Delete a to-do permanently. Editor access required.", true, func(in TodoRef) string { return in.ProjectID }, deleteTodo)
 }

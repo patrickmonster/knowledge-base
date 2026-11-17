@@ -127,3 +127,6 @@ var IssueChunks string
 
 //go:embed 042_project_upstreams.sql
 var ProjectUpstreams string
+
+//go:embed 043_todo_relations.sql
+var TodoRelations string

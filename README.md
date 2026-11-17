@@ -153,7 +153,7 @@ Authorization: Bearer <발급받은 MCP 키>
 | `create_issue`, `list_issues`, `get_issue` | 질의·이슈 등록·목록(상태·담당자·검색어 필터)·상세 |
 | `answer_issue`, `comment_issue`, `update_issue` | 답변·댓글·해결/닫기/다시 열기, 질의응답 지식 문서화(`publish_answer`) |
 | `import_github_issues` | GitHub 저장소 이슈를 질의·이슈로 가져오기(단방향, 다시 가져오면 갱신). 서버 `GITHUB_TOKEN`(선택)·`GITHUB_API_URL`(선택, GitHub Enterprise). 이후 변경은 웹 콘솔의 GitHub 웹훅(`/api/github/webhooks/<id>`, 웹훅별 Secret)으로 자동 반영 |
-| `list_todos`, `save_todo`, `move_todo`, `delete_todo` | 할 일 보드 조회(상태·우선순위·분류·담당자 필터, 연결 작업 수·PR 상태 포함)·추가·수정(`expected_revision`)·칸 이동(`before_id`)·삭제. 쓰기는 편집자 이상 |
+| `list_todos`, `save_todo`, `move_todo`, `delete_todo` | 할 일 보드 조회(상태·우선순위·분류·담당자 필터, 연결 작업 수·PR 상태 포함)·추가·수정(`expected_revision`, 하위 항목 `parent_id`·선행 할 일 `blocked_by`)·칸 이동(`before_id`)·삭제. 쓰기는 편집자 이상 |
 | `link_issue_todo` | 질의·이슈를 할 일에 연결·해제(편집자 이상). `create_issue`의 `todo_id`로도 연결하고, `task_id`만 넘기면 그 작업의 할 일을 따른다([안내](docs/todos.md#이슈질의와-연결)) |
 | `list_stale_todos` | 14일(`older_than_days`로 변경) 넘게 수정·이동·연결 작업·질의 변경이 없는 시작 전·진행 중·검토대기 할 일을 오래된 순으로. `start_task` 맥락의 `context.todos.stale`에도 최대 5건([안내](docs/todos.md#오래-묵은-할-일-정리-안내)) |
 | `link_task_todo` | 열린 작업을 할 일에 연결·해제. `start_task`의 `todo_id`와 같이 할 일을 진행 중으로 옮기고, 작업 완료·PR 병합 때 완료로 옮긴다([안내](docs/todos.md#진행-중-작업과-연결)) |
