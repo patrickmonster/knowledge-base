@@ -186,6 +186,8 @@ function taskDetail(run) {
   out.push(el('h3',`참고 자료 ${sources.length}건`+(ctx.retrieval?` · ${ctx.retrieval}`:'')));
   if (sources.length) { const ul=el('ul'); sources.forEach(s=>ul.append(el('li',`${s.title} (버전 ${s.revision})`))); out.push(ul); }
   if (ctx.warning) out.push(el('p',ctx.warning,'small'));
+  out.push(...projectSources('상위 프로젝트 자료','이 프로젝트가 따르는 상위 프로젝트(디자인·기획 등)의 자료입니다. 이 프로젝트 자료와 다르면 상위 자료가 기준입니다.',ctx.upstream_projects,ctx.upstream_sources,ctx.upstream_warning,ctx.upstream_hidden,'지금은 따르지 않는 상위 프로젝트'));
+  out.push(...projectSources('관련 프로젝트 자료','작업을 시작할 때 함께 조회한 다른 프로젝트의 자료입니다. 이 프로젝트의 상태가 아니므로 참고 자료가 우선합니다.',ctx.related_projects,ctx.related_sources,ctx.related_warning,ctx.related_hidden,'열람 권한이 없는 프로젝트'));
   const concurrent=ctx.concurrent_runs||[];
   if (concurrent.length) {
     out.push(el('h3',`시작 시 같은 곳에서 진행 중이던 작업 ${concurrent.length}건`),el('p','같은 브랜치·worktree 또는 겹치는 경로의 다른 열린 작업입니다. 차단하지 않는 경고입니다.','small muted'));
@@ -206,6 +208,31 @@ function taskDetail(run) {
     (done.pull_requests||[]).forEach(u=>{const li=el('li'),a=el('a',u);a.href=u;a.target='_blank';a.rel='noopener noreferrer';li.append(a);ul.append(li);});
     out.push(ul);
   }
+  return out;
+}
+
+// Sources from other projects (upstream or related), listed apart from the
+// project's own and grouped under each project's name. The server already
+// dropped projects the reader may not see and counts them in hidden.
+function projectSources(heading,note,projects,sources,warning,hidden,hiddenLabel) {
+  projects=projects||[];sources=sources||[];
+  if (!projects.length&&!sources.length&&!hidden) return [];
+  const out=[el('h3',`${heading} ${sources.length}건`),el('p',note,'small muted')];
+  const groups=new Map(projects.map(p=>[p.id,{name:p.name||p.slug,items:[]}]));
+  for (const s of sources) {
+    if (!groups.has(s.project_id)) groups.set(s.project_id,{name:s.project_name||s.project_slug||'알 수 없는 프로젝트',items:[]});
+    groups.get(s.project_id).items.push(s);
+  }
+  const list=el('ul',undefined,'task-project-sources');
+  for (const g of groups.values()) {
+    const li=el('li');li.append(el('strong',g.name,'task-source-project'));
+    if (g.items.length) { const ul=el('ul'); g.items.forEach(s=>ul.append(el('li',`${s.title} (버전 ${s.revision})`))); li.append(ul); }
+    else li.append(el('span',' · 맞는 자료 없음','small muted'));
+    list.append(li);
+  }
+  if (groups.size) out.push(list);
+  if (hidden) out.push(el('p',`${hiddenLabel}의 자료 ${hidden}건은 표시하지 않습니다.`,'small muted'));
+  if (warning) out.push(el('p',warning,'small'));
   return out;
 }
 
