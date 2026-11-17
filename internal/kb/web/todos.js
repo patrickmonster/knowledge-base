@@ -48,7 +48,8 @@ async function todosPage(){
   const board=el('div',undefined,'todo-board');
   const issuePanel=el('section',undefined,'todo-issues');
   root.append(bar,board,issuePanel);
-  const ctx={todos:[],members:[],reload:refresh};
+  // complete: ctx.todos holds every to-do, so the dialog can pick relations.
+  const ctx={todos:[],members:[],reload:refresh,complete:true};
   let generation=0;
   const collapsed=todoCollapsed();
   const hidden={status:todoHidden('status',todoBoardStatuses.map(x=>x[0])),priority:todoHidden('priority',todoPriorities.map(x=>x[0]))};
@@ -163,6 +164,7 @@ async function todosPage(){
   function todoCard(t){
     const c=el('article',undefined,'todo-card');c.tabIndex=0;c.dataset.id=t.id;
     c.setAttribute('aria-label',`${t.title}, ${todoStatusLabel[t.status]}`);
+    if(t.parent_id)c.append(el('p','↳ '+(t.parent_title||'상위 할 일'),'todo-parent'));
     c.append(el('h3',t.title));
     const tags=el('div',undefined,'todo-tags');
     tags.append(el('span',todoStatusLabel[t.status],'todo-status todo-s-'+t.status));
@@ -190,6 +192,7 @@ async function todosPage(){
       track.append(fill);p.append(track,el('span',t.progress+'%','todo-progress-label'));c.append(p);
     }
     const links=todoLinkPills(t);if(links)c.append(links);
+    const rel=todoRelationPills(t);if(rel)c.append(rel);
     const meta=[t.assignee_name,t.due_date?`마감 ${t.due_date}`:''].filter(Boolean).join(' · ');
     if(meta){const m=el('p',meta,'todo-meta');if(t.due_date&&t.status!=='completed'&&t.due_date<todayISO())m.classList.add('overdue');c.append(m);}
     c.addEventListener('click',()=>todoDialog(root,project,ctx,t));
@@ -414,6 +417,76 @@ function todoLinkPills(t){
   return row;
 }
 
+// Sub-items and predecessors (parent_id, blocked_by) on a card.
+function todoRelationPills(t){
+  const waiting=t.open_blocker_count||0;
+  if(!t.subtask_count&&!(t.blocked_by||[]).length)return null;
+  const row=el('div',undefined,'todo-links');
+  if(t.subtask_count)row.append(el('span',`하위 ${t.subtasks_completed||0}/${t.subtask_count}`,'todo-link-pill'+(t.subtasks_completed===t.subtask_count?' pr-merged':'')));
+  if(waiting){
+    const names=(t.blocked_by||[]).filter(b=>b.status!=='completed').map(b=>b.title);
+    const pill=el('span',`선행 대기 ${waiting}`,'todo-link-pill blocking');pill.title='먼저 끝나야 하는 할 일: '+names.join(', ');
+    row.append(pill);
+  }else if((t.blocked_by||[]).length)row.append(el('span','선행 완료','todo-link-pill pr-merged'));
+  return row;
+}
+
+// Relation fields in the dialog. Pickers need every to-do (the board);
+// elsewhere the relations are listed read-only and left unchanged on save.
+function todoRelationsSection(ctx,t,canWrite){
+  const box=el('section',undefined,'todo-tasks todo-relations');
+  box.append(el('h3','상위 · 선행 할 일'));
+  const byID=new Map(ctx.todos.map(x=>[x.id,x]));
+  const label=x=>`${x.title} (${todoStatusLabel[x.status]||x.status})`;
+  const startBlockers=(t.blocked_by||[]).map(b=>b.id);
+  const children=t.id?ctx.todos.filter(x=>x.parent_id===t.id):[];
+  const waiters=t.id?ctx.todos.filter(x=>(x.blocked_by||[]).some(b=>b.id===t.id)):[];
+  const listOf=(title,items)=>{if(!items.length)return;const ul=el('ul');items.forEach(x=>ul.append(el('li',label(x))));box.append(el('p',title,'small muted'),ul);};
+  if(!ctx.complete||!canWrite){
+    if(t.parent_id)box.append(el('p','상위: '+(t.parent_title||t.parent_id),'small'));
+    listOf('먼저 끝나야 하는 할 일',t.blocked_by||[]);
+    listOf('하위 항목',children);
+    listOf('이 할 일을 기다리는 할 일',waiters);
+    if(box.childElementCount===1)box.append(el('p','상위·선행 관계가 없습니다.','small muted'));
+    if(canWrite)box.append(el('p','관계는 할 일 보드의 수정 창에서 바꿀 수 있습니다.','small muted'));
+    return {node:box,value:()=>({})};
+  }
+  // Parent: a top-level to-do other than this one. A to-do with sub-items stays top-level.
+  const parentOptions=[['','없음 (최상위)'],...ctx.todos.filter(x=>x.id!==t.id&&!x.parent_id).map(x=>[x.id,label(x)])];
+  const parent=selectField(box,'상위 할 일 (이 할 일을 하위 항목으로)','parent_id',parentOptions);
+  if(t.parent_id&&!byID.has(t.parent_id))parent.append(new Option(t.parent_title||t.parent_id,t.parent_id));
+  parent.value=t.parent_id||'';
+  if(t.subtask_count||children.length){parent.disabled=true;box.append(el('p',`하위 항목 ${t.subtask_count||children.length}개가 있어 다른 할 일의 하위가 될 수 없습니다(한 단계만).`,'small muted'));}
+  // Predecessors: a filterable checklist, chosen ones first.
+  const chosen=new Set(startBlockers);
+  const wrap=el('div',undefined,'todo-blockers');
+  const search=el('input');search.type='search';search.placeholder='선행 할 일 찾기';search.setAttribute('aria-label','선행 할 일 찾기');
+  const picks=el('div',undefined,'todo-blocker-list');picks.setAttribute('role','group');picks.setAttribute('aria-label','먼저 끝나야 하는 할 일');
+  const candidates=ctx.todos.filter(x=>x.id!==t.id).sort((a,b)=>(chosen.has(b.id)-chosen.has(a.id))||((a.status==='completed')-(b.status==='completed'))||a.title.localeCompare(b.title));
+  function drawPicks(){
+    const q=search.value.trim().toLowerCase();
+    const rows=candidates.filter(x=>chosen.has(x.id)||!q||x.title.toLowerCase().includes(q)).map(x=>{
+      const l=el('label',undefined,'inline-check'),cb=el('input');cb.type='checkbox';cb.checked=chosen.has(x.id);
+      cb.addEventListener('change',()=>{cb.checked?chosen.add(x.id):chosen.delete(x.id);count.textContent=`${chosen.size}개 선택`;});
+      l.append(cb,document.createTextNode(label(x)));return l;
+    });
+    picks.replaceChildren(...(rows.length?rows:[el('p','맞는 할 일이 없습니다.','small muted')]));
+  }
+  const count=el('span',`${chosen.size}개 선택`,'small muted');
+  search.addEventListener('input',drawPicks);
+  const head=el('div',undefined,'todo-blockers-head');head.append(el('span','먼저 끝나야 하는 할 일 (최대 20개)'),count);
+  wrap.append(head,search,picks);box.append(wrap);drawPicks();
+  listOf('하위 항목',children);
+  listOf('이 할 일을 기다리는 할 일',waiters);
+  return {node:box,value(){
+    const out={};
+    if(parent.value!==(t.parent_id||''))out.parent_id=parent.value;
+    const now=[...chosen];
+    if(now.length!==startBlockers.length||now.some(id=>!startBlockers.includes(id)))out.blocked_by=now;
+    return out;
+  }};
+}
+
 // Questions and issues linked to a to-do, shown in its dialog.
 async function todoIssuesSection(project,t){
   const box=el('section',undefined,'todo-tasks');
@@ -475,6 +548,7 @@ function todoDialog(parent,project,ctx,t){
   if(t.assignee_id&&![...assignee.options].some(o=>o.value===t.assignee_id))assignee.append(new Option(t.assignee_name||t.assignee_id,t.assignee_id));
   assignee.value=t.assignee_id||'';
   const due=field(grid,'마감일 (선택)','due_date','date',t.due_date||'');due.required=false;
+  const relations=todoRelationsSection(ctx,t,canWrite);form.append(relations.node);
   if(editing){
     form.append(el('p',`${t.created_by_name||''} 작성 · ${new Date(t.updated_at).toLocaleString()} 수정`,'small muted'));
     const slot=el('div');form.append(slot);
@@ -499,6 +573,7 @@ function todoDialog(parent,project,ctx,t){
         if(assignee.value)d.assignee_id=assignee.value;
         if(due.value)d.due_date=due.value;
         if(editing){d.todo_id=t.id;d.expected_revision=t.revision;}
+        Object.assign(d,relations.value());
         await tool('save_todo',d);
         dialog.close();notify(editing?'저장했습니다.':'할 일을 추가했습니다.');await ctx.reload();
       }catch(err){notify(err.message,true);}finally{save.disabled=false;}

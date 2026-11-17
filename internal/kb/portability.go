@@ -360,7 +360,18 @@ func renderTodosMarkdown(todos []Todo) string {
 			if t.Progress != nil {
 				progress = fmt.Sprintf("%d%%", *t.Progress)
 			}
-			fmt.Fprintf(&b, "| %s | %s | %s | %s | %s | %s | %s |\n", t.Priority, cell(t.Title), cell(t.Category), progress, cell(t.AssigneeName), t.DueDate, cell(truncateRunes(t.Body, 300)))
+			title := t.Title
+			if t.ParentTitle != "" {
+				title += " (상위: " + t.ParentTitle + ")"
+			}
+			if len(t.BlockedBy) > 0 {
+				names := make([]string, len(t.BlockedBy))
+				for i, r := range t.BlockedBy {
+					names[i] = r.Title
+				}
+				title += " (선행: " + strings.Join(names, ", ") + ")"
+			}
+			fmt.Fprintf(&b, "| %s | %s | %s | %s | %s | %s | %s |\n", t.Priority, cell(title), cell(t.Category), progress, cell(t.AssigneeName), t.DueDate, cell(truncateRunes(t.Body, 300)))
 		}
 	}
 	return b.String()
@@ -555,6 +566,7 @@ func importTodos(ctx context.Context, tx *sql.Tx, a Identity, projectID string, 
 		return err
 	}
 	seen := map[string]bool{}
+	created := map[string]string{} // export ID -> new to-do ID
 	var unassigned, unlinked int
 	for n, t := range todos {
 		label := fmt.Sprintf("todos[%d]", n)
@@ -597,10 +609,12 @@ func importTodos(ctx context.Context, tx *sql.Tx, a Identity, projectID string, 
 			return problem("QUOTA_EXCEEDED", fmt.Sprintf("A project can hold at most %d to-dos; the import would exceed it.", maxProjectTodos))
 		}
 		count++
+		newID := uuid.NewString()
+		created[t.ID] = newID
 		if _, err := tx.ExecContext(ctx, `INSERT INTO todos(id,project_id,title,body,status,priority,category,progress,due_date,position,created_by,updated_by,completed_at,imported_from)
 			VALUES($1,$2,$3,$4,$5,$6,$7,$8,NULLIF($9,'')::date,$10,$11,$11,
 				CASE WHEN $5<>'completed' THEN NULL WHEN $12='' THEN now() ELSE $12::timestamptz END,$13)`,
-			uuid.NewString(), projectID, in.Title, in.Body, in.Status, in.Priority, in.Category, in.Progress, in.DueDate, t.Position, a.User.ID, completedAt, t.ID); err != nil {
+			newID, projectID, in.Title, in.Body, in.Status, in.Priority, in.Category, in.Progress, in.DueDate, t.Position, a.User.ID, completedAt, t.ID); err != nil {
 			return err
 		}
 		result.TodosCreated++
@@ -610,6 +624,9 @@ func importTodos(ctx context.Context, tx *sql.Tx, a Identity, projectID string, 
 		if t.TaskCount+t.OpenIssueCount+len(t.PullRequests) > 0 {
 			unlinked++
 		}
+	}
+	if err := importTodoRelations(ctx, tx, projectID, todos, created, result); err != nil {
+		return err
 	}
 	if unassigned > 0 {
 		result.Warnings = append(result.Warnings, fmt.Sprintf("할 일 %d건은 담당자가 원본 서버의 사용자여서 담당자 없이 가져왔습니다.", unassigned))
@@ -748,4 +765,62 @@ func (a *App) agentsDownload(w http.ResponseWriter, r *http.Request) {
 	}
 	attachmentHeader(w, "AGENTS.md", "text/markdown; charset=utf-8")
 	io.WriteString(w, out.(AgentsTemplate).Content)
+}
+
+// importTodoRelations restores sub-items and blocked_by between to-dos created
+// by this import. Relations to to-dos that were skipped or missing, and ones
+// the checks refuse (a second level, a cycle), are dropped with a warning
+// instead of failing the import.
+func importTodoRelations(ctx context.Context, tx *sql.Tx, projectID string, todos []Todo, created map[string]string, result *ImportResult) error {
+	dropped := 0
+	keep := func(err error) error {
+		if err != nil && errorCode(err) == "INVALID_INPUT" {
+			dropped++
+			return nil
+		}
+		return err
+	}
+	// Parents first, so a second level is caught whatever the export order.
+	for _, t := range todos {
+		id, ok := created[t.ID]
+		if !ok || t.ParentID == "" {
+			continue
+		}
+		parent, ok := created[t.ParentID]
+		if !ok {
+			dropped++
+			continue
+		}
+		if err := keep(setTodoRelations(ctx, tx, projectID, id, &parent, nil)); err != nil {
+			return err
+		}
+	}
+	for _, t := range todos {
+		id, ok := created[t.ID]
+		if !ok || len(t.BlockedBy) == 0 {
+			continue
+		}
+		ids, seen := []string{}, map[string]bool{}
+		for _, b := range t.BlockedBy {
+			to, ok := created[b.ID]
+			switch {
+			case ok && seen[to]:
+			case ok && to != id && len(ids) < maxTodoBlockers:
+				seen[to] = true
+				ids = append(ids, to)
+			default:
+				dropped++
+			}
+		}
+		if len(ids) == 0 {
+			continue
+		}
+		if err := keep(setTodoRelations(ctx, tx, projectID, id, nil, &ids)); err != nil {
+			return err
+		}
+	}
+	if dropped > 0 {
+		result.Warnings = append(result.Warnings, fmt.Sprintf("할 일 관계(상위·선행) %d건은 상대 할 일을 함께 가져오지 않았거나 규칙(한 단계 하위, 순환 금지)에 맞지 않아 빼고 가져왔습니다.", dropped))
+	}
+	return nil
 }

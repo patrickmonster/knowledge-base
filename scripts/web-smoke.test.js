@@ -139,6 +139,37 @@ test('a task links to its questions and history document',async t=>{
   assert.strictEqual(c.document.querySelector('dialog.document-dialog[open]'),null);
 });
 
+test('to-do cards show sub-items and predecessors; the dialog saves only changed relations',async t=>{
+  const c=await open(t,'full');
+  await show(c,'todos');
+  const parent=c.document.querySelector('.todo-card[data-id="todo-1"]'),child=c.document.querySelector('.todo-card[data-id="todo-2"]');
+  assert.match(parent.textContent,/하위 0\/1/);
+  assert.match(child.querySelector('.todo-parent').textContent,/할 일 todo-1/);
+  assert.match(child.textContent,/선행 대기 1/);
+  press(c,child);await c.settle();
+  const dialog=c.document.querySelector('dialog.todo-dialog[open]');
+  assert.strictEqual(dialog.querySelector('select[name="parent_id"]').value,'todo-1');
+  const checked=[...dialog.querySelectorAll('.todo-blocker-list input:checked')].length;
+  assert.strictEqual(checked,2);
+  c.requests.length=0;
+  dialog.querySelector('form').dispatchEvent(new c.window.Event('submit',{bubbles:true,cancelable:true}));
+  await c.settle();
+  let saved=c.requests.find(r=>r.path==='/api/tools/save_todo').body;
+  assert.ok(!('parent_id' in saved)&&!('blocked_by' in saved),'unchanged relations are not sent');
+  await show(c,'todos');
+  press(c,c.document.querySelector('.todo-card[data-id="todo-2"]'));await c.settle();
+  const again=c.document.querySelector('dialog.todo-dialog[open]');
+  again.querySelector('select[name="parent_id"]').value='';
+  const first=again.querySelector('.todo-blocker-list input:checked');first.checked=false;first.dispatchEvent(new c.window.Event('change'));
+  c.requests.length=0;
+  again.querySelector('form').dispatchEvent(new c.window.Event('submit',{bubbles:true,cancelable:true}));
+  await c.settle();
+  saved=c.requests.find(r=>r.path==='/api/tools/save_todo').body;
+  assert.strictEqual(saved.parent_id,'');
+  assert.strictEqual(saved.blocked_by.length,1);
+  check(c,'todo relations');
+});
+
 test('completed to-dos live on their own page; only in-progress and in-review cards can be ticked',async t=>{
   const c=await open(t,'full');
   await show(c,'todos');
