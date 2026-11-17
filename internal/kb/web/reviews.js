@@ -69,6 +69,6 @@ function openDraftDialog(parent,project,d,metaText) {
   dialog.addEventListener('click',e=>{if(e.target!==dialog)return;const r=dialog.getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)dialog.close();});
   parent.append(dialog);dialog.showModal();close.focus();
   tool('get_document',{project_id:project.id,document_id:d.id})
-    .then(doc=>content.replaceChildren(renderMarkdown(doc.content,'vector-content')))
+    .then(doc=>content.replaceChildren(renderMarkdown(doc.content,'vector-content',{projectId:doc.project_id})))
     .catch(e=>content.replaceChildren(el('p',e.message,'muted')));
 }

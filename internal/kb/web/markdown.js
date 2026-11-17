@@ -4,9 +4,9 @@
 // Builds DOM nodes only (never innerHTML), so raw HTML in a document is shown as text
 // and cannot run under the page's strict CSP. Links are limited to http(s) and mailto.
 // Supported: headings, paragraphs (single newlines become line breaks), emphasis, strike,
-// inline code, fenced code, block quotes, nested lists, task items, tables, rules, links.
+// inline code, fenced code (```html preview → design preview), block quotes, nested lists, task items, tables, rules, links.
 const markdownPatterns = {
-  fence: /^ {0,3}(`{3,}|~{3,})\s*([\w+-]*)/,
+  fence: /^ {0,3}(`{3,}|~{3,})\s*([\w+-]*)(.*)$/,
   heading: /^ {0,3}(#{1,6})\s+(.*?)(?:\s+#+)?\s*$/,
   rule: /^ {0,3}([-*_])(?:\s*\1){2,}\s*$/,
   item: /^(\s*)([-*+]|\d{1,9}[.)])\s+(.*)$/,
@@ -159,7 +159,10 @@ function markdownBlocks(lines, parent) {
       while (i < lines.length && !closing.test(lines[i])) code.push(lines[i++]);
       i++; // An unterminated fence (common in document chunks) runs to the end.
       const pre = markdownNode('pre'), codeNode = markdownNode('code', fence[2] ? 'language-' + fence[2] : '', code.join('\n'));
-      pre.append(codeNode); parent.append(pre);
+      pre.append(codeNode);
+      // ```html preview blocks become a sandboxed design preview when design_preview.js is loaded.
+      const preview = typeof designPreviewBlock === 'function' ? designPreviewBlock(fence[2], fence[3], code.join('\n'), pre, markdownOptions) : null;
+      parent.append(preview || pre);
       continue;
     }
     const heading = line.match(markdownPatterns.heading);
@@ -183,9 +186,15 @@ function markdownBlocks(lines, parent) {
   }
 }
 
-function renderMarkdown(source, cls) {
+// Options for the render in progress (rendering is synchronous): projectId lets
+// design previews resolve css=<file> against that project's attachments.
+let markdownOptions = {};
+
+function renderMarkdown(source, cls, options) {
   const root = markdownNode('div', 'markdown' + (cls ? ' ' + cls : ''));
-  markdownBlocks(String(source ?? '').replace(/\r\n?/g, '\n').split('\n'), root);
+  markdownOptions = options || {};
+  try { markdownBlocks(String(source ?? '').replace(/\r\n?/g, '\n').split('\n'), root); }
+  finally { markdownOptions = {}; }
   return root;
 }
 

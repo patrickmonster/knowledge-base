@@ -114,12 +114,12 @@ async function vectorPage() {
       if(ticket!==selectionGeneration||version!==generation)return;
       const p=result.selected;neighborIDs=new Set(result.neighbors.map(n=>n.id));highlight();
       detail.replaceChildren(el('p','SELECTED CHUNK','eyebrow'),el('h2',p.title));
-      detail.append(el('p',`${vectorKinds[p.kind]?.[0]||p.kind} · 조각 ${p.position+1} · 버전 ${p.revision}`,'small muted'),renderMarkdown(p.content,'vector-content'));
+      detail.append(el('p',`${vectorKinds[p.kind]?.[0]||p.kind} · 조각 ${p.position+1} · 버전 ${p.revision}`,'small muted'),renderMarkdown(p.content,'vector-content',{projectId:projectID}));
       detail.append(btn('문서 원문 보기',async()=>{
         const doc=await tool('get_document',{project_id:projectID,document_id:p.document_id,revision:p.revision});
         if(!root.isConnected||!me||version!==generation||ticket!==selectionGeneration)return;
         const dialog=el('dialog',undefined,'vector-document'),close=btn('닫기',()=>dialog.close());
-        dialog.append(el('h2',doc.title),el('p',`버전 ${doc.revision}`,'small muted'),renderMarkdown(doc.content,'vector-content'),close);
+        dialog.append(el('h2',doc.title),el('p',`버전 ${doc.revision}`,'small muted'),renderMarkdown(doc.content,'vector-content',{projectId:doc.project_id}),close);
         dialog.addEventListener('close',()=>dialog.remove(),{once:true});dialog.addEventListener('click',e=>{if(e.target!==dialog)return;const r=dialog.getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)dialog.close();});root.append(dialog);dialog.showModal();close.focus();
       }));
       detail.append(el('h3','유사한 조각'),el('p','같은 프로젝트·문서 상태에서 계산한 실제 코사인 유사도입니다. 1에 가까울수록 유사하며, 지도상의 거리와는 다를 수 있습니다.','small muted'));

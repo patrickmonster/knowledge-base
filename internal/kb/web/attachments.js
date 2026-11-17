@@ -148,7 +148,7 @@ async function attachmentsPage() {
       section.append(el('h3','추출 본문'),el('p','서식·이미지·차트는 빠진 텍스트입니다. 정확한 모양과 수치는 원본으로 확인하세요.'+(f.text_truncated?' 본문이 길어 앞부분만 담겨 있습니다.':''),'small muted'));
       const status=el('p','불러오는 중…','muted');section.append(status);body.append(section);
       tool('get_document',{project_id:projectID,document_id:f.text_document_id}).then(doc=>{
-        if(open)status.replaceWith(renderMarkdown(doc.content,'vector-content'));
+        if(open)status.replaceWith(renderMarkdown(doc.content,'vector-content',{projectId:doc.project_id}));
       }).catch(e=>{if(open)status.textContent='추출 본문을 불러오지 못했습니다: '+e.message;});
     } else if(kind==='pdf'){
       const why={empty:'추출할 본문이 없는 PDF입니다(스캔본일 수 있습니다).',failed:'본문 추출에 실패한 PDF입니다.'}[f.text_status]||'본문이 추출되지 않은 PDF입니다.';
