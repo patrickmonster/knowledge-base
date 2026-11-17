@@ -60,7 +60,56 @@ const shorter=(k,cur)=>body[k]!==null&&body[k]>0&&(!cur||body[k]<cur);
 if((shorter('audit_days',p.audit_days)||shorter('revision_days',p.revision_days))&&!confirm('기간을 정하거나 줄이면 그보다 오래된 기록이 1시간 안에 삭제되며 되돌릴 수 없습니다. 볼륨 백업을 확인했나요? 저장할까요?'))return;
 save.disabled=true;try{await api('/api/admin/retention',body);notify('보관 정책을 저장했습니다.');await reload();}catch(err){notify(err.message,true);}finally{save.disabled=false;}});
 c.append(form,el('p','현재 버전과 첨부가 연결된 버전은 삭제하지 않습니다. 결과 0건 검색어·검색 시간 표본은 최대 365일(감사 로그 기간이 더 짧으면 그 기간) 뒤 삭제합니다. 환경변수(AUDIT_RETENTION_DAYS, REVISION_RETENTION_DAYS, REVISION_KEEP_LATEST)는 이 화면에서 값을 비운 항목의 기본값으로만 쓰입니다.','muted'));return c;}
-async function projects(){const items=await tool('list_projects',{limit:50}),root=el('div',undefined,'split'),create=card('프로젝트 만들기'),form=el('form');field(form,'프로젝트 이름','name');const slug=field(form,'주소용 이름 (영문 소문자·숫자·하이픈)','slug');slug.pattern='[a-z0-9][a-z0-9-]{0,79}';field(form,'설명','description').required=false;const rl=el('label','소유자 규칙 (선택, 한 줄에 하나 · "커밋:" 으로 시작하면 커밋 규칙)'),rt=el('textarea');rt.name='rules';rt.rows=4;rt.placeholder='커밋: 커밋 메시지는 feat:/fix: 접두사를 쓴다\n작업: 작업 전 start_task로 맥락을 조회한다';rl.append(rt);form.append(rl);const gl=el('label','소스 저장소 (선택, 한 줄에 하나 · git remote 또는 owner/name)'),gt=el('textarea');gt.name='repositories';gt.rows=2;gt.placeholder='https://github.com/owner/name.git\nowner/another-repo';gl.append(gt);form.append(gl);formSubmit(form,'프로젝트 만들기',async d=>{const rules=parseRuleLines(d.rules||''),repos=parseRepositoryLines(d.repositories||'');delete d.rules;delete d.repositories;if(rules.length)d.rules=rules;const created=await tool('create_project',d);form.reset();const failed=await addRepositories(created.id,repos);notify(failed.length?'프로젝트를 만들었지만 저장소 '+failed.length+'개를 등록하지 못했습니다: '+failed.join(' · '):'프로젝트를 만들었습니다.',failed.length>0);await loadProjects();await render('projects');});create.append(form);const list=card('참여 중인 프로젝트');if(!items.length)list.append(el('p','프로젝트를 만들거나 소유자에게 참여를 요청하세요.','empty'));for(const p of items){const row=el('div',undefined,'project-row'),info=el('div');info.append(el('strong',p.name),el('p',p.description,'small muted'),el('code',p.id),repositoryPills(p.repositories),el('p',roleLabels[p.role]||p.role,'small'));const acts=el('div',undefined,'actions');acts.append(p.id===currentProjectID?el('span','현재 프로젝트','pill'):btn('이 프로젝트로 작업',async()=>{setCurrentProject(p.id);await render('documents');}),btn('저장소',()=>repositories(p)),btn('상위 프로젝트',()=>upstreams(p)),btn('참여자',()=>members(p)),btn('백업 · 이전 · AGENTS.md',()=>portability(p)));row.append(info,acts);list.append(row);}root.append(create,list);return root;}
+// Lists the caller's projects as a table; 프로젝트 만들기 opens the create form in a modal.
+async function projects(){
+  const items=await tool('list_projects',{limit:50}),root=el('div'),list=el('section',undefined,'card');
+  const head=el('div',undefined,'projects-head'),create=el('button','프로젝트 만들기');create.type='button';
+  create.addEventListener('click',()=>openProjectDialog(root));
+  head.append(el('h2','참여 중인 프로젝트'),create);list.append(head);
+  if(!items.length)list.append(el('p','프로젝트를 만들거나 소유자에게 참여를 요청하세요.','empty'));
+  else{
+    const wrap=table(['프로젝트','저장소','역할','관리'],items.map(p=>{
+      const info=el('div',undefined,'project-name'),title=el('div',undefined,'project-title');
+      title.append(el('strong',p.name));
+      if(p.id===currentProjectID)title.append(el('span','현재 프로젝트','pill project-current'));
+      info.append(title);
+      if(p.description)info.append(el('p',p.description,'small muted'));
+      info.append(el('code',p.id));
+      const acts=el('div',undefined,'actions project-actions');
+      if(p.id!==currentProjectID)acts.append(btn('이 프로젝트로 작업',async()=>{setCurrentProject(p.id);await render('documents');},''));
+      acts.append(btn('저장소',()=>repositories(p)),btn('상위 프로젝트',()=>upstreams(p)),btn('참여자',()=>members(p)),btn('백업 · 이전 · AGENTS.md',()=>portability(p)));
+      return [info,repositoryPills(p.repositories),roleLabels[p.role]||p.role,acts];
+    }));
+    wrap.classList.add('project-table');
+    wrap.querySelectorAll('tbody tr').forEach((tr,i)=>{if(items[i].id===currentProjectID)tr.classList.add('current');});
+    list.append(wrap);
+  }
+  root.append(list);return root;
+}
+
+// The create-project form in a modal; it closes on success, Esc, 취소 or a backdrop click.
+function openProjectDialog(parent){
+  const dialog=el('dialog',undefined,'project-dialog'),form=el('form');
+  field(form,'프로젝트 이름','name');
+  const slug=field(form,'주소용 이름 (영문 소문자·숫자·하이픈)','slug');slug.pattern='[a-z0-9][a-z0-9-]{0,79}';
+  field(form,'설명','description').required=false;
+  const rl=el('label','소유자 규칙 (선택, 한 줄에 하나 · "커밋:" 으로 시작하면 커밋 규칙)'),rt=el('textarea');rt.name='rules';rt.rows=4;rt.placeholder='커밋: 커밋 메시지는 feat:/fix: 접두사를 쓴다\n작업: 작업 전 start_task로 맥락을 조회한다';rl.append(rt);form.append(rl);
+  const gl=el('label','소스 저장소 (선택, 한 줄에 하나 · git remote 또는 owner/name)'),gt=el('textarea');gt.name='repositories';gt.rows=2;gt.placeholder='https://github.com/owner/name.git\nowner/another-repo';gl.append(gt);form.append(gl);
+  formSubmit(form,'프로젝트 만들기',async d=>{
+    const rules=parseRuleLines(d.rules||''),repos=parseRepositoryLines(d.repositories||'');
+    delete d.rules;delete d.repositories;if(rules.length)d.rules=rules;
+    const created=await tool('create_project',d);
+    dialog.close();
+    const failed=await addRepositories(created.id,repos);
+    notify(failed.length?'프로젝트를 만들었지만 저장소 '+failed.length+'개를 등록하지 못했습니다: '+failed.join(' · '):'프로젝트를 만들었습니다.',failed.length>0);
+    await loadProjects();await render('projects');
+  });
+  const actions=el('div',undefined,'actions project-dialog-actions');actions.append(btn('취소',()=>dialog.close()),form.querySelector('button'));form.append(actions);
+  dialog.append(el('h2','프로젝트 만들기'),form);
+  dialog.addEventListener('close',()=>dialog.remove(),{once:true});
+  dialog.addEventListener('click',e=>{if(e.target!==dialog)return;const r=dialog.getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)dialog.close();});
+  parent.append(dialog);dialog.showModal();form.querySelector('input[name="name"]')?.focus();
+}
 // Upstream projects: a downstream follows an upstream (design, planning, specs) read-only; the upstream's owner or admin approves here.
 const upstreamStatus={pending:'승인 대기',approved:'연결됨'};
 async function upstreams(project){const data=await tool('list_project_upstreams',{project_id:project.id}),canManage=project.role==='owner'||project.role==='admin',root=el('div');root.append(btn('프로젝트 목록',()=>render('projects'),'secondary refresh'));
