@@ -139,6 +139,12 @@ func TestProjectUpstreams(t *testing.T) {
 	_, err = call(t, tools, dev, "update_issue", UpdateIssueInput{ProjectID: design.ID, IssueID: issue.ID, Status: "resolved"})
 	denied(t, err, "NOT_FOUND")
 
+	// The stored start snapshot keeps the upstream sources while the link holds.
+	upRun := mustCall(t, tools, dev, "start_task", StartTaskInput{ProjectID: app.ID, RequestKey: "up-snapshot", Title: "결제 버튼", Task: "결제 버튼"}).(StartTaskResult).Run
+	if got := mustCall(t, tools, dev, "get_task_run", TaskRef{ProjectID: app.ID, TaskID: upRun.ID}).(TaskRun).Context; len(got.UpstreamSources) != 1 || got.UpstreamSources[0].ProjectName != design.Name || got.UpstreamHidden != 0 {
+		t.Fatalf("stored upstream snapshot: %+v", got.UpstreamSources)
+	}
+
 	// Both sides see the link; the reader does not see other downstreams.
 	ups := mustCall(t, tools, dev, "list_project_upstreams", ProjectInput{ProjectID: app.ID}).(ProjectUpstreams)
 	if len(ups.Upstreams) != 1 || ups.Upstreams[0].UpstreamProjectID != design.ID {
@@ -155,6 +161,10 @@ func TestProjectUpstreams(t *testing.T) {
 	denied(t, err, "NOT_FOUND")
 	if tc := mustCall(t, tools, dev, "get_task_context", ContextInput{ProjectID: app.ID, Task: "결제 버튼"}).(TaskContext); tc.UpstreamSources != nil {
 		t.Fatalf("removed upstream still in context")
+	}
+	// ...and from the stored start snapshot, which only counts what it left out.
+	if got := mustCall(t, tools, dev, "get_task_run", TaskRef{ProjectID: app.ID, TaskID: upRun.ID}).(TaskRun).Context; got.UpstreamSources != nil || got.UpstreamProjects != nil || got.UpstreamHidden != 1 {
+		t.Fatalf("removed upstream still in stored snapshot: %+v / hidden %d", got.UpstreamSources, got.UpstreamHidden)
 	}
 	_, err = call(t, tools, designer, "remove_project_upstream", UpstreamRemoveInput{ProjectID: design.ID, OtherProjectID: app.ID})
 	denied(t, err, "NOT_FOUND")

@@ -93,6 +93,20 @@ func TestTaskContextRelatedProjects(t *testing.T) {
 	if len(stored.Context.RelatedProjects) != 1 || len(stored.Context.RelatedSources) != len(run.Context.RelatedSources) {
 		t.Fatalf("related context not stored: %+v", stored.Context.RelatedProjects)
 	}
+	// Other members of the main project read the run, but not the related
+	// project they are not in: those sources are left out and only counted.
+	peer := inviteAs(t, s, admin, "related-peer@example.com")
+	mustCall(t, tools, admin, "set_project_member", MemberInput{ProjectID: main.ID, UserID: peer.User.ID, Role: "viewer"})
+	seen := mustCall(t, tools, peer, "get_task_run", TaskRef{ProjectID: main.ID, TaskID: run.ID}).(TaskRun).Context
+	if seen.RelatedProjects != nil || seen.RelatedSources != nil || seen.RelatedHidden != len(run.Context.RelatedSources) || len(seen.Sources) != len(stored.Context.Sources) {
+		t.Fatalf("unreadable related sources shown: %+v / hidden %d", seen.RelatedSources, seen.RelatedHidden)
+	}
+	// Once the peer joins, the sources appear under the project's current name.
+	mustCall(t, tools, admin, "set_project_member", MemberInput{ProjectID: other.ID, UserID: peer.User.ID, Role: "viewer"})
+	seen = mustCall(t, tools, peer, "get_task_run", TaskRef{ProjectID: main.ID, TaskID: run.ID}).(TaskRun).Context
+	if len(seen.RelatedSources) != len(run.Context.RelatedSources) || seen.RelatedHidden != 0 || seen.RelatedSources[0].ProjectName != "관련 프로젝트" || seen.RelatedProjects[0].Role != "viewer" {
+		t.Fatalf("readable related sources: %+v", seen.RelatedSources)
+	}
 	retried := mustCall(t, tools, member, "start_task", start).(StartTaskResult).Run
 	if retried.ID != run.ID {
 		t.Fatal("identical retry created another task")
