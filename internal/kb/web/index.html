@@ -4,7 +4,7 @@
 <body>
 <div id="notice" role="status" aria-live="polite" hidden></div>
 <main id="login-view" class="auth" hidden>
-  <div class="mark">K</div><p class="eyebrow">TEAM KNOWLEDGE</p><h1>팀의 지식을 이어가세요.</h1><p class="muted">프로젝트의 결정과 맥락을 한곳에.</p>
+  <div class="auth-intro"><div class="mark">K</div><p class="eyebrow">TEAM KNOWLEDGE</p><h1>팀의 지식을 이어가세요.</h1><p class="muted">프로젝트의 결정과 맥락을 한곳에.</p></div>
   <form id="login-form" class="card"><h2>로그인</h2><label>이메일<input name="email" type="email" autocomplete="username" required></label><label>비밀번호<input name="password" type="password" autocomplete="current-password" required></label><button>로그인</button><p class="muted small">계정이 없거나 비밀번호를 잊었다면 관리자에게 초대 또는 재설정 링크를 요청하세요.</p></form>
   <form id="mfa-form" class="card" method="post" hidden><h2>2단계 인증</h2><p class="muted small" id="mfa-hint">인증 앱에 표시된 6자리 코드를 입력하세요.</p><label id="mfa-label">인증 코드<input name="code" autocomplete="one-time-code" inputmode="numeric" maxlength="6" pattern="[0-9 ]{6,7}" required></label><button>확인</button><div class="actions"><button type="button" id="mfa-toggle" class="secondary">복구 코드 사용</button><button type="button" id="mfa-cancel" class="secondary">처음으로</button></div><p class="muted small">기기를 잃어버렸고 복구 코드도 없다면 관리자에게 2단계 인증 초기화를 요청하세요.</p></form>
 </main>
