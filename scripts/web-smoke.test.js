@@ -169,3 +169,24 @@ test('completed to-dos live on their own page; only in-progress and in-review ca
   assert.deepStrictEqual(titles,['할 일 todo-3']);
   check(c,'todosDone');
 });
+
+test('to-dos idle for a while carry a badge and can be shown alone',async t=>{
+  const c=await open(t,'full');
+  await show(c,'todos');
+  const badges=[...c.document.querySelectorAll('.todo-card .todo-stale')].map(n=>[n.closest('.todo-card').dataset.id,n.textContent]);
+  assert.deepStrictEqual(badges,[['todo-2','21일 정체']]);
+  const label=c.document.querySelector('.todo-stale-filter');
+  assert.ok(!label.hidden,'filter shows when some to-dos are stale');
+  assert.match(label.textContent,/14일 넘게 멈춘 것만 \(1\)/);
+  const box=label.querySelector('input');
+  box.checked=true;box.dispatchEvent(new c.window.Event('change'));await c.settle();
+  assert.deepStrictEqual([...c.document.querySelectorAll('.todo-card')].map(n=>n.dataset.id),['todo-2']);
+  check(c,'todos › stale only');
+});
+
+test('the stale filter stays hidden when nothing is stale',async t=>{
+  const c=await open(t,'empty');
+  await show(c,'todos');
+  assert.ok(c.document.querySelector('.todo-stale-filter').hidden);
+  assert.strictEqual(c.document.querySelector('.todo-stale'),null);
+});

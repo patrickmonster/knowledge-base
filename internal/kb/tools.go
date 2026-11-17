@@ -297,6 +297,7 @@ func NewTools(s *Store) Tools {
 	registerRuleTools(t, s)
 	registerTodoTools(t, s)
 	registerTodoTaskTools(t, s)
+	registerStaleTodoTools(t, s)
 
 	return t
 }
