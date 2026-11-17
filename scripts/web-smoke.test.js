@@ -139,6 +139,22 @@ test('a task links to its questions and history document',async t=>{
   assert.strictEqual(c.document.querySelector('dialog.document-dialog[open]'),null);
 });
 
+test('task start sources list upstream and related projects apart, by project',async t=>{
+  const c=await open(t,'full');
+  await show(c,'tasks');
+  const card=c.document.querySelector('#page .task-card');
+  const start=[...card.querySelectorAll('button')].find(b=>b.textContent==='시작 자료 보기');
+  press(c,start);await c.settle();check(c,'task › start sources');
+  const dialog=c.document.querySelector('dialog.review-dialog[open]');
+  const heads=[...dialog.querySelectorAll('h3')].map(n=>n.textContent);
+  assert.ok(heads.includes('상위 프로젝트 자료 1건'),heads.join(' | '));
+  assert.ok(heads.includes('관련 프로젝트 자료 2건'),heads.join(' | '));
+  const groups=[...dialog.querySelectorAll('.task-project-sources > li')].map(li=>li.textContent);
+  assert.deepStrictEqual(groups,['디자인 시스템버튼 규격 (버전 2)','결제 서비스결제 재시도 (버전 2)환불 정책 (버전 5)','빈 프로젝트 · 맞는 자료 없음']);
+  assert.match(dialog.textContent,/열람 권한이 없는 프로젝트의 자료 1건은 표시하지 않습니다/);
+  assert.match(dialog.textContent,/관련 임베딩 대기 중/);
+});
+
 test('completed to-dos live on their own page; only in-progress and in-review cards can be ticked',async t=>{
   const c=await open(t,'full');
   await show(c,'todos');

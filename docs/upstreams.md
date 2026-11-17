@@ -44,6 +44,7 @@
 - active 문서만 대상이며 history는 제외합니다(상위의 작업 과정이 아니라 현재 기준이 필요).
 - 발췌 예산(`excerpt_budget`)의 1/4을 상위 자료에 예약합니다. `related_project_ids`를 함께 쓰면 그 1/4도 따로 예약되어 이 프로젝트 자료는 절반을 씁니다.
 - `related_project_ids`에 상위 프로젝트를 넣으면 `upstream_sources`와 중복되므로 무시합니다.
+- 저장된 작업을 `get_task_run`으로 다시 읽을 때(웹 **진행 중 작업**의 **시작 자료 보기** 포함) `upstream_sources`는 지금도 승인된 상위 프로젝트의 자료만 남기고, 연결이 해제된 상위의 자료는 건수만 `upstream_hidden`에 담습니다.
 - `guidance`는 상위 자료를 이 프로젝트 자료보다 우선하되, 상위 문서는 고치지 말고 `create_issue(project_id=<상위>, from_project_id=<이 프로젝트>)`로 보고하라고 안내합니다.
 
 ## 이슈 흐름

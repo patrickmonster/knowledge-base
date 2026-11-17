@@ -117,7 +117,10 @@ func registerWorkflowTools(t Tools, s *Store) {
 			return nil, err
 		}
 		run, err := one[TaskRun](ctx, tx, `SELECT to_jsonb(r)-'completion_hash' FROM task_runs r WHERE id=$1 AND project_id=$2`, in.TaskID, in.ProjectID)
-		return run, notFound(err)
+		if err != nil {
+			return nil, notFound(err)
+		}
+		return run, viewableTaskContext(ctx, tx, a, in.ProjectID, &run.Context)
 	})
 	add(t, s, "list_task_runs", "List project tasks to find open work or recover a task ID after an interrupted response. status: open, completed or abandoned; omitted means all. older_than_days lists tasks started at least that many days ago (with status open: long-open tasks to finish or close); mine=true lists only your tasks; todo_id lists the tasks linked to a to-do. Each task includes created_by_name, pull_requests with tracked state, open_issues and its linked todo; context excerpts are not returned.", false, func(in TaskListInput) string { return in.ProjectID }, func(ctx context.Context, tx *sql.Tx, a Identity, in TaskListInput) (any, error) {
 		if _, err := projectAccess(ctx, tx, a.User.ID, in.ProjectID, false); err != nil {
@@ -234,6 +237,12 @@ func (s *Store) startTask(ctx context.Context, tx *sql.Tx, a Identity, in StartT
 	// A retry that names a to-do must name the linked one; link_task_todo changes it afterwards.
 	if run.Title != in.Title || run.Task != in.Task || run.ExcerptBudget != in.ExcerptBudget || run.Branch != scope.Branch || run.Worktree != scope.Worktree || strings.Join(run.Paths, "\n") != strings.Join(scope.Paths, "\n") || (inserted == 0 && !sameRelatedProjects(run.Context.RelatedProjects, related)) || (inserted == 0 && in.TodoID != "" && run.TodoID != in.TodoID) {
 		return nil, problem("CONFLICT", "request_key was already used with different task inputs.")
+	}
+	if inserted == 0 {
+		// A retry returns the stored snapshot; trim it to what the caller may read now.
+		if err := viewableTaskContext(ctx, tx, a, in.ProjectID, &run.Context); err != nil {
+			return nil, err
+		}
 	}
 	if inserted > 0 && in.TodoID != "" {
 		if err := startTodo(ctx, tx, run.ID, in.TodoID, a.User.ID); err != nil {
