@@ -3,7 +3,7 @@
 // Preview: what the 첨부 문서 page can show without downloading. The server
 // decides again from the file's bytes (GET /api/attachments/{id}/preview), so
 // a renamed file is refused there and the dialog falls back to a message.
-const attachmentPreviewKinds={png:'image',jpg:'image',jpeg:'image',gif:'image',webp:'image',pdf:'pdf',txt:'text',md:'text',csv:'text',tsv:'text',json:'text',log:'text',yaml:'text',yml:'text'};
+const attachmentPreviewKinds={png:'image',jpg:'image',jpeg:'image',gif:'image',webp:'image',pdf:'pdf',html:'html',htm:'html',txt:'text',md:'text',csv:'text',tsv:'text',json:'text',log:'text',yaml:'text',yml:'text'};
 function attachmentPreviewKind(f){const m=/\.([^.]+)$/.exec(f.filename||'');return m?attachmentPreviewKinds[m[1].toLowerCase()]||'':'';}
 function attachmentPreviewURL(f){return `/api/attachments/${encodeURIComponent(f.id)}/preview?project_id=${encodeURIComponent(f.project_id)}`;}
 function attachmentHasPreview(f){return f.status==='ready'&&(!!attachmentPreviewKind(f)||(f.text_status==='extracted'&&!!f.text_document_id));}
@@ -110,7 +110,8 @@ async function attachmentsPage() {
       nav.append(prev,next,btn('새로고침',refresh));list.append(nav);
     } catch(e) {if(ticket===generation)list.replaceChildren(listHead(),el('p',e.message,'muted'),btn('다시 불러오기',refresh));}
   }
-  // Shows the file in a modal: images inline, text files as plain text, and
+  // Shows the file in a modal: images inline, text files as plain text, HTML
+  // as a page in a sandboxed frame (no script, nothing loaded from elsewhere), and
   // for PDF·Word·Excel the extracted text (PDF also opens the original in a
   // new tab, in the browser's own viewer). Nothing here uses a download link.
   function openPreviewDialog(f) {
@@ -119,6 +120,9 @@ async function attachmentsPage() {
     const actions=el('div',undefined,'actions');
     let open=true;
     const failed=message=>el('p',message+' 다운로드해서 확인해 주세요.','muted');
+    if(kind==='html'){
+      const a=el('a','새 탭에서 크게 보기','button-link');a.href=url;a.target='_blank';a.rel='noopener';actions.append(a);
+    }
     if(kind==='pdf'){
       const a=el('a','원본 PDF 새 탭에서 열기','button-link');a.href=url;a.target='_blank';a.rel='noopener';actions.append(a);
     }
@@ -130,6 +134,21 @@ async function attachmentsPage() {
       const img=el('img',undefined,'attachment-preview-image');img.alt=f.filename;
       img.addEventListener('error',()=>img.replaceWith(failed('이미지를 표시하지 못했습니다.')),{once:true});
       img.src=url;body.append(img);
+    } else if(kind==='html'){
+      // Checked with fetch first so an error shows as a message, not as a
+      // blocked frame; the frame then reuses the cached response.
+      const status=el('p','불러오는 중…','muted');body.append(status);
+      (async()=>{
+        try{
+          const response=await fetch(url);
+          if(!response.ok){let message='미리보기를 불러오지 못했습니다.';try{message=(await response.json()).error?.message||message;}catch{}throw Error(message);}
+          await response.arrayBuffer();
+          if(!open)return;
+          const frame=el('iframe',undefined,'attachment-preview-frame');
+          frame.setAttribute('sandbox','');frame.referrerPolicy='no-referrer';frame.title=f.filename+' 미리보기';frame.src=url;
+          status.replaceWith(el('p','스크립트는 실행하지 않고 외부 이미지·글꼴·스타일은 불러오지 않습니다. 파일 안에 넣은(data:) 이미지와 인라인 스타일만 표시됩니다.','small muted'),frame);
+        }catch(e){if(open)status.replaceWith(failed(e.message));}
+      })();
     } else if(kind==='text'){
       const status=el('p','불러오는 중…','muted');body.append(status);
       (async()=>{

@@ -25,6 +25,12 @@ func TestInlineType(t *testing.T) {
 		{"text on the image route", "a.txt", []byte("hello"), true, "", false},
 		{"text without a text name", "a.bin", []byte("hello"), false, "", false},
 		{"html named as text", "a.txt", []byte("<!DOCTYPE html><script>alert(1)</script>"), false, "", false},
+		{"html page", "report.HTML", []byte("<!DOCTYPE html><html><body>보고서</body></html>"), false, "text/html; charset=utf-8", true},
+		{"html fragment", "frag.htm", []byte("<div>표</div>"), false, "text/html; charset=utf-8", true},
+		{"html on the image route", "a.html", []byte("<!DOCTYPE html>"), true, "", false},
+		{"binary named as html", "a.html", []byte("\x00\x01\x02\x03binary"), false, "", false},
+		{"pdf named as html", "a.html", []byte("%PDF-1.7\n"), false, "application/pdf", false},
+		{"svg named as html", "a.html", []byte(`<?xml version="1.0"?><svg xmlns="http://www.w3.org/2000/svg"><script/></svg>`), false, "", false},
 		{"svg", "a.svg", []byte(`<?xml version="1.0"?><svg xmlns="http://www.w3.org/2000/svg"><script/></svg>`), false, "", false},
 		{"svg named as png", "a.png", []byte(`<svg xmlns="http://www.w3.org/2000/svg"></svg>`), false, "", false},
 		{"office file", "a.docx", []byte("PK\x03\x04rest"), false, "", false},
@@ -67,6 +73,7 @@ func TestAttachmentPreview(t *testing.T) {
 	notes := upload("메모.md", "# 메모\n<script>alert(1)</script>\n")
 	long := upload("big.log", strings.Repeat("0123456789abcde\n", maxPreviewTextBytes/16+10))
 	page := upload("page.txt", "<!DOCTYPE html><html><body><script>alert(1)</script></body></html>")
+	report := upload("보고서.html", "<!DOCTYPE html><html><body><h1>보고서</h1><script>alert(1)</script></body></html>")
 	office := upload("표.xlsx", "PK\x03\x04"+strings.Repeat("\x00", 30))
 	pending := mustCall(t, tools, owner, "prepare_attachment_upload", PrepareAttachmentInput{ProjectID: p.ID, Filename: "later.png", SizeBytes: 10}).(map[string]any)["attachment"].(Attachment)
 
@@ -75,13 +82,18 @@ func TestAttachmentPreview(t *testing.T) {
 		t.Fatal(err)
 	}
 	handler := app.Handler()
+	sessions := map[string]string{} // one login per user, under the login rate limit
 	get := func(email, projectID, id string) *httptest.ResponseRecorder {
 		t.Helper()
 		r := httptest.NewRequest("GET", "/api/attachments/"+id+"/preview?project_id="+projectID, nil)
 		if email != "" {
-			cookie, err := s.Login(ctx, email, testPassword)
-			if err != nil {
-				t.Fatal(err)
+			cookie, ok := sessions[email]
+			if !ok {
+				var err error
+				if cookie, err = s.Login(ctx, email, testPassword); err != nil {
+					t.Fatal(err)
+				}
+				sessions[email] = cookie
 			}
 			r.AddCookie(&http.Cookie{Name: "kb_session", Value: cookie})
 		}
@@ -134,6 +146,21 @@ func TestAttachmentPreview(t *testing.T) {
 	w = get("viewer@example.com", p.ID, long.ID)
 	if w.Code != 200 || w.Body.Len() != maxPreviewTextBytes || w.Header().Get("X-Preview-Truncated") != "true" || w.Header().Get("Content-Length") != "1048576" {
 		t.Fatalf("long text preview: %d, %d bytes, %v", w.Code, w.Body.Len(), w.Header())
+	}
+	// HTML renders in a sandbox: opaque origin, no script, nothing fetched, framed only by this app.
+	w = get("viewer@example.com", p.ID, report.ID)
+	h = w.Header()
+	if w.Code != 200 || !strings.Contains(w.Body.String(), "<h1>보고서</h1>") || h.Get("Content-Type") != "text/html; charset=utf-8" ||
+		h.Get("X-Content-Type-Options") != "nosniff" || h.Get("Content-Security-Policy") != htmlPreviewCSP || h.Get("X-Frame-Options") != "SAMEORIGIN" {
+		t.Fatalf("html preview: %d %v", w.Code, h)
+	}
+	for _, want := range []string{"sandbox;", "default-src 'none'", "frame-ancestors 'self'"} {
+		if !strings.Contains(htmlPreviewCSP, want) {
+			t.Fatalf("html policy lacks %q", want)
+		}
+	}
+	if strings.Contains(htmlPreviewCSP, "allow-") || strings.Contains(htmlPreviewCSP, "script-src") {
+		t.Fatalf("html policy lets the page act: %q", htmlPreviewCSP)
 	}
 	// Not shown inline: HTML under a text name, office files, files still uploading.
 	for name, f := range map[string]Attachment{"html": page, "office": office} {
