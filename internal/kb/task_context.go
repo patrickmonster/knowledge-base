@@ -49,6 +49,9 @@ func (s *Store) taskContext(ctx context.Context, tx *sql.Tx, a Identity, in Cont
 	if out.Todos, err = taskTodos(ctx, tx, in.ProjectID, in.Task); err != nil {
 		return TaskContext{}, err
 	}
+	if out.Todos.Stale, err = taskStaleTodos(ctx, tx, in.ProjectID); err != nil {
+		return TaskContext{}, err
+	}
 	upstreams, err := approvedUpstreams(ctx, tx, in.ProjectID)
 	if err != nil {
 		return TaskContext{}, err

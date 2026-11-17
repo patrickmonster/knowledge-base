@@ -33,7 +33,9 @@ type TodoSummary struct {
 type TaskTodos struct {
 	Linked     *TodoSummary  `json:"linked,omitempty"`
 	Candidates []TodoSummary `json:"candidates"`
-	Guidance   string        `json:"guidance"`
+	// Stale lists waiting to-dos idle for a while (todo_stale.go); omitted when none.
+	Stale    *StaleTodos `json:"stale,omitempty"`
+	Guidance string      `json:"guidance"`
 }
 
 type LinkTaskTodoInput struct {

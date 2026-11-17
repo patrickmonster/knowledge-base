@@ -33,12 +33,16 @@ async function todosPage(){
   const category=el('select');category.setAttribute('aria-label','분류');
   const mineLabel=el('label',undefined,'inline-check'),mine=el('input');mine.type='checkbox';
   mineLabel.append(mine,document.createTextNode('내게 배정된 것만'));
+  // Waiting cards with no activity for a while (list_stale_todos) get a badge
+  // and can be shown alone to tidy the board.
+  const staleLabel=el('label',undefined,'inline-check todo-stale-filter'),staleOnly=el('input'),staleText=el('span','오래 묵은 것만');staleOnly.type='checkbox';
+  staleLabel.append(staleOnly,staleText);staleLabel.hidden=true;
   const summary=el('span','','small muted');summary.setAttribute('role','status');
   const hideWrap=el('div',undefined,'todo-hide'),hideBtn=el('button',undefined,'secondary todo-hide-btn'),hideMenu=el('div',undefined,'todo-hide-menu');
   hideBtn.type='button';hideBtn.setAttribute('aria-haspopup','true');hideBtn.setAttribute('aria-expanded','false');
   hideMenu.hidden=true;hideMenu.setAttribute('role','group');hideMenu.setAttribute('aria-label','열·행 숨기기');
   hideWrap.append(hideBtn,hideMenu);
-  filters.append(category,mineLabel,hideWrap,summary);
+  filters.append(category,mineLabel,staleLabel,hideWrap,summary);
   bar.append(filters);
   const barActions=el('div',undefined,'todo-bar-actions');
   const doneLink=btn('완료된 할 일',()=>render('todosDone'),'secondary todo-done-link');
@@ -48,7 +52,7 @@ async function todosPage(){
   const board=el('div',undefined,'todo-board');
   const issuePanel=el('section',undefined,'todo-issues');
   root.append(bar,board,issuePanel);
-  const ctx={todos:[],members:[],reload:refresh};
+  const ctx={todos:[],members:[],stale:new Map(),staleDays:14,reload:refresh};
   let generation=0;
   const collapsed=todoCollapsed();
   const hidden={status:todoHidden('status',todoBoardStatuses.map(x=>x[0])),priority:todoHidden('priority',todoPriorities.map(x=>x[0]))};
@@ -94,12 +98,17 @@ async function todosPage(){
 
   async function refresh(){
     const ticket=++generation;
-    const [todos,members]=await Promise.all([
+    const [todos,members,stale]=await Promise.all([
       tool('list_todos',{project_id:project.id}),
       ctx.members.length?ctx.members:tool('list_project_members',{project_id:project.id}).catch(()=>[]),
+      tool('list_stale_todos',{project_id:project.id}).catch(()=>null),
     ]);
     if(ticket!==generation)return;
     ctx.todos=todos;ctx.members=members;
+    ctx.stale=new Map((stale?.todos||[]).map(x=>[x.id,x]));
+    if(stale?.older_than_days)ctx.staleDays=stale.older_than_days;
+    staleLabel.hidden=!ctx.stale.size&&!staleOnly.checked;
+    staleText.textContent=`${ctx.staleDays}일 넘게 멈춘 것만 (${stale?.total??ctx.stale.size})`;
     drawIssuePanel(project,issuePanel,todos);
     const done=todos.filter(t=>t.status==='completed').length;
     doneLink.textContent=`완료된 할 일 ${done}건`;
@@ -110,7 +119,7 @@ async function todosPage(){
     draw();
   }
   function visible(){
-    return ctx.todos.filter(t=>t.status!=='completed'&&(!category.value||t.category===category.value)&&(!mine.checked||t.assignee_id===me.id));
+    return ctx.todos.filter(t=>t.status!=='completed'&&(!category.value||t.category===category.value)&&(!mine.checked||t.assignee_id===me.id)&&(!staleOnly.checked||ctx.stale.has(t.id)));
   }
   function draw(){
     if(touchDrag)endTouchDrag(false);
@@ -167,6 +176,8 @@ async function todosPage(){
     const tags=el('div',undefined,'todo-tags');
     tags.append(el('span',todoStatusLabel[t.status],'todo-status todo-s-'+t.status));
     if(t.category)tags.append(el('span',t.category,'todo-category'));
+    const idle=ctx.stale.get(t.id);
+    if(idle){const b=el('span',`${idle.idle_days}일 정체`,'todo-stale');b.title=`${idle.idle_days}일 동안 수정·이동·연결 작업·질의 변경이 없었습니다. 끝났는지, 아직 필요한지 확인해 정리해 주세요.`;tags.append(b);c.classList.add('stale');}
     c.append(tags);
     if(todoCheckable.has(t.status)){
       const check=el('label',undefined,'todo-done'),box=el('input');box.type='checkbox';box.disabled=!canWrite;
@@ -314,6 +325,7 @@ async function todosPage(){
   }
   category.addEventListener('change',draw);
   mine.addEventListener('change',draw);
+  staleOnly.addEventListener('change',draw);
   await refresh();
   return root;
 }
