@@ -182,7 +182,7 @@ async function documentsPage() {
       if (ticket!==loadTicket) return;
       const parts=[];
       if (revision!==d.revision) parts.push(el('p',`이전 버전 ${revision}을 보고 있습니다. 제목: ${doc.title}`,'small document-old-revision'));
-      parts.push(renderMarkdown(doc.content,'vector-content'));
+      parts.push(renderMarkdown(doc.content,'vector-content',{projectId:doc.project_id}));
       docBody.replaceChildren(...parts);
     }
     version.addEventListener('change',()=>{

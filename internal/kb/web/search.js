@@ -105,7 +105,7 @@ function openIssueHitDialog(parent,h,metaText) {
 // Shows a search hit's full Markdown body in a modal; it closes on 닫기, Esc or a backdrop click.
 function openHitDialog(parent,h,metaText) {
   searchDialog(parent,h,metaText,content=>tool('get_document',{project_id:h.project_id,document_id:h.document_id,revision:h.revision})
-    .then(doc=>content.replaceChildren(renderMarkdown(doc.content,'vector-content'))));
+    .then(doc=>content.replaceChildren(renderMarkdown(doc.content,'vector-content',{projectId:doc.project_id}))));
 }
 
 function searchDialog(parent,h,metaText,load) {
