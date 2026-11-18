@@ -130,3 +130,6 @@ var ProjectUpstreams string
 
 //go:embed 043_todo_relations.sql
 var TodoRelations string
+
+//go:embed 044_task_prompts.sql
+var TaskPrompts string

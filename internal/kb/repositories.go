@@ -100,17 +100,20 @@ type ResolveProjectInput struct {
 // to editing and committing never saw them; this is the one call every agent
 // makes, so the rules ride along with it.
 type ResolvedProject struct {
-	Repository string    `json:"repository"`
-	Matched    bool      `json:"matched"`
-	Project    *Project  `json:"project,omitempty"`
-	Rules      *RuleSet  `json:"rules,omitempty"`
-	Candidates []Project `json:"candidates,omitempty"`
-	Guidance   string    `json:"guidance"`
+	Repository string   `json:"repository"`
+	Matched    bool     `json:"matched"`
+	Project    *Project `json:"project,omitempty"`
+	Rules      *RuleSet `json:"rules,omitempty"`
+	// TaskPrompts lists the project's enabled task prompts so the agent can
+	// tell when the user's request asks for one.
+	TaskPrompts *TaskPromptIndex `json:"task_prompts,omitempty"`
+	Candidates  []Project        `json:"candidates,omitempty"`
+	Guidance    string           `json:"guidance"`
 }
 
 const (
 	resolveNoMatch = "This server has no project for this repository. Do not use this server for this task: do not call start_task, list_rules or finish_task here, do not ask the user about it, and continue the work. Another connected knowledge server may match."
-	resolveMatch   = "Use this project for this task on this server. rules are this project's work rules as of now: follow them from the first step (branch, commit, pull request, completion record), also when you have not called start_task yet; no rules field means none are set. Before each change task call start_task(project_id), which returns the rules again in context.rules (they can change), and finish_task when done. With role viewer, only read (search, documents, rules); skip start_task and finish_task."
+	resolveMatch   = "Use this project for this task on this server. rules are this project's work rules as of now: follow them from the first step (branch, commit, pull request, completion record), also when you have not called start_task yet; no rules field means none are set. task_prompts lists saved work instructions the user can ask for by name or trigger (\"~해줘\"); fetch one with get_task_prompt when asked. Before each change task call start_task(project_id), which returns the rules again in context.rules (they can change), and finish_task when done. With role viewer, only read (search, documents, rules); skip start_task and finish_task."
 	resolveSeveral = "Several projects on this server are registered for this repository. Ask the user which one to use (or none); do not guess from names."
 )
 
@@ -134,6 +137,9 @@ func resolveProject(ctx context.Context, tx *sql.Tx, a Identity, in ResolveProje
 	case 1:
 		out.Matched, out.Project, out.Guidance = true, &projects[0], resolveMatch
 		if out.Rules, err = taskRules(ctx, tx, a, projects[0]); err != nil {
+			return ResolvedProject{}, err
+		}
+		if out.TaskPrompts, err = taskPromptIndex(ctx, tx, projects[0].ID); err != nil {
 			return ResolvedProject{}, err
 		}
 	default:

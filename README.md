@@ -18,6 +18,7 @@ Go로 만든 팀 공용 지식 서버입니다. 프로젝트별 기획·결정·
 - 한국어 키워드 검색과 의미 검색을 결합한 하이브리드 검색
 - 문서 저장·수정 시 자동 임베딩 대기열, 실패 재시도·상태 조회·소유자 재색인
 - 이슈·질의 베이스: 공통 작업 영역과 담당자, 질의·이슈 등록·답변·해결, 작업 시작 시 관련 질의 표시, 질의응답의 지식 문서화, GitHub 저장소 이슈 가져오기([안내](docs/issues.md#github-이슈-가져오기))
+- 작업 프롬프트([안내](docs/task-prompts.md)): 소유자·관리자가 웹 화면에서 저장한 작업 지시(이름·호출 문구·본문·인자)를 참여자가 "배포 점검해줘"처럼 요청하면 AI가 `get_task_prompt`로 가져와 진행. 호출 문구가 여러 개 맞으면 후보를 보여 사용자 확인
 - 할 일 보드([안내](docs/todos.md)): 프로젝트 할 일을 상태(시작 전·진행 중·완료·아이디어) 열과 우선순위(높음·보통·낮음) 행으로 보는 웹 보드, 분류·진행률·담당자·마감일, 드래그로 이동, AI도 MCP로 추가·이동, 진행 중 작업과 연결해 시작·완료·PR 병합에 따라 자동 이동, 질의·이슈를 연결해 카드에 질의·보류 수 표시
 - Discord 슬래시 명령([안내](docs/discord.md)): Interactions Endpoint(요청·응답, 봇 토큰 없음)로 `/kb link`·`unlink`·`projects`·`todos`. 웹 내 계정에서 만든 단회 코드로 연결하고 연결된 계정의 프로젝트 역할로만 읽기 조회, 메시지 우클릭 → 앱 → 이슈로 등록으로 포럼 글 등을 이슈로 등록(채널→프로젝트 연결은 관리자 화면, 편집자 이상, 같은 메시지 중복 방지), 본인에게만 보이는 답변, Ed25519 서명 검증, 설정(공개 키·켜기)과 명령 등록(봇 토큰은 저장하지 않고 요청 한 번에만 사용)은 관리자 웹 화면
 - 팀 확산([안내](docs/team-rollout.md)): 이슈 담당자 알림과 선택형 문서 생성·승격 알림, 재확인 요약 주기 발송(웹훅·Slack·이메일), 웹 문서 관계 보기·편집, 문서 버전 비교, 검토 대기 사이드바 배지, 공통 작업 영역 삭제·정리, 다른 저장소용 AGENTS.md 생성, 프로젝트 내보내기·가져오기(JSON·Markdown)
@@ -61,6 +62,7 @@ MCP는 호출 인터페이스이고, 검색은 Go 서버가 수행합니다. 연
 
 - 프로젝트 **관리자**(`admin`)는 편집자 권한에 소유자 규칙 관리를 더한 역할입니다. 전역 관리자(사용자 관리)와는 별개이며, 참여자 관리·재색인·소유자 이전은 소유자만 합니다.
 - 작업 규칙(커밋·작업 규칙)은 [docs/rules.md](docs/rules.md)를 참고하세요.
+- 작업 프롬프트("~해줘"로 불러 쓰는 저장된 작업 지시)는 [docs/task-prompts.md](docs/task-prompts.md)를 참고하세요.
 
 - 모든 활성 사용자는 프로젝트를 생성할 수 있고, 생성자가 소유자가 됩니다.
 - 전역 관리자는 사용자 초대·비활성화·역할 변경, 팀 키 폐기, 전체 감사 로그·운영 통계에 접근합니다.
@@ -133,6 +135,8 @@ Authorization: Bearer <발급받은 MCP 키>
 | `get_server_version` | 실행 중인 배포 커밋과 DB 스키마 버전(적용/기대 마이그레이션 수) 확인 |
 | `create_project`, `list_projects` | 프로젝트 생성·조회. `list_projects`는 프로젝트별 `repositories`를 함께 내려주고, `repository`(git remote)를 넘기면 그 저장소에 등록된 프로젝트만 돌려준다 | |
 | `resolve_project` | git remote로 이 서버에서 저장소가 등록된 프로젝트를 찾는다. `matched: true`면 `project`와 작업 규칙 `rules`(`list_rules`와 같은 내용, 없으면 생략), 여러 개면 `candidates`, 없으면 `matched: false`(이 서버는 건너뛰라는 `guidance`). 읽기 전용이라 연결된 모든 knowledge 서버에 불러도 안전하다 | |
+| `list_task_prompts`, `get_task_prompt` | 작업 프롬프트 목록(본문은 `include_body`), 실행할 프롬프트 가져오기(`name`·`prompt_id`·사용자 요청 `request` 중 하나, `arguments`로 `{{인자}}` 채움). `resolve_project`·`start_task` 맥락의 `task_prompts`에도 목록이 담긴다([안내](docs/task-prompts.md)) |
+| `save_task_prompt`, `delete_task_prompt`, `set_task_prompt_enabled` | 소유자·관리자, 웹 화면 전용: 작업 프롬프트 추가·수정·삭제·사용 전환 |
 | `list_project_upstreams`, `request_project_upstream`, `remove_project_upstream` | 상위 프로젝트(디자인 시안·기획·공통 명세) 연결 조회·요청·해제. 하위 소유자·관리자가 요청하고 상위 소유자·관리자가 웹에서 승인(`approve_project_upstream`, 웹 전용)한다. 연결된 하위 참여자는 상위를 읽기 전용으로 참조하고 이슈만 올린다([상위 프로젝트](docs/upstreams.md)) |
 | `add_project_repository`, `remove_project_repository` | 소유자·관리자: 프로젝트의 소스 저장소 등록·해제. `host/owner/name` 소문자로 정규화해 저장(인증 정보·포트 제거), 프로젝트당 20개. GitHub 웹훅이 걸린 저장소는 마이그레이션 029에서 자동 등록 |
 | `set_project_member`, `list_project_members` | 참여자 권한 관리 |

@@ -295,6 +295,7 @@ func NewTools(s *Store) Tools {
 	registerSearchThresholdTools(t, s)
 	registerQualityTools(t, s)
 	registerRuleTools(t, s)
+	registerTaskPromptTools(t, s)
 	registerTodoTools(t, s)
 	registerTodoTaskTools(t, s)
 	registerStaleTodoTools(t, s)
