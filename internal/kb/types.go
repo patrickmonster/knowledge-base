@@ -125,6 +125,8 @@ type TaskContext struct {
 	Rechecks *TaskRechecks `json:"rechecks,omitempty"`
 	// Rules are the project (owner/admin) and personal commit and work rules to follow.
 	Rules *RuleSet `json:"rules,omitempty"`
+	// TaskPrompts lists the enabled task prompts (작업 프롬프트) the user can ask for by name or trigger.
+	TaskPrompts *TaskPromptIndex `json:"task_prompts,omitempty"`
 	// Deployments lists the caller's pull requests whose merge or deployment
 	// is not yet recorded in the task history.
 	Deployments *TaskDeployments `json:"deployments,omitempty"`

@@ -24,6 +24,7 @@ const upstream=(over={})=>({project_id:PROJECT.id,project_slug:PROJECT.slug,proj
 const upstreams=full=>({project_id:PROJECT.id,upstreams:full?[upstream()]:[],downstreams:full?[upstream({project_id:'project-3',project_slug:'app',project_name:'서비스 앱',upstream_project_id:PROJECT.id,upstream_project_slug:PROJECT.slug,upstream_project_name:PROJECT.name,status:'pending',requested_by:null,requested_by_name:null,approved_by:null,approved_by_name:null,approved_at:null})]:[],guidance:'안내'});
 const comment=(id,over={})=>({id,issue_id:'issue-2',author_id:ME.id,author_name:ME.name,body:'댓글 '+id,created_at:T,...over});
 const hit=(over={})=>({document_id:'doc-1',project_id:PROJECT.id,title:'시스템 구조',kind:'reference',status:'active',revision:2,updated_by:ME.id,updated_at:T,source_url:null,position:0,excerpt:'발췌 본문 '.repeat(60),score:0.0312,citation:'kb://'+PROJECT.id+'/documents/doc-1?revision=2#chunk-0',project_slug:PROJECT.slug,project_name:PROJECT.name,...over});
+const taskPrompt=(id,over={})=>({id,project_id:PROJECT.id,name:'deploy-check',title:'배포 점검',description:'운영 배포 뒤 확인',triggers:['배포 점검','배포 확인'],body:'{{env}} 서버 버전을 확인한다.',arguments:[{name:'env',description:'대상 환경',required:true}],enabled:true,revision:1,created_by:ME.id,updated_by:ME.id,created_at:T,updated_at:T,...over});
 const ruleSet=full=>({project_rules:full?[rule('rule-1','project'),rule('rule-2','project',{category:'commit',enabled:false})]:[],personal_rules:full?[rule('rule-3','personal',{user_id:ME.id})]:[],can_manage_project_rules:true,guidance:'안내'});
 const taskContext=full=>({project:PROJECT,task:'작업 설명',retrieval:'hybrid',sources:full?[hit()]:[],recent_decisions:[],excerpts_truncated:false,guidance:'안내',unindexed_chunks:0,
   ...(full?{warning:'임베딩 대기 중',rules:ruleSet(true),issues:{assigned_to_you:[{id:'issue-1',kind:'question',title:'질의',status:'open',blocking:true,area_name:null,assignee_id:ME.id,assignee_name:ME.name,created_by_name:OTHER.name,updated_at:T,citation:'kb://x'}],your_questions:[],related:[],shared_areas:[],blocking_open:1,guidance:'안내'},todos:{linked:{id:'todo-1',title:'할 일',status:'in_progress',priority:'high',progress:null,open_issues:0,blocking_issues:0},candidates:[],guidance:'안내'},
@@ -64,6 +65,10 @@ function mockAPI(variant){
     list_project_upstreams:()=>upstreams(full),
     list_project_members:()=>[{user_id:ME.id,name:ME.name,role:'owner',disabled:false},...list([{user_id:OTHER.id,name:OTHER.name,role:'editor',disabled:false},{user_id:'user-3',name:'퇴사자',role:'viewer',disabled:true}])],
     list_rules:()=>ruleSet(full),
+    list_task_prompts:()=>({prompts:full?[taskPrompt('prompt-1'),taskPrompt('prompt-2',{name:'weekly',title:'주간 보고',description:'',triggers:[],arguments:[],enabled:false})]:[],can_manage:true,guidance:'안내'}),
+    save_task_prompt:()=>taskPrompt('prompt-9'),
+    delete_task_prompt:()=>({id:'prompt-1',deleted:true}),
+    set_task_prompt_enabled:()=>taskPrompt('prompt-1',{enabled:false}),
     list_documents:b=>b.offset?[]:list([{...document(),content:undefined,needs_recheck:true,days_since_update:120,stale_after_days:90},{...document({id:'doc-2',title:'이전 결정',kind:'decision',status:b.status||'draft',tags:[],source_url:null,revision:1}),content:undefined,needs_recheck:false,days_since_update:1,stale_after_days:90}]),
     get_document:b=>b.revision&&b.revision<2?document({id:b.document_id,revision:b.revision,content:'# 이전 본문\n',tags:['구조']}):document({id:b.document_id,...(full?{links:links(true),recheck}:{})}),
     get_document_history:()=>full?revisions():revisions().slice(0,1),
