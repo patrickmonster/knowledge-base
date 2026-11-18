@@ -37,6 +37,7 @@ const (
 	totpSecretBytes      = 20
 	mfaSetupTTL          = 15 * time.Minute
 	mfaChallengeTTL      = 5 * time.Minute
+	sessionTTL           = 7 * 24 * time.Hour // web login session lifetime
 	mfaChallengeAttempts = 5
 	recoveryCodeCount    = 10
 	mfaIssuer            = "Knowledge Base"
@@ -511,7 +512,7 @@ func (s *Store) CompleteMFALogin(ctx context.Context, raw, code string) (string,
 		if _, err := tx.ExecContext(ctx, "DELETE FROM mfa_challenges WHERE token_hash=$1", digest(raw)); err != nil {
 			return err
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO sessions(token_hash,user_id,csrf_token,expires_at) VALUES($1,$2,$3,now()+interval '12 hours')`, digest(session), userID, token()); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO sessions(token_hash,user_id,csrf_token,expires_at) VALUES($1,$2,$3,now()+make_interval(secs=>$4))`, digest(session), userID, token(), sessionTTL.Seconds()); err != nil {
 			return err
 		}
 		return audit(ctx, tx, Event{ActorID: userID, Action: "login", Outcome: "success", RequestID: uuid.NewString(), Details: map[string]any{"mfa": method}})

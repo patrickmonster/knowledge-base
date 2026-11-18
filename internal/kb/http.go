@@ -107,7 +107,7 @@ func (a *App) Handler() http.Handler {
 			a.json(w, map[string]any{"ok": false, "mfa_required": true})
 			return
 		}
-		http.SetCookie(w, a.cookie(result.Session, 12*3600))
+		http.SetCookie(w, a.cookie(result.Session, int(sessionTTL.Seconds())))
 		a.json(w, map[string]any{"ok": true})
 	})
 	mux.HandleFunc("POST /api/login/mfa", func(w http.ResponseWriter, r *http.Request) {
@@ -139,7 +139,7 @@ func (a *App) Handler() http.Handler {
 			return
 		}
 		http.SetCookie(w, a.mfaCookie("", -1))
-		http.SetCookie(w, a.cookie(raw, 12*3600))
+		http.SetCookie(w, a.cookie(raw, int(sessionTTL.Seconds())))
 		a.json(w, map[string]any{"ok": true})
 	})
 	// Public: tells the console whether to show first-run setup. It reveals

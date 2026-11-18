@@ -217,7 +217,7 @@ func (s *Store) BeginLogin(ctx context.Context, email, password string) (LoginRe
 			out.MFAToken = raw
 			return audit(ctx, tx, Event{ActorID: u.ID, Action: "login_password", Outcome: "success", RequestID: uuid.NewString(), Details: map[string]any{"mfa": "required"}})
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO sessions(token_hash,user_id,csrf_token,expires_at) VALUES($1,$2,$3,now()+interval '12 hours')`, digest(raw), u.ID, token()); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO sessions(token_hash,user_id,csrf_token,expires_at) VALUES($1,$2,$3,now()+make_interval(secs=>$4))`, digest(raw), u.ID, token(), sessionTTL.Seconds()); err != nil {
 			return err
 		}
 		out.Session = raw
