@@ -113,10 +113,31 @@ function openProjectDialog(parent){
 }
 // Upstream projects: a downstream follows an upstream (design, planning, specs) read-only; the upstream's owner or admin approves here.
 const upstreamStatus={pending:'승인 대기',approved:'연결됨'};
+// Picks an upstream from the caller's own projects in a table (filtered by name or slug); a project the caller is not a member of is still requested by its ID.
+function upstreamPicker(project,data){
+  const box=el('div',undefined,'upstream-picker'),linked=new Set([project.id,...data.upstreams.map(l=>l.upstream_project_id),...data.downstreams.map(l=>l.project_id)]);
+  const request=async id=>{const l=await tool('request_project_upstream',{project_id:project.id,upstream_project_id:id});notify(l.status==='approved'?'연결했습니다.':'요청했습니다. 상위 프로젝트 소유자·관리자가 승인하면 연결됩니다.');await upstreams(project);};
+  const candidates=projectList.filter(p=>!linked.has(p.id));
+  box.append(el('h2','상위 프로젝트 연결 요청'),el('p','참여 중인 프로젝트에서 상위 프로젝트를 고르세요. 이미 연결됐거나 이 프로젝트를 따르는 하위 프로젝트는 목록에서 뺐습니다. 내가 소유자·관리자인 프로젝트는 바로 연결되고, 그 밖에는 상위 프로젝트 소유자·관리자가 승인해야 연결됩니다.','small muted'));
+  const search=el('input');search.type='search';search.placeholder='이름 또는 주소용 이름으로 찾기';search.setAttribute('aria-label','상위 프로젝트 찾기');
+  const list=el('div');
+  const draw=()=>{const q=search.value.trim().toLowerCase(),rows=candidates.filter(p=>!q||p.name.toLowerCase().includes(q)||(p.slug||'').toLowerCase().includes(q));
+    const wrap=table(['프로젝트','주소용 이름','내 역할',''],rows.map(p=>{const info=el('div',undefined,'project-name');info.append(el('strong',p.name));if(p.description)info.append(el('p',p.description,'small muted'));
+      const b=btn('연결 요청',async()=>{if(!confirm(p.name+' 프로젝트를 '+project.name+'의 상위 프로젝트로 연결 요청할까요?'))return;b.disabled=true;try{await request(p.id);}catch(err){notify(err.message,true);b.disabled=false;}});
+      return [info,p.slug?el('code',p.slug):'—',roleLabels[p.role]||p.role,b];}));
+    wrap.classList.add('upstream-candidates');const empty=wrap.querySelector('.empty');if(empty)empty.textContent=candidates.length?'찾는 프로젝트가 없습니다.':'연결할 수 있는 다른 참여 프로젝트가 없습니다. 아래에서 프로젝트 ID로 요청하세요.';list.replaceChildren(wrap);};
+  search.addEventListener('input',draw);
+  if(candidates.length>5)box.append(search);
+  box.append(list);draw();
+  const more=el('details',undefined,'upstream-by-id');more.append(el('summary','목록에 없는 프로젝트 ID로 요청'));
+  const f=el('form');const id=field(f,'상위 프로젝트 ID (상위 프로젝트 소유자에게 받은 ID)','upstream_project_id');id.pattern='[0-9a-fA-F-]{36}';
+  formSubmit(f,'연결 요청',d=>request(d.upstream_project_id.trim()));more.append(f);box.append(more);
+  return box;
+}
 async function upstreams(project){const data=await tool('list_project_upstreams',{project_id:project.id}),canManage=project.role==='owner'||project.role==='admin',root=el('div');root.append(btn('프로젝트 목록',()=>render('projects'),'secondary refresh'));
 const up=card(project.name+' · 따르는 상위 프로젝트');up.append(el('p','상위 프로젝트(디자인 시안·기획·공통 명세 등)는 이 프로젝트의 기준 자료입니다. 연결되면 이 프로젝트 참여자는 상위 프로젝트에 참여하지 않아도 문서를 읽을 수 있고, start_task가 상위의 active 자료를 upstream_sources로 함께 돌려줍니다. 상위 문서는 이 프로젝트에서 고칠 수 없으며 문제는 상위 프로젝트에 이슈(create_issue의 from_project_id)로 올립니다.','small muted'));
 up.append(table(canManage?['상위 프로젝트','상태','요청','']:['상위 프로젝트','상태','요청'],data.upstreams.map(l=>{const cells=[el('span',l.upstream_project_name+' ('+l.upstream_project_slug+')'),el('span',upstreamStatus[l.status]||l.status,'pill'),el('span',(l.requested_by_name||'-')+' · '+new Date(l.requested_at).toLocaleString(),'small')];if(canManage)cells.push(btn(l.status==='pending'?'요청 취소':'연결 해제',async()=>{if(!confirm(l.upstream_project_name+' 연결을 해제할까요? 이 프로젝트 참여자가 더 이상 상위 문서를 읽지 못합니다.'))return;await tool('remove_project_upstream',{project_id:project.id,other_project_id:l.upstream_project_id});notify('연결을 해제했습니다.');await upstreams(project);},'danger'));return cells;})));
-if(canManage){const f=el('form');f.append(el('h2','상위 프로젝트 연결 요청'));const id=field(f,'상위 프로젝트 ID (상위 프로젝트 소유자에게 받은 ID)','upstream_project_id');id.pattern='[0-9a-fA-F-]{36}';formSubmit(f,'연결 요청',async d=>{const l=await tool('request_project_upstream',{project_id:project.id,upstream_project_id:d.upstream_project_id.trim()});notify(l.status==='approved'?'연결했습니다.':'요청했습니다. 상위 프로젝트 소유자·관리자가 승인하면 연결됩니다.');await upstreams(project);});up.append(f);}else up.append(el('p','연결 요청·해제는 프로젝트 소유자·관리자만 할 수 있습니다.','small muted'));
+if(canManage)up.append(upstreamPicker(project,data));else up.append(el('p','연결 요청·해제는 프로젝트 소유자·관리자만 할 수 있습니다.','small muted'));
 const down=card(project.name+' · 이 프로젝트를 따르는 하위 프로젝트');down.append(el('p','승인하면 하위 프로젝트 참여자가 이 프로젝트를 읽기 전용으로 참조하고 이슈를 올릴 수 있습니다. 하위 프로젝트에서 올린 이슈는 이슈 화면에 하위 프로젝트 이름이 표시됩니다.','small muted'));
 down.append(table(canManage?['하위 프로젝트','상태','요청','']:['하위 프로젝트','상태','요청'],data.downstreams.map(l=>{const cells=[el('span',l.project_name+' ('+l.project_slug+')'),el('span',upstreamStatus[l.status]||l.status,'pill'),el('span',(l.requested_by_name||'-')+' · '+new Date(l.requested_at).toLocaleString(),'small')];if(canManage){const acts=el('div',undefined,'actions');if(l.status==='pending')acts.append(btn('승인',async()=>{await tool('approve_project_upstream',{project_id:project.id,downstream_project_id:l.project_id});notify('승인했습니다.');await upstreams(project);}));acts.append(btn(l.status==='pending'?'거절':'연결 해제',async()=>{if(!confirm(l.project_name+' 연결을 '+(l.status==='pending'?'거절':'해제')+'할까요?'))return;await tool('remove_project_upstream',{project_id:project.id,other_project_id:l.project_id});notify('처리했습니다.');await upstreams(project);},'danger'));cells.push(acts);}return cells;})));
 down.append(el('p','이 프로젝트 ID: '+project.id+' — 하위 프로젝트 소유자가 연결을 요청할 때 필요합니다.','small muted'));

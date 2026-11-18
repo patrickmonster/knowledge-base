@@ -6,7 +6,7 @@
 const test=require('node:test');
 const assert=require('node:assert');
 const {openConsole}=require('./web-harness.js');
-const {mockAPI}=require('./web-fixtures.js');
+const {mockAPI,PROJECT}=require('./web-fixtures.js');
 
 const pages=['projects','search','rules','documents','todos','todosDone','tasks','reviews','issues','attachments','vectors','usage','rechecks','keys','account','overview','users','audit'];
 
@@ -220,4 +220,20 @@ test('the stale filter stays hidden when nothing is stale',async t=>{
   await show(c,'todos');
   assert.ok(c.document.querySelector('.todo-stale-filter').hidden);
   assert.strictEqual(c.document.querySelector('.todo-stale'),null);
+});
+
+test('upstream page picks the upstream from a table of the caller\'s other projects',async t=>{
+  const base=mockAPI('full');
+  const mine=[PROJECT,{...PROJECT,id:'project-2',slug:'design',name:'디자인 시안',role:'viewer'},{...PROJECT,id:'project-3',slug:'app',name:'서비스 앱',role:'editor'},{...PROJECT,id:'project-4',slug:'spec',name:'공통 명세',description:'API 규격',role:'admin'}];
+  const c=await openConsole(r=>r.path==='/api/tools/list_projects'?(r.body.offset?[]:mine):base(r));
+  t.after(()=>c.close());
+  await c.call('upstreams',PROJECT);await c.settle();check(c,'upstreams');
+  const rows=()=>[...c.document.querySelectorAll('.upstream-candidates tbody tr')];
+  assert.deepStrictEqual(rows().map(r=>r.cells[1].textContent),['spec'],'self, linked upstream and downstream are left out');
+  assert.strictEqual(rows()[0].cells[2].textContent,'관리자');
+  c.window.confirm=()=>true;
+  press(c,rows()[0].querySelector('button'));await c.settle();check(c,'upstreams › request');
+  const sent=c.requests.filter(r=>r.path==='/api/tools/request_project_upstream').map(r=>r.body);
+  assert.deepStrictEqual(sent,[{project_id:PROJECT.id,upstream_project_id:'project-4'}]);
+  assert.ok(c.document.querySelector('.upstream-by-id input[name="upstream_project_id"]'),'ID fallback stays available');
 });
