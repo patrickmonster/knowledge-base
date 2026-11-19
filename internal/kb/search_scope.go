@@ -37,6 +37,8 @@ type CrossSearchResult struct {
 	// Issues are matching questions and issues, at most 5, each with its project.
 	Issues               []IssueSearchHit `json:"issues,omitempty"`
 	UnindexedIssueChunks int              `json:"unindexed_issue_chunks,omitempty"`
+	// FilteredIssues counts questions the score floor kept out of Issues.
+	FilteredIssues int `json:"filtered_issues,omitempty"`
 	// Omitted reports accessible projects left out because of maxSearchProjects.
 	Omitted int `json:"omitted_projects,omitempty"`
 }
@@ -132,7 +134,7 @@ func (s *Store) searchAcrossProjects(ctx context.Context, tx *sql.Tx, actor Iden
 		result.Issues[i].ProjectSlug, result.Issues[i].ProjectName = p.Slug, p.Name
 	}
 	out.Hits, out.Retrieval, out.Warning, out.UnindexedChunks, out.ExpandedTerms = result.Hits, result.Retrieval, result.Warning, result.UnindexedChunks, result.ExpandedTerms
-	out.Issues, out.UnindexedIssueChunks = result.Issues, result.UnindexedIssueChunks
+	out.Issues, out.UnindexedIssueChunks, out.FilteredIssues = result.Issues, result.UnindexedIssueChunks, result.FilteredIssues
 	if out.Omitted > 0 {
 		note := fmt.Sprintf("Only the %d oldest accessible projects were searched; pass project_ids to choose others.", maxSearchProjects)
 		if out.Warning != "" {

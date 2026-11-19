@@ -272,3 +272,21 @@ test('the board search box keeps only cards holding every word',async t=>{
   assert.deepStrictEqual(ids(),before,'clearing the box brings the board back');
   check(c,'todos › search');
 });
+
+test('an administrator can change the question score floor from 운영 현황',async t=>{
+  const c=await open(t,'full');
+  await show(c,'overview');
+  const panel=c.document.querySelector('#page .search-settings-card');
+  assert.ok(panel,'the search settings card is shown');
+  assert.match(panel.textContent,/질의·이슈 결과 점수 하한/);
+  assert.match(panel.textContent,/0\.55 · 관리자 설정/);
+  const input=panel.querySelector('input[name="issue_score_floor"]');
+  assert.strictEqual(input.value,'0.55');
+  input.value='0.7';
+  c.requests.length=0;
+  panel.querySelector('form').dispatchEvent(new c.window.Event('submit',{bubbles:true,cancelable:true}));
+  await c.settle();
+  const sent=c.requests.filter(r=>r.path==='/api/admin/search-settings'&&r.body);
+  assert.deepStrictEqual(sent.map(r=>r.body),[{issue_score_floor:0.7}]);
+  check(c,'overview › search settings');
+});

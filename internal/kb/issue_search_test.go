@@ -73,6 +73,9 @@ func TestIssueSemanticSearch(t *testing.T) {
 
 	e := &testEmbedder{model: "test-local"}
 	s.Embedder = e
+	// Production parses ISSUE_SCORE_FLOOR into Store.Search; a bare Store has
+	// no floor, so set the built-in default to exercise it here.
+	s.Search = SearchPolicy{IssueScoreFloor: defaultIssueScoreFloor}
 	for i := 0; i < 5; i++ {
 		n, err := s.ProcessIssueEmbeddingBatch(ctx)
 		if err != nil {
@@ -108,6 +111,32 @@ func TestIssueSemanticSearch(t *testing.T) {
 	hybrid := mustCall(t, tools, admin, "search_knowledge", SearchInput{ProjectID: p.ID, Query: "돈을 돌려받는 방법"}).(SearchResult)
 	if hybrid.Retrieval != "hybrid" || len(hybrid.Issues) == 0 || !top[hybrid.Issues[0].IssueID] {
 		t.Fatalf("hybrid issue hits: %+v", hybrid.Issues)
+	}
+
+	// The score floor keeps unrelated questions out of semantic and hybrid
+	// results and reports how many it removed.
+	if len(semantic.Issues) != 2 || semantic.FilteredIssues != 1 {
+		t.Fatalf("floor on semantic results: %d hits, %d filtered", len(semantic.Issues), semantic.FilteredIssues)
+	}
+	for _, h := range semantic.Issues {
+		if h.Score < defaultIssueScoreFloor {
+			t.Fatalf("hit below the floor: %+v", h)
+		}
+	}
+	// Keyword results have no vector score and are never filtered this way.
+	if lexical.FilteredIssues != 0 {
+		t.Fatalf("lexical results filtered: %+v", lexical)
+	}
+	// 0 turns the floor off and the weak match comes back.
+	if _, err := s.SetSearchSettings(ctx, admin, SearchSettingsInput{IssueScoreFloor: floatp(0)}); err != nil {
+		t.Fatal(err)
+	}
+	unfiltered := mustCall(t, tools, admin, "search_knowledge", SearchInput{ProjectID: p.ID, Query: "돈을 돌려받는 방법", Mode: "semantic"}).(SearchResult)
+	if len(unfiltered.Issues) != 3 || unfiltered.FilteredIssues != 0 {
+		t.Fatalf("floor off: %d hits, %d filtered", len(unfiltered.Issues), unfiltered.FilteredIssues)
+	}
+	if _, err := s.SetSearchSettings(ctx, admin, SearchSettingsInput{}); err != nil {
+		t.Fatal(err)
 	}
 
 	// Answering rebuilds the chunks, so the answer is searchable and re-embedded.

@@ -133,3 +133,6 @@ var TodoRelations string
 
 //go:embed 044_task_prompts.sql
 var TaskPrompts string
+
+//go:embed 045_search_settings.sql
+var SearchSettings string

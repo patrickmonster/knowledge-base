@@ -229,7 +229,7 @@ Authorization: Bearer <발급받은 MCP 키>
 }
 ```
 
-관련 질의·이슈가 있으면 `issues`(최대 5건)와 벡터가 아직 없는 질의 조각 수 `unindexed_issue_chunks`가 더해집니다. 질의 본문·답변도 문서와 같은 방식으로 청크·임베딩합니다([안내](docs/issues.md#검색)).
+관련 질의·이슈가 있으면 `issues`(최대 5건)와 벡터가 아직 없는 질의 조각 수 `unindexed_issue_chunks`가 더해집니다. 의미·하이브리드 검색에서는 벡터 점수 하한에 못 미치는 질의를 빼고 그 수를 `filtered_issues`로 알립니다(전역 관리자가 웹 **운영 현황 → 검색 설정**에서 변경, 기본값은 `ISSUE_SCORE_FLOOR`). 질의 본문·답변도 문서와 같은 방식으로 청크·임베딩합니다([안내](docs/issues.md#검색)).
 
 `mode`는 `hybrid`, `semantic`, `lexical` 중 선택합니다. `warning`의 실제 메시지는 영어입니다. 검색 점수는 모드마다 다르며 확률이나 신뢰도 백분율이 아닙니다.
 

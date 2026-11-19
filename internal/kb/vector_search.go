@@ -110,8 +110,17 @@ func (s *Store) searchProjects(ctx context.Context, tx *sql.Tx, projectIDs []str
 		}
 		return out, err
 	}
+	// Questions are ranked by vector similarity, which is comparable between
+	// searches, so a floor can drop matches that are merely the closest of a
+	// small set. Keyword hits have no such score and are left alone.
 	var issueSemantic []IssueSearchHit
+	var issueFloor float64
 	if in.includeIssues {
+		policy, _, err := s.effectiveSearch(ctx, tx)
+		if err != nil {
+			return out, err
+		}
+		issueFloor = policy.IssueScoreFloor
 		if out.UnindexedIssueChunks, err = unindexedIssueChunks(ctx, tx, scope, s.Embedder.Model()); err != nil {
 			return out, err
 		}
@@ -140,7 +149,9 @@ func (s *Store) searchProjects(ctx context.Context, tx *sql.Tx, projectIDs []str
 	if in.Mode == "semantic" {
 		out.Hits = semantic[:min(limit, len(semantic))]
 		if in.includeIssues {
-			out.Issues = issueSemantic[:min(issueLimit, len(issueSemantic))]
+			kept := aboveIssueScoreFloor(issueSemantic, issueFloor)
+			out.Issues = kept[:min(issueLimit, len(kept))]
+			out.FilteredIssues = min(issueLimit, len(issueSemantic)) - len(out.Issues)
 		}
 		return out, nil
 	}
@@ -156,7 +167,13 @@ func (s *Store) searchProjects(ctx context.Context, tx *sql.Tx, projectIDs []str
 		if err != nil {
 			return out, err
 		}
-		out.Issues = fuseIssueRanks(issueLexical, issueSemantic, issueLimit)
+		kept := aboveIssueScoreFloor(issueSemantic, issueFloor)
+		out.Issues = fuseIssueRanks(issueLexical, kept, issueLimit)
+		if len(kept) < len(issueSemantic) {
+			// A question dropped from the vector list can still arrive through
+			// the keyword list, so count what the fused list actually lost.
+			out.FilteredIssues = len(fuseIssueRanks(issueLexical, issueSemantic, issueLimit)) - len(out.Issues)
+		}
 	}
 	return out, nil
 }
