@@ -108,8 +108,12 @@ async function tasksPage() {
     if (facts.childElementCount) c.append(facts);
     const actions=el('div',undefined,'actions');
     actions.append(btn('시작 자료 보기',()=>taskDialog(c,p,r)));
-    if (r.status==='open'&&(r.created_by===me.id||['owner','admin'].includes(p.role))&&['owner','admin','editor'].includes(p.role))
+    const canLink=(r.created_by===me.id||['owner','admin'].includes(p.role))&&['owner','admin','editor'].includes(p.role);
+    if (r.status==='open'&&canLink)
       actions.append(btn(r.todo?'할 일 변경':'할 일 연결',()=>todoLinkForm(c,p,r,refresh)));
+    // A closed task cannot link again, but a link made by mistake can be dropped.
+    else if (r.todo&&canLink)
+      actions.append(btn('할 일 연결 해제',()=>unlinkTaskTodo(p,r,refresh)));
     if (r.status==='open'&&(r.created_by===me.id||p.owner_id===me.id)&&['owner','admin','editor'].includes(p.role)) {
       const form=el('div',undefined,'task-close');form.hidden=true;
       const label=el('label','중단 사유 (필수, 작업에 기록되며 다시 완료할 수 없음)'),reason=el('textarea');
@@ -150,6 +154,15 @@ async function todoLinkForm(cardEl,p,r,after){
   form.append(label,row);
   if(!todos.length)form.prepend(el('p','연결할 수 있는 할 일이 없습니다. 할 일 보드에서 먼저 추가하세요.','small muted'));
   cardEl.append(form);select.focus();
+}
+
+// Drops a task's to-do link (link_task_todo with an empty todo_id). The to-do
+// stays where it is and stops counting this task and its pull requests.
+async function unlinkTaskTodo(p,r,after){
+  if(!confirm(`“${r.title}” 작업과 할 일 “${r.todo.title}”의 연결을 끊을까요? 할 일의 상태는 그대로이고, 이 작업과 PR이 할 일에서 빠집니다.${r.status==='open'?'':' 닫힌 작업이라 다시 연결할 수 없습니다.'}`))return;
+  await tool('link_task_todo',{project_id:p.id,task_id:r.id,todo_id:''});
+  notify('할 일 연결을 해제했습니다.');
+  await after();
 }
 
 // Opens the issue page showing only the given questions of a task.
