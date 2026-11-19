@@ -214,6 +214,17 @@ test('pending-release cards show their work branch and the dialog edits it',asyn
   check(c,'todos › pending release');
 });
 
+test('a closed task can drop its to-do link, an open one changes it',async t=>{
+  const c=await open(t,'full');
+  await show(c,'tasks');
+  const status=c.document.querySelector('#page select[name="status"]');
+  status.value='';status.dispatchEvent(new c.window.Event('change'));await c.settle();
+  const buttons=[...c.document.querySelectorAll('.task-card .actions button')].map(b=>b.textContent);
+  assert.ok(buttons.includes('할 일 변경'),buttons.join(' | '));
+  assert.ok(buttons.includes('할 일 연결 해제'),buttons.join(' | '));
+  check(c,'tasks › unlink');
+});
+
 test('to-dos idle for a while carry a badge and can be shown alone',async t=>{
   const c=await open(t,'full');
   await show(c,'todos');

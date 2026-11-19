@@ -101,6 +101,23 @@ func TestTodoTaskLink(t *testing.T) {
 	if got.TodoID != "" || got.Status != "completed" {
 		t.Fatalf("task after deleting its to-do: %+v", got)
 	}
+
+	// A closed task can drop its link (only its creator, the owner or an admin);
+	// the to-do keeps its status and stops counting the task and its PRs.
+	_, err = call(t, tools, editor, "link_task_todo", LinkTaskTodoInput{ProjectID: p.ID, TaskID: cand.ID})
+	denied(t, err, "FORBIDDEN")
+	mustCall(t, tools, other, "link_task_todo", LinkTaskTodoInput{ProjectID: p.ID, TaskID: cand.ID})
+	if got := mustCall(t, tools, editor, "get_task_run", TaskRef{ProjectID: p.ID, TaskID: cand.ID}).(TaskRun); got.TodoID != "" {
+		t.Fatalf("closed task unlinked: %+v", got)
+	}
+	for _, td := range mustCall(t, tools, editor, "list_todos", ListTodosInput{ProjectID: p.ID, Status: "completed"}).([]Todo) {
+		if td.ID == idea.ID && (td.TaskCount != 0 || len(td.PullRequests) != 0) {
+			t.Fatalf("unlinked to-do still counts the task: %+v", td)
+		}
+	}
+	if got := mustCall(t, tools, editor, "list_todos", ListTodosInput{ProjectID: p.ID, Status: "completed"}).([]Todo); len(got) != 2 {
+		t.Fatalf("unlinking keeps the to-do completed: %+v", got)
+	}
 }
 
 func TestTodoIssueLink(t *testing.T) {

@@ -55,6 +55,7 @@
 할 일 하나에 AI 작업(`start_task` 실행) 여러 개가 붙을 수 있다(`task_runs.todo_id`, `migrations/026_todo_task_link.sql`).
 
 - 연결: `start_task`의 `todo_id`, 또는 이미 시작한 열린 작업에 `link_task_todo`(작업을 시작한 사람·소유자·관리자). 웹에서는 **진행 중 작업** 카드의 “할 일 연결”.
+- 해제: `link_task_todo`에 빈 `todo_id`. 열린 작업뿐 아니라 완료·중단된 작업도 해제할 수 있다(잘못 붙인 연결 정리용, 같은 권한). 해제해도 할 일의 상태는 바뀌지 않고, 할 일의 작업 수·PR 목록에서 그 작업이 빠진다. 닫힌 작업은 다시 연결할 수 없다. 웹에서는 진행 중 작업 화면의 닫힌 작업 카드 “할 일 연결 해제”, 할 일 수정 창 “연결된 AI 작업”의 “연결 해제”.
 - 시작: 연결하면 시작 전·아이디어 할 일이 진행 중 열 맨 끝으로 옮겨진다. 이미 진행 중·완료면 그대로 둔다.
 - 후보: `start_task`·`get_task_context`의 `context.todos.candidates`에 작업 설명과 단어가 겹치는 미완료 할 일(최대 5건)을, `context.todos.linked`에 연결된 할 일을 준다.
 - 완료: `finish_task`가 `completed`면 할 일을 완료로 옮기고 진행률이 있으면 100%로 채운다. `partial`·`blocked`·`cancelled`는 그대로 둔다.

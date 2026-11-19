@@ -551,7 +551,7 @@ async function todoIssuesSection(project,t){
 }
 
 // The tasks linked to a to-do, shown in its dialog.
-async function todoTasksSection(project,t){
+async function todoTasksSection(project,t,ctx){
   const box=el('section',undefined,'todo-tasks');
   box.append(el('h3','연결된 AI 작업'));
   if(!t.task_count){box.append(el('p','아직 연결된 작업이 없습니다. AI가 start_task에 todo_id를 넘기거나, 진행 중 작업 화면에서 “할 일 연결”로 붙이면 시작 시 진행 중, 완료 시 완료로 자동 이동합니다.','small muted'));return box;}
@@ -563,6 +563,10 @@ async function todoTasksSection(project,t){
       li.append(el('span',taskStatusLabels[r.status]||r.status,'pill task-'+r.status),document.createTextNode(' '+r.title+' '));
       li.append(el('span',`${r.created_by_name||''} · ${new Date(r.started_at).toLocaleDateString()}`,'small muted'));
       for(const pr of r.pull_requests||[]){const a=el('a',` #${pr.number} ${todoPRLabels[pr.state]||pr.state}`,'small');a.href=pr.url;a.target='_blank';a.rel='noopener noreferrer';li.append(a);}
+      // The task's creator, the owner or an admin (with edit access) can drop a wrong link.
+      if((r.created_by===me.id||['owner','admin'].includes(project.role))&&['owner','admin','editor'].includes(project.role)){
+        li.append(document.createTextNode(' '),btn('연결 해제',async()=>{await unlinkTaskTodo(project,{...r,todo:{id:t.id,title:t.title}},async()=>{li.remove();await ctx?.reload?.();});},'secondary small todo-task-unlink'));
+      }
       return li;
     }));
   }catch(e){list.replaceChildren(el('li',e.message,'muted'));}
@@ -596,7 +600,7 @@ function todoDialog(parent,project,ctx,t){
   if(editing){
     form.append(el('p',`${t.created_by_name||''} 작성 · ${new Date(t.updated_at).toLocaleString()} 수정`,'small muted'));
     const slot=el('div');form.append(slot);
-    Promise.all([todoTasksSection(project,t),todoIssuesSection(project,t)]).then(s=>slot.replaceWith(...s));
+    Promise.all([todoTasksSection(project,t,ctx),todoIssuesSection(project,t)]).then(s=>slot.replaceWith(...s));
   }
   const actions=el('div',undefined,'actions review-dialog-actions');
   const close=btn('닫기',()=>dialog.close(),'secondary');

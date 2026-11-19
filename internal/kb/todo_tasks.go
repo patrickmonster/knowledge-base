@@ -138,15 +138,18 @@ func linkTaskTodo(ctx context.Context, tx *sql.Tx, a Identity, in LinkTaskTodoIn
 	if creator != a.User.ID && p.Role != "owner" && p.Role != "admin" {
 		return nil, problem("FORBIDDEN", "Only the user who started this task, the owner or an admin can link it to a to-do.")
 	}
-	if status != "open" {
-		return nil, problem("CONFLICT", "Only open tasks can be linked to a to-do.")
-	}
 	out := map[string]any{"task_id": in.TaskID, "project_id": p.ID, "todo": nil}
+	// Unlinking never moves the to-do, so a finished or abandoned task may drop a
+	// link made by mistake; the to-do then stops counting it and its pull requests.
 	if in.TodoID == "" {
 		if _, err := tx.ExecContext(ctx, `UPDATE task_runs SET todo_id=NULL WHERE id=$1`, in.TaskID); err != nil {
 			return nil, err
 		}
 		return out, nil
+	}
+	// Linking a past task could suddenly move the to-do, so only open tasks link.
+	if status != "open" {
+		return nil, problem("CONFLICT", "Only open tasks can be linked to a to-do; a closed task can only be unlinked (empty todo_id).")
 	}
 	if err := checkTodoRef(ctx, tx, p.ID, in.TodoID); err != nil {
 		return nil, err
@@ -239,5 +242,5 @@ func linkIssueTodo(ctx context.Context, tx *sql.Tx, a Identity, in LinkIssueTodo
 
 func registerTodoTaskTools(t Tools, s *Store) {
 	add(t, s, "link_issue_todo", "Link a question or issue to the to-do it belongs to, or unlink with an empty todo_id. The board shows the to-do's open and blocking questions; start_task shows them for a linked to-do. Editor access required.", true, func(in LinkIssueTodoInput) string { return in.ProjectID }, linkIssueTodo)
-	add(t, s, "link_task_todo", "Link an open task (start_task run) to the to-do it carries out, or unlink with an empty todo_id. Linking moves a not_started or idea to-do to in_progress; finish_task completed or the task's merged pull requests later complete it, except a pending_release to-do, which only a deployment to this server or a person completes. The task's creator, the owner or an admin.", true, func(in LinkTaskTodoInput) string { return in.ProjectID }, linkTaskTodo)
+	add(t, s, "link_task_todo", "Link an open task (start_task run) to the to-do it carries out, or unlink any task — open, completed or abandoned — with an empty todo_id (unlinking never moves the to-do). Linking moves a not_started or idea to-do to in_progress; finish_task completed or the task's merged pull requests later complete it, except a pending_release to-do, which only a deployment to this server or a person completes. The task's creator, the owner or an admin.", true, func(in LinkTaskTodoInput) string { return in.ProjectID }, linkTaskTodo)
 }
