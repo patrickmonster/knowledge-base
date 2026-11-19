@@ -68,6 +68,29 @@ func TestTodoBoard(t *testing.T) {
 		t.Fatalf("category: %+v", work)
 	}
 
+	// query keeps only to-dos holding every word of the query in their title,
+	// body or category. Korean particles are trimmed, so 검색을 finds 검색.
+	ko := mustCall(t, tools, editor, "save_todo", SaveTodoInput{ProjectID: p.ID, Title: "검색 결과 재확인", Body: "보드에서 검색을 지원한다"}).(Todo)
+	for name, q := range map[string]string{"title word": "job", "two words": "find job", "category": "work"} {
+		if got := mustCall(t, tools, viewer, "list_todos", ListTodosInput{ProjectID: p.ID, Query: q}).([]Todo); len(got) != 1 || got[0].ID != a.ID {
+			t.Errorf("query %s: %+v", name, got)
+		}
+	}
+	if got := mustCall(t, tools, viewer, "list_todos", ListTodosInput{ProjectID: p.ID, Query: "검색을"}).([]Todo); len(got) != 1 || got[0].ID != ko.ID {
+		t.Errorf("query of a word in the body: %+v", got)
+	}
+	if got := mustCall(t, tools, viewer, "list_todos", ListTodosInput{ProjectID: p.ID, Query: "job plants"}).([]Todo); len(got) != 0 {
+		t.Errorf("query whose words sit on different to-dos: %+v", got)
+	}
+	// Wildcards and words too short or too common to match leave the list whole.
+	if got := mustCall(t, tools, viewer, "list_todos", ListTodosInput{ProjectID: p.ID, Query: "% a 확인"}).([]Todo); len(got) != 4 {
+		t.Errorf("query of stopwords and wildcards: %+v", got)
+	}
+	if got := mustCall(t, tools, viewer, "list_todos", ListTodosInput{ProjectID: p.ID, Query: "job", Category: "personal"}).([]Todo); len(got) != 0 {
+		t.Errorf("query combined with another filter: %+v", got)
+	}
+	mustCall(t, tools, editor, "delete_todo", TodoRef{ProjectID: p.ID, TodoID: ko.ID})
+
 	// Moving before another card places it first; completing fills progress.
 	moved := mustCall(t, tools, editor, "move_todo", MoveTodoInput{ProjectID: p.ID, TodoID: b.ID, Status: "in_progress", Priority: "high", BeforeID: a.ID}).(Todo)
 	if moved.Position >= a.Position || moved.Revision != 2 {

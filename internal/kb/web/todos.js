@@ -10,6 +10,16 @@ const todoBoardStatuses=todoStatuses.filter(([s])=>s!=='completed');
 const todoCheckable=new Set(['in_progress','in_review']);
 const todoPriorities=[['high','높음'],['medium','보통'],['low','낮음']];
 const todoStatusLabel=Object.fromEntries(todoStatuses), todoPriorityLabel=Object.fromEntries(todoPriorities);
+// Live filter over the cards already loaded: every word must appear in the
+// title, body or category, like list_todos' query on the server.
+const todoWords=value=>value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+const todoMatches=(t,words)=>{const text=`${t.title} ${t.body||''} ${t.category||''}`.toLowerCase();return words.every(w=>text.includes(w));};
+function todoSearchBox(onInput){
+  const box=el('input','',undefined);box.type='search';box.className='todo-search';
+  box.placeholder='제목·본문 검색';box.setAttribute('aria-label','할 일 검색');box.maxLength=200;
+  box.addEventListener('input',onInput);
+  return box;
+}
 const todoCollapseKey='kb.todo.collapsed';
 
 function todoCollapsed(){try{return new Set(JSON.parse(localStorage.getItem(todoCollapseKey)||'[]'));}catch{return new Set();}}
@@ -42,7 +52,8 @@ async function todosPage(){
   hideBtn.type='button';hideBtn.setAttribute('aria-haspopup','true');hideBtn.setAttribute('aria-expanded','false');
   hideMenu.hidden=true;hideMenu.setAttribute('role','group');hideMenu.setAttribute('aria-label','열·행 숨기기');
   hideWrap.append(hideBtn,hideMenu);
-  filters.append(category,mineLabel,staleLabel,hideWrap,summary);
+  const search=todoSearchBox(()=>draw());
+  filters.append(category,search,mineLabel,staleLabel,hideWrap,summary);
   bar.append(filters);
   const barActions=el('div',undefined,'todo-bar-actions');
   const doneLink=btn('완료된 할 일',()=>render('todosDone'),'secondary todo-done-link');
@@ -120,7 +131,8 @@ async function todosPage(){
     draw();
   }
   function visible(){
-    return ctx.todos.filter(t=>t.status!=='completed'&&(!category.value||t.category===category.value)&&(!mine.checked||t.assignee_id===me.id)&&(!staleOnly.checked||ctx.stale.has(t.id)));
+    const words=todoWords(search.value);
+    return ctx.todos.filter(t=>t.status!=='completed'&&(!category.value||t.category===category.value)&&(!mine.checked||t.assignee_id===me.id)&&(!staleOnly.checked||ctx.stale.has(t.id))&&todoMatches(t,words));
   }
   function draw(){
     if(touchDrag)endTouchDrag(false);
@@ -168,6 +180,7 @@ async function todosPage(){
     }
     board.replaceChildren(inner);
     if(items.length&&!onBoard)board.append(el('p','조건에 맞는 할 일이 모두 숨겨진 열·행에 있습니다. 숨김 설정에서 보이게 할 수 있습니다.','empty'));
+    if(!items.length&&ctx.todos.length)board.append(el('p','조건에 맞는 할 일이 없습니다.','empty'));
     if(!ctx.todos.length)board.append(el('p',canWrite?'아직 할 일이 없습니다. 칸의 “새로 만들기”나 오른쪽 위 버튼으로 추가하세요.':'아직 할 일이 없습니다.','empty'));
   }
   function todoCard(t){
@@ -345,7 +358,8 @@ async function todosDonePage(){
   const mineLabel=el('label',undefined,'inline-check'),mine=el('input');mine.type='checkbox';
   mineLabel.append(mine,document.createTextNode('내게 배정된 것만'));
   const summary=el('span','','small muted');summary.setAttribute('role','status');
-  filters.append(category,mineLabel,summary);
+  const search=todoSearchBox(()=>draw());
+  filters.append(category,search,mineLabel,summary);
   bar.append(filters,btn('← 할 일 보드',()=>render('todos'),'secondary'));
   const list=el('div',undefined,'todo-done-list');
   root.append(bar,list);
@@ -366,7 +380,8 @@ async function todosDonePage(){
     draw();
   }
   function draw(){
-    const items=ctx.todos.filter(t=>(!category.value||t.category===category.value)&&(!mine.checked||t.assignee_id===me.id));
+    const words=todoWords(search.value);
+    const items=ctx.todos.filter(t=>(!category.value||t.category===category.value)&&(!mine.checked||t.assignee_id===me.id)&&todoMatches(t,words));
     summary.textContent=`${items.length}건`+(ctx.todos.length>=500?' · 최근 500건까지 표시':'');
     if(!items.length){list.replaceChildren(el('p',ctx.todos.length?'조건에 맞는 완료된 할 일이 없습니다.':'아직 완료된 할 일이 없습니다. 보드에서 진행 중·검토대기 카드의 “완료”를 체크하면 여기로 옵니다.','empty'));return;}
     const rows=items.map(t=>{

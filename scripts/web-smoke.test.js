@@ -252,3 +252,23 @@ test('search results mark documents that need a recheck',async t=>{
   press(c,hits[0]);await c.settle();check(c,'search › hit');
   assert.match(c.document.querySelector('dialog.search-dialog[open] .vector-warning').textContent,/재확인 필요 — 120일/);
 });
+
+test('the board search box keeps only cards holding every word',async t=>{
+  const c=await open(t,'full');
+  await show(c,'todos');
+  const ids=()=>[...c.document.querySelectorAll('.todo-card')].map(n=>n.dataset.id).sort();
+  const before=ids();
+  assert.ok(before.length>1,'the board starts with several cards');
+  const box=c.document.querySelector('#page .todo-search');
+  const type=async value=>{box.value=value;box.dispatchEvent(new c.window.Event('input',{bubbles:true}));await c.settle();};
+  c.requests.length=0;
+  await type('todo-2');
+  assert.deepStrictEqual(ids(),['todo-2'],'only the matching card stays');
+  assert.ok(!c.requests.some(r=>r.path==='/api/tools/list_todos'),'filtering reuses the cards already loaded');
+  await type('todo-2 없는말');
+  assert.deepStrictEqual(ids(),[],'every word must match');
+  assert.match(c.document.querySelector('#page .todo-board').textContent,/조건에 맞는 할 일이 없습니다/);
+  await type('');
+  assert.deepStrictEqual(ids(),before,'clearing the box brings the board back');
+  check(c,'todos › search');
+});

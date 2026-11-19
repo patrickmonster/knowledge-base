@@ -78,6 +78,7 @@ type ListTodosInput struct {
 	Category   string `json:"category,omitempty" jsonschema:"Exact category (case-insensitive); omit for all"`
 	AssigneeID string `json:"assignee_id,omitempty"`
 	Mine       bool   `json:"mine,omitempty" jsonschema:"true lists only to-dos assigned to you"`
+	Query      string `json:"query,omitempty" jsonschema:"Words matched against title, body and category; a to-do must hold every word"`
 	Limit      int    `json:"limit,omitempty" jsonschema:"1-500, default 500"`
 }
 
@@ -200,12 +201,20 @@ func listTodos(ctx context.Context, tx *sql.Tx, a Identity, in ListTodosInput) (
 	if limit < 1 || limit > maxTodoList {
 		return nil, problem("INVALID_INPUT", "limit must be 1–500.")
 	}
+	if err := bounded("query", in.Query, 0, 500); err != nil {
+		return nil, err
+	}
+	// Same word matching as list_issues and the task's to-do candidates: the
+	// board is not indexed for search, so every word of the query must appear
+	// somewhere in the title, body or category.
+	terms := issueTerms(in.Query)
 	return many[Todo](ctx, tx, todoSelect+` WHERE t.project_id=$1
 		AND ($2='' OR t.status=$2) AND ($3='' OR t.priority=$3) AND ($4='' OR lower(t.category)=lower($4))
 		AND ($5='' OR t.assignee_id=$5::uuid)
+		AND NOT EXISTS (SELECT 1 FROM unnest($7::text[]) w WHERE (t.title||' '||t.body||' '||t.category) NOT ILIKE '%'||w||'%')
 		ORDER BY CASE t.priority WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END,
 		CASE t.status WHEN 'not_started' THEN 0 WHEN 'in_progress' THEN 1 WHEN 'in_review' THEN 2 WHEN 'completed' THEN 3 ELSE 4 END,
-		t.position, t.created_at, t.id LIMIT $6`, p.ID, in.Status, in.Priority, strings.TrimSpace(in.Category), in.AssigneeID, limit)
+		t.position, t.created_at, t.id LIMIT $6`, p.ID, in.Status, in.Priority, strings.TrimSpace(in.Category), in.AssigneeID, limit, terms)
 }
 
 func todoAssignee(ctx context.Context, tx *sql.Tx, projectID, userID string) error {
@@ -402,7 +411,7 @@ func deleteTodo(ctx context.Context, tx *sql.Tx, a Identity, in TodoRef) (any, e
 }
 
 func registerTodoTools(t Tools, s *Store) {
-	add(t, s, "list_todos", "List a project's to-dos (할 일) for the board: each has status (not_started, in_progress, in_review, completed, idea), priority (high, medium, low), category, optional progress 0-100, assignee and due date, ordered by priority, status and board position. Each also shows its parent (parent_id, one level of sub-items), the to-dos it waits for (blocked_by, open_blocker_count) and its sub-item counts. Filter by status, priority, category, assignee_id or mine. Up to 500.", false, func(in ListTodosInput) string { return in.ProjectID }, listTodos)
+	add(t, s, "list_todos", "List a project's to-dos (할 일) for the board: each has status (not_started, in_progress, in_review, completed, idea), priority (high, medium, low), category, optional progress 0-100, assignee and due date, ordered by priority, status and board position. Each also shows its parent (parent_id, one level of sub-items), the to-dos it waits for (blocked_by, open_blocker_count) and its sub-item counts. Filter by status, priority, category, assignee_id, mine, or query (words that must all appear in the title, body or category) — use query to check whether something is already on the board instead of reading every to-do. Up to 500.", false, func(in ListTodosInput) string { return in.ProjectID }, listTodos)
 	add(t, s, "save_todo", "Add a to-do, or change one with todo_id and expected_revision. Changing replaces every field, so send the current values you want to keep (omitted progress, assignee_id and due_date are cleared); parent_id and blocked_by are kept when omitted. Relations stay inside the project, sub-items are one level deep and blocked_by cycles are rejected. Editor access required.", true, func(in SaveTodoInput) string { return in.ProjectID }, saveTodo)
 	add(t, s, "move_todo", "Move a to-do to a status column and priority row on the board, before before_id or last. Moving to completed fills an existing progress bar. Editor access required.", true, func(in MoveTodoInput) string { return in.ProjectID }, moveTodo)
 	add(t, s, "delete_todo", "Delete a to-do permanently. Editor access required.", true, func(in TodoRef) string { return in.ProjectID }, deleteTodo)
