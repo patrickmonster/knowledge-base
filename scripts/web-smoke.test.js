@@ -237,3 +237,56 @@ test('upstream page picks the upstream from a table of the caller\'s other proje
   assert.deepStrictEqual(sent,[{project_id:PROJECT.id,upstream_project_id:'project-4'}]);
   assert.ok(c.document.querySelector('.upstream-by-id input[name="upstream_project_id"]'),'ID fallback stays available');
 });
+
+test('search results mark documents that need a recheck',async t=>{
+  const c=await open(t,'full');
+  await show(c,'search');
+  c.document.querySelector('#page form').dispatchEvent(new c.window.Event('submit',{bubbles:true,cancelable:true}));
+  await c.settle();check(c,'search');
+  const hits=[...c.document.querySelectorAll('#page .search-hit')];
+  assert.strictEqual(hits.filter(n=>n.classList.contains('stale')).length,1,'only the stale hit is marked');
+  assert.ok(hits[0].classList.contains('stale'),'the stale hit keeps its rank');
+  assert.match(hits[0].querySelector('.pill.stale').title,/120일 동안 갱신되지 않았습니다 \(기준 90일\)/);
+  assert.match(c.document.querySelector('#page [role="status"]').textContent,/재확인 필요 1건/);
+  // The hit's modal repeats the warning as a sentence.
+  press(c,hits[0]);await c.settle();check(c,'search › hit');
+  assert.match(c.document.querySelector('dialog.search-dialog[open] .vector-warning').textContent,/재확인 필요 — 120일/);
+});
+
+test('the board search box keeps only cards holding every word',async t=>{
+  const c=await open(t,'full');
+  await show(c,'todos');
+  const ids=()=>[...c.document.querySelectorAll('.todo-card')].map(n=>n.dataset.id).sort();
+  const before=ids();
+  assert.ok(before.length>1,'the board starts with several cards');
+  const box=c.document.querySelector('#page .todo-search');
+  const type=async value=>{box.value=value;box.dispatchEvent(new c.window.Event('input',{bubbles:true}));await c.settle();};
+  c.requests.length=0;
+  await type('todo-2');
+  assert.deepStrictEqual(ids(),['todo-2'],'only the matching card stays');
+  assert.ok(!c.requests.some(r=>r.path==='/api/tools/list_todos'),'filtering reuses the cards already loaded');
+  await type('todo-2 없는말');
+  assert.deepStrictEqual(ids(),[],'every word must match');
+  assert.match(c.document.querySelector('#page .todo-board').textContent,/조건에 맞는 할 일이 없습니다/);
+  await type('');
+  assert.deepStrictEqual(ids(),before,'clearing the box brings the board back');
+  check(c,'todos › search');
+});
+
+test('an administrator can change the question score floor from 운영 현황',async t=>{
+  const c=await open(t,'full');
+  await show(c,'overview');
+  const panel=c.document.querySelector('#page .search-settings-card');
+  assert.ok(panel,'the search settings card is shown');
+  assert.match(panel.textContent,/질의·이슈 결과 점수 하한/);
+  assert.match(panel.textContent,/0\.55 · 관리자 설정/);
+  const input=panel.querySelector('input[name="issue_score_floor"]');
+  assert.strictEqual(input.value,'0.55');
+  input.value='0.7';
+  c.requests.length=0;
+  panel.querySelector('form').dispatchEvent(new c.window.Event('submit',{bubbles:true,cancelable:true}));
+  await c.settle();
+  const sent=c.requests.filter(r=>r.path==='/api/admin/search-settings'&&r.body);
+  assert.deepStrictEqual(sent.map(r=>r.body),[{issue_score_floor:0.7}]);
+  check(c,'overview › search settings');
+});

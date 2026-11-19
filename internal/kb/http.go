@@ -341,6 +341,16 @@ func (a *App) Handler() http.Handler {
 		}
 		return a.Store.SetRetention(r.Context(), id, in)
 	})
+	a.sessionRoute(mux, "GET /api/admin/search-settings", func(r *http.Request, id Identity) (any, error) {
+		return a.Store.SearchSettingsStatus(r.Context(), id)
+	})
+	a.sessionRoute(mux, "POST /api/admin/search-settings", func(r *http.Request, id Identity) (any, error) {
+		var in SearchSettingsInput
+		if err := decode(r, &in); err != nil {
+			return nil, err
+		}
+		return a.Store.SetSearchSettings(r.Context(), id, in)
+	})
 	a.sessionRoute(mux, "POST /api/vectors/map", func(r *http.Request, id Identity) (any, error) {
 		var in VectorMapInput
 		if err := decode(r, &in); err != nil {

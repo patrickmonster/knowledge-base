@@ -47,6 +47,8 @@ async function searchPage() {
     const result=await tool('search_across_projects',input);
     if (ticket!==generation) return;
     let text=`${result.projects.length}개 프로젝트에서 ${result.hits.length}건 · ${searchRetrieval[result.retrieval]||result.retrieval}`;
+    const stale=result.hits.filter(h=>h.recheck?.needs_recheck).length;
+    if (stale) text+=` · 재확인 필요 ${stale}건`;
     if (result.unindexed_chunks) text+=` · 임베딩 대기 조각 ${result.unindexed_chunks}개`;
     if (result.issues?.length) text+=` · 질의·이슈 ${result.issues.length}건`;
     if (result.unindexed_issue_chunks) text+=` · 질의 임베딩 대기 ${result.unindexed_issue_chunks}개`;
@@ -77,6 +79,9 @@ async function searchPage() {
   function hitCard(h) {
     const c=card(h.title), meta=`${h.project_name||h.project_id} · ${searchKinds[h.kind]||h.kind} · ${h.status} · 버전 ${h.revision} · 점수 ${Number(h.score).toFixed(4)}`;
     c.classList.add('search-hit');c.tabIndex=0;c.setAttribute('role','button');c.setAttribute('aria-haspopup','dialog');
+    // Stale hits keep their rank; the badge only asks the reader to verify them.
+    const badge=recheckBadge(h);
+    if (badge) { c.classList.add('stale');c.querySelector('h2').append(badge); }
     c.append(el('p',meta,'small muted'));
     c.append(el('p',h.excerpt.length>400?h.excerpt.slice(0,400)+'…':h.excerpt,'small'));
     c.append(el('code',h.citation));
@@ -87,6 +92,15 @@ async function searchPage() {
   }
   form.addEventListener('submit',e=>{e.preventDefault();submit.disabled=true;run().catch(err=>notify(err.message,true)).finally(()=>submit.disabled=false);});
   return root;
+}
+
+// recheck is attached by the server to hits that are active reference/brief
+// documents left untouched for stale_after_days (internal/kb/recheck.go). Its
+// message field is English, so the Korean console composes its own wording.
+function recheckText(r) { return `${r.days_since_update}일 동안 갱신되지 않았습니다 (기준 ${r.stale_after_days}일). 근거로 쓰기 전에 확인해 주세요.`; }
+function recheckBadge(h) {
+  if (!h.recheck?.needs_recheck) return null;
+  const badge=el('span','재확인 필요','pill stale');badge.title=recheckText(h.recheck);return badge;
 }
 
 const searchIssueKinds={question:'질의',issue:'이슈'};
@@ -113,7 +127,9 @@ function searchDialog(parent,h,metaText,load) {
   content.append(el('p','불러오는 중…','muted'));
   const close=btn('닫기',()=>dialog.close(),'secondary'), actions=el('div',undefined,'actions search-dialog-actions');
   actions.append(close);
-  dialog.append(el('h2',h.title),el('p',metaText,'small muted'),content,el('code',h.citation),actions);
+  const head=[el('h2',h.title),el('p',metaText,'small muted')];
+  if (h.recheck?.needs_recheck) head.push(el('p','재확인 필요 — '+recheckText(h.recheck),'vector-warning'));
+  dialog.append(...head,content,el('code',h.citation),actions);
   dialog.addEventListener('close',()=>dialog.remove(),{once:true});
   dialog.addEventListener('click',e=>{if(e.target!==dialog)return;const r=dialog.getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)dialog.close();});
   parent.append(dialog);dialog.showModal();close.focus();

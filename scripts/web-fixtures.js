@@ -144,6 +144,8 @@ function mockAPI(variant){
     'GET /api/admin/stats':()=>({active_users:2,projects:1,active_keys:2,requests_24h:full?120:0,denied_24h:1,errors_24h:0,login_failures_24h:0,average_duration_ms:12}),
     'POST /api/admin/retention':()=>({}),
     'GET /api/admin/retention':()=>({sources:{audit_days:full?'admin':'server',revision_days:'server',revision_keep_latest:'server'},defaults:{audit_days:0,revision_days:0,revision_keep_latest:20},policy:{audit_days:full?365:0,revision_days:full?180:0,revision_keep_latest:5},data:{audit_events:full?1000:0,oldest_audit_event:full?T:null,revisions:full?200:0,oldest_revision:full?T:null},last_purge:full?{at:T,details:{audit_events:3,revisions:1}}:null}),
+    'POST /api/admin/search-settings':()=>({}),
+    'GET /api/admin/search-settings':()=>({policy:{issue_score_floor:full?0.55:0.5},sources:{issue_score_floor:full?'admin':'server'},defaults:{issue_score_floor:0.5},limits:{issue_score_floor_min:0.1,issue_score_floor_max:0.95},...(full?{updated_at:T}:{})}),
     'GET /api/discord/link':()=>({enabled:true,linked:full,linked_at:full?T:undefined}),
     'POST /api/discord/link-code':()=>({code:'ABCD-EFGH',expires_at:T}),
     'POST /api/discord/unlink':()=>({unlinked:true}),

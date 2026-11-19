@@ -167,6 +167,8 @@ type SearchResult struct {
 	Issues []IssueSearchHit `json:"issues,omitempty"`
 	// UnindexedIssueChunks counts question chunks still waiting for vectors.
 	UnindexedIssueChunks int `json:"unindexed_issue_chunks,omitempty"`
+	// FilteredIssues counts questions the score floor kept out of Issues.
+	FilteredIssues int `json:"filtered_issues,omitempty"`
 	// timing is recorded to search_timings, not returned to callers.
 	timing searchTiming
 }

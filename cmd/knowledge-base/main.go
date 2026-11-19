@@ -95,6 +95,9 @@ func run() error {
 		if store.HNSWReview, err = kb.ParseHNSWThresholds(os.Getenv("HNSW_REVIEW_VECTOR_P95_MS"), os.Getenv("HNSW_REVIEW_SCANNED_CHUNKS")); err != nil {
 			return err
 		}
+		if store.Search, err = kb.ParseSearchPolicy(os.Getenv("ISSUE_SCORE_FLOOR")); err != nil {
+			return err
+		}
 		if store.Retention, err = kb.ParseRetention(os.Getenv("AUDIT_RETENTION_DAYS"), os.Getenv("REVISION_RETENTION_DAYS"), os.Getenv("REVISION_KEEP_LATEST")); err != nil {
 			return err
 		}
