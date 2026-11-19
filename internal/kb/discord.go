@@ -64,7 +64,7 @@ var (
 const discordCodeAlphabet = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
 
 var discordStatusLabels = map[string]string{
-	"not_started": "시작 전", "in_progress": "진행 중", "in_review": "검토대기", "completed": "완료", "idea": "아이디어",
+	"not_started": "시작 전", "in_progress": "진행 중", "in_review": "검토대기", "pending_release": "반영 대기", "completed": "완료", "idea": "아이디어",
 }
 var discordPriorityLabels = map[string]string{"high": "높음", "medium": "보통", "low": "낮음"}
 

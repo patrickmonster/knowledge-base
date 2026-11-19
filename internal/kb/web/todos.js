@@ -4,10 +4,17 @@
 // between cells (move_todo) with the mouse or, after a long press, a finger,
 // and open an edit dialog (save_todo/delete_todo). Completed to-dos are not
 // on the board; they have their own page (todosDonePage).
-const todoStatuses=[['not_started','시작 전'],['in_progress','진행 중'],['in_review','검토대기'],['completed','완료'],['idea','아이디어']];
+const todoStatuses=[['not_started','시작 전'],['in_progress','진행 중'],['in_review','검토대기'],['pending_release','반영 대기'],['completed','완료'],['idea','아이디어']];
 const todoBoardStatuses=todoStatuses.filter(([s])=>s!=='completed');
 // Only work under way can be ticked off from its card.
-const todoCheckable=new Set(['in_progress','in_review']);
+const todoCheckable=new Set(['in_progress','in_review','pending_release']);
+// 반영 대기 cards wait for their work branch to be merged or deployed; moving
+// one there asks for the branch (left empty, the server takes the branch of
+// the latest linked AI task).
+function askTodoBranch(t){
+  const v=prompt(`“${t.title}”의 작업 브랜치를 입력하세요. 비워 두면 연결된 AI 작업의 브랜치를 씁니다.`,t.branch||'');
+  return v==null?null:v.trim();
+}
 const todoPriorities=[['high','높음'],['medium','보통'],['low','낮음']];
 const todoStatusLabel=Object.fromEntries(todoStatuses), todoPriorityLabel=Object.fromEntries(todoPriorities);
 // Live filter over the cards already loaded: every word must appear in the
@@ -215,6 +222,8 @@ async function todosPage(){
       const track=el('span',undefined,'todo-progress-track'),fill=el('span',undefined,'todo-progress-fill');fill.style.width=t.progress+'%';
       track.append(fill);p.append(track,el('span',t.progress+'%','todo-progress-label'));c.append(p);
     }
+    if(t.branch){const b=el('p',undefined,'todo-branch');b.title='작업 브랜치';b.append(el('code',t.branch));c.append(b);}
+    else if(t.status==='pending_release')c.append(el('p','브랜치 미입력','todo-branch missing'));
     const links=todoLinkPills(t);if(links)c.append(links);
     const rel=todoRelationPills(t);if(rel)c.append(rel);
     const meta=[t.assignee_name,t.due_date?`마감 ${t.due_date}`:''].filter(Boolean).join(' · ');
@@ -251,9 +260,15 @@ async function todosPage(){
   }
   function clearDropMarks(){board.querySelectorAll('.drop-before,.drop-target').forEach(n=>n.classList.remove('drop-before','drop-target'));}
   async function moveCard(id,cell,before){
-    if(!ctx.todos.some(x=>x.id===id))return;
+    const moving=ctx.todos.find(x=>x.id===id);
+    if(!moving)return;
     const body={project_id:project.id,todo_id:id,status:cell.dataset.status,priority:cell.dataset.priority};
     if(before&&before.dataset.id!==id)body.before_id=before.dataset.id;
+    if(body.status==='pending_release'&&moving.status!=='pending_release'){
+      const branch=askTodoBranch(moving);
+      if(branch==null){clearDropMarks();return;}
+      body.branch=branch;
+    }
     try{await tool('move_todo',body);}catch(err){notify(err.message,true);}
     await refresh().catch(err=>notify(err.message,true));
   }
@@ -575,6 +590,8 @@ function todoDialog(parent,project,ctx,t){
   if(t.assignee_id&&![...assignee.options].some(o=>o.value===t.assignee_id))assignee.append(new Option(t.assignee_name||t.assignee_id,t.assignee_id));
   assignee.value=t.assignee_id||'';
   const due=field(grid,'마감일 (선택)','due_date','date',t.due_date||'');due.required=false;
+  const branch=field(grid,'작업 브랜치 (반영 대기)','branch','text',t.branch||'');branch.required=false;branch.maxLength=200;
+  branch.placeholder='예: feat/todo-pending-release';branch.spellcheck=false;branch.autocomplete='off';
   const relations=todoRelationsSection(ctx,t,canWrite);form.append(relations.node);
   if(editing){
     form.append(el('p',`${t.created_by_name||''} 작성 · ${new Date(t.updated_at).toLocaleString()} 수정`,'small muted'));
@@ -599,6 +616,7 @@ function todoDialog(parent,project,ctx,t){
         if(progress.value!=='')d.progress=Number(progress.value);
         if(assignee.value)d.assignee_id=assignee.value;
         if(due.value)d.due_date=due.value;
+        d.branch=branch.value.trim();
         if(editing){d.todo_id=t.id;d.expected_revision=t.revision;}
         Object.assign(d,relations.value());
         await tool('save_todo',d);

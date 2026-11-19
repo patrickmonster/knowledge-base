@@ -186,19 +186,32 @@ test('task start sources list upstream and related projects apart, by project',a
   assert.match(dialog.textContent,/관련 임베딩 대기 중/);
 });
 
-test('completed to-dos live on their own page; only in-progress and in-review cards can be ticked',async t=>{
+test('completed to-dos live on their own page; only in-progress, in-review and pending-release cards can be ticked',async t=>{
   const c=await open(t,'full');
   await show(c,'todos');
   const heads=[...c.document.querySelectorAll('.todo-col-head .todo-status')].map(n=>n.textContent);
-  assert.deepStrictEqual(heads,['시작 전','진행 중','검토대기','아이디어']);
+  assert.deepStrictEqual(heads,['시작 전','진행 중','검토대기','반영 대기','아이디어']);
   assert.strictEqual(c.document.querySelector('.todo-card[data-id="todo-3"]'),null,'completed card is not on the board');
   const ticked=[...c.document.querySelectorAll('.todo-card')].filter(n=>n.querySelector('.todo-done')).map(n=>n.dataset.id).sort();
-  assert.deepStrictEqual(ticked,['todo-1','todo-5']);
+  assert.deepStrictEqual(ticked,['todo-1','todo-5','todo-6','todo-7']);
   assert.match(c.document.querySelector('.todo-done-link').textContent,/완료된 할 일 1건/);
   await show(c,'todosDone');
   const titles=[...c.document.querySelectorAll('.todo-done-title')].map(n=>n.textContent);
   assert.deepStrictEqual(titles,['할 일 todo-3']);
   check(c,'todosDone');
+});
+
+test('pending-release cards show their work branch and the dialog edits it',async t=>{
+  const c=await open(t,'full');
+  await show(c,'todos');
+  const branch=id=>c.document.querySelector(`.todo-card[data-id="${id}"] .todo-branch`);
+  assert.strictEqual(branch('todo-6').querySelector('code').textContent,'feat/todo-pending-release');
+  assert.match(branch('todo-7').textContent,/브랜치 미입력/);
+  assert.strictEqual(branch('todo-1'),null,'cards without a branch outside 반영 대기 show nothing');
+  c.document.querySelector('.todo-card[data-id="todo-6"]').click();await c.settle();
+  const input=c.document.querySelector('.todo-dialog input[name="branch"]');
+  assert.strictEqual(input.value,'feat/todo-pending-release');
+  check(c,'todos › pending release');
 });
 
 test('to-dos idle for a while carry a badge and can be shown alone',async t=>{

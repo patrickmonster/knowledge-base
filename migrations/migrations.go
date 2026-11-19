@@ -136,3 +136,6 @@ var TaskPrompts string
 
 //go:embed 045_search_settings.sql
 var SearchSettings string
+
+//go:embed 046_todo_pending_release.sql
+var TodoPendingRelease string
