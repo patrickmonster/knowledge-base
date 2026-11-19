@@ -237,3 +237,18 @@ test('upstream page picks the upstream from a table of the caller\'s other proje
   assert.deepStrictEqual(sent,[{project_id:PROJECT.id,upstream_project_id:'project-4'}]);
   assert.ok(c.document.querySelector('.upstream-by-id input[name="upstream_project_id"]'),'ID fallback stays available');
 });
+
+test('search results mark documents that need a recheck',async t=>{
+  const c=await open(t,'full');
+  await show(c,'search');
+  c.document.querySelector('#page form').dispatchEvent(new c.window.Event('submit',{bubbles:true,cancelable:true}));
+  await c.settle();check(c,'search');
+  const hits=[...c.document.querySelectorAll('#page .search-hit')];
+  assert.strictEqual(hits.filter(n=>n.classList.contains('stale')).length,1,'only the stale hit is marked');
+  assert.ok(hits[0].classList.contains('stale'),'the stale hit keeps its rank');
+  assert.match(hits[0].querySelector('.pill.stale').title,/120일 동안 갱신되지 않았습니다 \(기준 90일\)/);
+  assert.match(c.document.querySelector('#page [role="status"]').textContent,/재확인 필요 1건/);
+  // The hit's modal repeats the warning as a sentence.
+  press(c,hits[0]);await c.settle();check(c,'search › hit');
+  assert.match(c.document.querySelector('dialog.search-dialog[open] .vector-warning').textContent,/재확인 필요 — 120일/);
+});
