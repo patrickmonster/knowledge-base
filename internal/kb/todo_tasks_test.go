@@ -164,3 +164,54 @@ func TestTodoIssueLink(t *testing.T) {
 		t.Fatalf("issue after deleting its to-do: %+v", kept)
 	}
 }
+
+// A to-do waiting in 반영 대기 stays there when its task finishes or its pull
+// request merges into another repository's branch; only a deployment to this
+// server completes it automatically.
+func TestPendingReleaseTodoWaitsForRelease(t *testing.T) {
+	s := testStore(t)
+	f, srv := newFakeGitHub(t)
+	s.GitHub = &GitHubClient{BaseURL: srv.URL}
+	head := "3333333333333333333333333333333333333333"
+	s.Deployment = DeploymentTarget{Repository: "o/r", Commit: head}
+	tools := NewTools(s)
+	owner := loginAs(t, s, "admin@example.com")
+	p := mustCall(t, tools, owner, "create_project", CreateProjectInput{Slug: "todo-release", Name: "todo release"}).(Project)
+	status := func(id string) string {
+		for _, td := range mustCall(t, tools, owner, "list_todos", ListTodosInput{ProjectID: p.ID}).([]Todo) {
+			if td.ID == id {
+				return td.Status
+			}
+		}
+		return ""
+	}
+
+	other := mustCall(t, tools, owner, "save_todo", SaveTodoInput{ProjectID: p.ID, Title: "다른 저장소 반영", Status: "pending_release"}).(Todo)
+	run := mustCall(t, tools, owner, "start_task", StartTaskInput{ProjectID: p.ID, RequestKey: "release-1", Title: "기록", Task: "기록", TodoID: other.ID}).(StartTaskResult).Run
+	done := finishFixture(p.ID, run.ID)
+	done.PullRequests = []string{"x/y#5"}
+	if c := mustCall(t, tools, owner, "finish_task", done).(TaskCompletion); c.Todo == nil || c.Todo.Status != "pending_release" {
+		t.Fatalf("finish_task completed keeps 반영 대기: %+v", c.Todo)
+	}
+	f.set("/repos/x/y/pulls/5", map[string]any{"state": "closed", "merged": true, "merge_commit_sha": "5555555", "merged_at": "2026-11-19T02:00:00Z"})
+	mustCall(t, tools, owner, "check_task_deployments", DeploymentCheckInput{ProjectID: p.ID})
+	if got := status(other.ID); got != "pending_release" {
+		t.Fatalf("a merge is not a release: %s", got)
+	}
+
+	here := mustCall(t, tools, owner, "save_todo", SaveTodoInput{ProjectID: p.ID, Title: "이 서버 반영", Status: "pending_release"}).(Todo)
+	run2 := mustCall(t, tools, owner, "start_task", StartTaskInput{ProjectID: p.ID, RequestKey: "release-2", Title: "배포", Task: "배포", TodoID: here.ID}).(StartTaskResult).Run
+	partial := finishFixture(p.ID, run2.ID)
+	partial.Outcome = "partial"
+	partial.PullRequests = []string{"o/r#7"}
+	mustCall(t, tools, owner, "finish_task", partial)
+	f.set("/repos/o/r/pulls/7", map[string]any{"state": "closed", "merged": true, "merge_commit_sha": "7777777", "merged_at": "2026-11-19T03:00:00Z"})
+	f.setCompare("/repos/o/r/compare/"+head+"...7777777", "behind")
+	mustCall(t, tools, owner, "check_task_deployments", DeploymentCheckInput{ProjectID: p.ID})
+	if got := status(here.ID); got != "completed" {
+		t.Fatalf("a deployment to this server completes 반영 대기: %s", got)
+	}
+	if got := status(other.ID); got != "pending_release" {
+		t.Fatalf("the other to-do still waits: %s", got)
+	}
+}

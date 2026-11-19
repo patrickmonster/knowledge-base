@@ -459,7 +459,7 @@ func (s *Store) finishTask(ctx context.Context, tx *sql.Tx, a Identity, in Finis
 		out.DecisionCandidates = nil
 	}
 	if in.Outcome == "completed" {
-		if out.Todo, err = completeRunTodo(ctx, tx, run.ID, a.User.ID); err != nil {
+		if out.Todo, err = completeRunTodo(ctx, tx, run.ID, a.User.ID, false); err != nil {
 			return nil, err
 		}
 	} else if run.TodoID != "" {
