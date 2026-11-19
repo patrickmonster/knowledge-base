@@ -1,6 +1,9 @@
 package kb
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestValidateTodo(t *testing.T) {
 	ok := SaveTodoInput{Title: "  Save 500$  "}
@@ -20,6 +23,8 @@ func TestValidateTodo(t *testing.T) {
 		"assignee":     {Title: "x", AssigneeID: "nope"},
 		"due date":     {Title: "x", DueDate: "2026-13-01"},
 		"category":     {Title: "x", Category: string(make([]rune, 51))},
+		"branch space": {Title: "x", Branch: ptr("feat/a b")},
+		"branch long":  {Title: "x", Branch: ptr(strings.Repeat("b", 201))},
 	} {
 		if err := validateTodo(&in); errorCode(err) != "INVALID_INPUT" {
 			t.Errorf("%s: got %v", name, err)
@@ -121,6 +126,32 @@ func TestTodoBoard(t *testing.T) {
 	if reopened.CompletedAt != "" || reopened.Progress != nil || reopened.AssigneeID != "" || reopened.DueDate != "" || reopened.Title != "Find a better job" {
 		t.Fatalf("reopened: %+v", reopened)
 	}
+
+	// 반영 대기 keeps the work branch: set on a move, kept by a save that
+	// omits it, cleared by an empty string, and filled from the latest linked
+	// task run's branch when moved there without one.
+	staged := mustCall(t, tools, editor, "move_todo", MoveTodoInput{ProjectID: p.ID, TodoID: b.ID, Status: "pending_release", Priority: "high", Branch: ptr("  feat/release-me ")}).(Todo)
+	if staged.Status != "pending_release" || staged.Branch != "feat/release-me" {
+		t.Fatalf("pending release: %+v", staged)
+	}
+	if board := mustCall(t, tools, viewer, "list_todos", ListTodosInput{ProjectID: p.ID, Status: "pending_release"}).([]Todo); len(board) != 1 || board[0].Branch != "feat/release-me" {
+		t.Fatalf("list pending release: %+v", board)
+	}
+	kept := mustCall(t, tools, editor, "save_todo", SaveTodoInput{ProjectID: p.ID, TodoID: b.ID, ExpectedRevision: staged.Revision, Title: b.Title, Status: "pending_release", Priority: "high"}).(Todo)
+	if kept.Branch != "feat/release-me" {
+		t.Fatalf("branch kept: %+v", kept)
+	}
+	cleared := mustCall(t, tools, editor, "save_todo", SaveTodoInput{ProjectID: p.ID, TodoID: b.ID, ExpectedRevision: kept.Revision, Title: b.Title, Status: "in_review", Priority: "high", Branch: ptr("")}).(Todo)
+	if cleared.Branch != "" {
+		t.Fatalf("branch cleared: %+v", cleared)
+	}
+	mustCall(t, tools, editor, "start_task", StartTaskInput{ProjectID: p.ID, RequestKey: "todo-branch", Title: "release", Task: "release", Branch: "feat/from-task", TodoID: b.ID})
+	filled := mustCall(t, tools, editor, "move_todo", MoveTodoInput{ProjectID: p.ID, TodoID: b.ID, Status: "pending_release", Priority: "high"}).(Todo)
+	if filled.Branch != "feat/from-task" {
+		t.Fatalf("branch from task: %+v", filled)
+	}
+	_, err = call(t, tools, editor, "move_todo", MoveTodoInput{ProjectID: p.ID, TodoID: b.ID, Status: "pending_release", Priority: "high", Branch: ptr("bad branch")})
+	denied(t, err, "INVALID_INPUT")
 
 	_, err = call(t, tools, viewer, "delete_todo", TodoRef{ProjectID: p.ID, TodoID: c.ID})
 	denied(t, err, "FORBIDDEN")

@@ -59,7 +59,7 @@ curl -X PUT "https://discord.com/api/v10/applications/<APPLICATION_ID>/guilds/<G
        {"type": 3, "name": "project", "description": "프로젝트 slug"},
        {"type": 3, "name": "status", "description": "상태",
         "choices": [{"name": "시작 전", "value": "not_started"}, {"name": "진행 중", "value": "in_progress"},
-                    {"name": "검토대기", "value": "in_review"},
+                    {"name": "검토대기", "value": "in_review"}, {"name": "반영 대기", "value": "pending_release"},
                     {"name": "완료", "value": "completed"}, {"name": "아이디어", "value": "idea"}]},
        {"type": 5, "name": "mine", "description": "내 담당만"}]}
   ]

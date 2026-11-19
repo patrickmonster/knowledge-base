@@ -8,7 +8,7 @@ import (
 
 // Stale to-dos (오래 묵은 할 일 정리 안내).
 //
-// A to-do waiting on the board (not_started, in_progress or in_review) goes
+// A to-do waiting on the board (not_started, in_progress, in_review or pending_release) goes
 // stale when nothing has touched it for a while: the card itself was not
 // edited or moved, no linked task run started, finished or closed, and no
 // linked question changed. list_stale_todos lists them for clean-up, the web
@@ -26,7 +26,7 @@ const (
 	taskStaleTodoLimit = 5
 )
 
-var staleTodoStatuses = []string{"not_started", "in_progress", "in_review"}
+var staleTodoStatuses = []string{"not_started", "in_progress", "in_review", "pending_release"}
 
 type StaleTodo struct {
 	ID             string `json:"id"`
@@ -118,5 +118,5 @@ func taskStaleTodos(ctx context.Context, q Querier, projectID string) (*StaleTod
 }
 
 func registerStaleTodoTools(t Tools, s *Store) {
-	add(t, s, "list_stale_todos", "List waiting to-dos (not_started, in_progress, in_review) with no activity for at least older_than_days (default 14): no edit or move, no linked task run started, finished or closed, no linked question changed. Oldest first with idle_days, at most 200. Read-only: decide with the people involved whether to move, complete or delete each.", false, func(in ListStaleTodosInput) string { return in.ProjectID }, listStaleTodos)
+	add(t, s, "list_stale_todos", "List waiting to-dos (not_started, in_progress, in_review, pending_release) with no activity for at least older_than_days (default 14): no edit or move, no linked task run started, finished or closed, no linked question changed. Oldest first with idle_days, at most 200. Read-only: decide with the people involved whether to move, complete or delete each.", false, func(in ListStaleTodosInput) string { return in.ProjectID }, listStaleTodos)
 }

@@ -23,22 +23,24 @@ const (
 )
 
 var (
-	todoStatuses   = []string{"not_started", "in_progress", "in_review", "completed", "idea"}
+	todoStatuses   = []string{"not_started", "in_progress", "in_review", "pending_release", "completed", "idea"}
 	todoPriorities = []string{"high", "medium", "low"}
 )
 
 type Todo struct {
-	ID            string  `json:"id"`
-	ProjectID     string  `json:"project_id"`
-	Title         string  `json:"title"`
-	Body          string  `json:"body"`
-	Status        string  `json:"status"`
-	Priority      string  `json:"priority"`
-	Category      string  `json:"category"`
-	Progress      *int    `json:"progress"`
-	AssigneeID    string  `json:"assignee_id,omitempty"`
-	AssigneeName  string  `json:"assignee_name,omitempty"`
-	DueDate       string  `json:"due_date,omitempty"`
+	ID           string `json:"id"`
+	ProjectID    string `json:"project_id"`
+	Title        string `json:"title"`
+	Body         string `json:"body"`
+	Status       string `json:"status"`
+	Priority     string `json:"priority"`
+	Category     string `json:"category"`
+	Progress     *int   `json:"progress"`
+	AssigneeID   string `json:"assignee_id,omitempty"`
+	AssigneeName string `json:"assignee_name,omitempty"`
+	DueDate      string `json:"due_date,omitempty"`
+	// Branch is the work branch waiting to be merged or deployed (반영 대기).
+	Branch        string  `json:"branch"`
 	Position      float64 `json:"position"`
 	Revision      int     `json:"revision"`
 	CreatedBy     string  `json:"created_by"`
@@ -73,7 +75,7 @@ type TodoPullRequest struct {
 
 type ListTodosInput struct {
 	ProjectID  string `json:"project_id"`
-	Status     string `json:"status,omitempty" jsonschema:"not_started, in_progress, in_review, completed or idea; omit for all"`
+	Status     string `json:"status,omitempty" jsonschema:"not_started, in_progress, in_review, pending_release, completed or idea; omit for all"`
 	Priority   string `json:"priority,omitempty" jsonschema:"high, medium or low; omit for all"`
 	Category   string `json:"category,omitempty" jsonschema:"Exact category (case-insensitive); omit for all"`
 	AssigneeID string `json:"assignee_id,omitempty"`
@@ -94,6 +96,8 @@ type SaveTodoInput struct {
 	Progress         *int   `json:"progress,omitempty" jsonschema:"0-100; omit for no progress bar"`
 	AssigneeID       string `json:"assignee_id,omitempty" jsonschema:"A project member's user ID; omit for unassigned"`
 	DueDate          string `json:"due_date,omitempty" jsonschema:"YYYY-MM-DD; omit for none"`
+	// Branch is kept when omitted, like the relations below.
+	Branch *string `json:"branch,omitempty" jsonschema:"Work branch whose merge or deployment the to-do waits for (pending_release), up to 200 characters; empty string clears; omit to keep. Moving to pending_release with no branch fills it from the latest linked task run's branch"`
 	// Relations are kept when omitted, unlike the fields above, so callers
 	// that do not know them never clear them by accident.
 	ParentID  *string   `json:"parent_id,omitempty" jsonschema:"Make this a sub-item of that to-do (one level: the parent cannot itself be a sub-item); empty string clears; omit to keep"`
@@ -101,11 +105,12 @@ type SaveTodoInput struct {
 }
 
 type MoveTodoInput struct {
-	ProjectID string `json:"project_id"`
-	TodoID    string `json:"todo_id"`
-	Status    string `json:"status" jsonschema:"Target column: not_started, in_progress, in_review, completed or idea"`
-	Priority  string `json:"priority" jsonschema:"Target row: high, medium or low"`
-	BeforeID  string `json:"before_id,omitempty" jsonschema:"Place before this to-do in the target cell; omit to place last"`
+	ProjectID string  `json:"project_id"`
+	TodoID    string  `json:"todo_id"`
+	Status    string  `json:"status" jsonschema:"Target column: not_started, in_progress, in_review, pending_release, completed or idea"`
+	Priority  string  `json:"priority" jsonschema:"Target row: high, medium or low"`
+	BeforeID  string  `json:"before_id,omitempty" jsonschema:"Place before this to-do in the target cell; omit to place last"`
+	Branch    *string `json:"branch,omitempty" jsonschema:"Set the work branch at the same time (useful when moving to pending_release); empty string clears; omit to keep"`
 }
 
 type TodoRef struct {
@@ -148,7 +153,7 @@ func validateTodo(in *SaveTodoInput) error {
 		in.Status = "not_started"
 	}
 	if !oneOf(in.Status, todoStatuses) {
-		return problem("INVALID_INPUT", "status must be not_started, in_progress, in_review, completed or idea.")
+		return problem("INVALID_INPUT", "status must be not_started, in_progress, in_review, pending_release, completed or idea.")
 	}
 	if in.Priority == "" {
 		in.Priority = "medium"
@@ -169,7 +174,31 @@ func validateTodo(in *SaveTodoInput) error {
 			return problem("INVALID_INPUT", "due_date must be YYYY-MM-DD.")
 		}
 	}
+	return normalizeTodoBranch(in.Branch)
+}
+
+// normalizeTodoBranch trims a branch name and rejects what git would not take
+// as one: spaces, control characters, or more than 200 characters.
+func normalizeTodoBranch(branch *string) error {
+	if branch == nil {
+		return nil
+	}
+	*branch = strings.TrimSpace(*branch)
+	if len([]rune(*branch)) > 200 {
+		return problem("INVALID_INPUT", "branch must have at most 200 characters.")
+	}
+	if strings.IndexFunc(*branch, func(r rune) bool { return r <= ' ' || r == 0x7f }) >= 0 {
+		return problem("INVALID_INPUT", "branch must not contain spaces or control characters.")
+	}
 	return nil
+}
+
+// todoBranchSQL is the branch a to-do keeps after a save or move: the given
+// one ($b, NULL keeps the current), and on pending_release ($s) with none, the
+// branch of the latest linked task run that named one.
+func todoBranchSQL(b, st string) string {
+	return `CASE WHEN COALESCE(` + b + `::text,branch)='' AND ` + st + `='pending_release' THEN COALESCE((SELECT r.branch FROM task_runs r
+		WHERE r.todo_id=todos.id AND r.branch<>'' ORDER BY r.started_at DESC LIMIT 1),'') ELSE COALESCE(` + b + `::text,branch) END`
 }
 
 func listTodos(ctx context.Context, tx *sql.Tx, a Identity, in ListTodosInput) (any, error) {
@@ -178,7 +207,7 @@ func listTodos(ctx context.Context, tx *sql.Tx, a Identity, in ListTodosInput) (
 		return nil, err
 	}
 	if in.Status != "" && !oneOf(in.Status, todoStatuses) {
-		return nil, problem("INVALID_INPUT", "status must be not_started, in_progress, in_review, completed or idea.")
+		return nil, problem("INVALID_INPUT", "status must be not_started, in_progress, in_review, pending_release, completed or idea.")
 	}
 	if in.Priority != "" && !oneOf(in.Priority, todoPriorities) {
 		return nil, problem("INVALID_INPUT", "priority must be high, medium or low.")
@@ -213,7 +242,7 @@ func listTodos(ctx context.Context, tx *sql.Tx, a Identity, in ListTodosInput) (
 		AND ($5='' OR t.assignee_id=$5::uuid)
 		AND NOT EXISTS (SELECT 1 FROM unnest($7::text[]) w WHERE (t.title||' '||t.body||' '||t.category) NOT ILIKE '%'||w||'%')
 		ORDER BY CASE t.priority WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END,
-		CASE t.status WHEN 'not_started' THEN 0 WHEN 'in_progress' THEN 1 WHEN 'in_review' THEN 2 WHEN 'completed' THEN 3 ELSE 4 END,
+		CASE t.status WHEN 'not_started' THEN 0 WHEN 'in_progress' THEN 1 WHEN 'in_review' THEN 2 WHEN 'pending_release' THEN 3 WHEN 'completed' THEN 4 ELSE 5 END,
 		t.position, t.created_at, t.id LIMIT $6`, p.ID, in.Status, in.Priority, strings.TrimSpace(in.Category), in.AssigneeID, limit, terms)
 }
 
@@ -286,9 +315,13 @@ func saveTodo(ctx context.Context, tx *sql.Tx, a Identity, in SaveTodoInput) (an
 			return nil, err
 		}
 		id := uuid.NewString()
-		if _, err := tx.ExecContext(ctx, `INSERT INTO todos(id,project_id,title,body,status,priority,category,progress,assignee_id,due_date,position,created_by,updated_by,completed_at)
-			VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,NULLIF($10,'')::date,$11,$12,$12,CASE WHEN $5='completed' THEN now() END)`,
-			id, p.ID, in.Title, in.Body, in.Status, in.Priority, in.Category, in.Progress, nullableID(in.AssigneeID), in.DueDate, pos, a.User.ID); err != nil {
+		branch := ""
+		if in.Branch != nil {
+			branch = *in.Branch
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO todos(id,project_id,title,body,status,priority,category,progress,assignee_id,due_date,position,created_by,updated_by,completed_at,branch)
+			VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,NULLIF($10,'')::date,$11,$12,$12,CASE WHEN $5='completed' THEN now() END,$13)`,
+			id, p.ID, in.Title, in.Body, in.Status, in.Priority, in.Category, in.Progress, nullableID(in.AssigneeID), in.DueDate, pos, a.User.ID, branch); err != nil {
 			return nil, err
 		}
 		if err := setTodoRelations(ctx, tx, p.ID, id, in.ParentID, in.BlockedBy); err != nil {
@@ -314,8 +347,9 @@ func saveTodo(ctx context.Context, tx *sql.Tx, a Identity, in SaveTodoInput) (an
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE todos SET title=$2,body=$3,status=$4,priority=$5,category=$6,progress=$7,assignee_id=$8,
 		due_date=NULLIF($9,'')::date,position=$10,updated_by=$11,updated_at=now(),revision=revision+1,
-		completed_at=CASE WHEN $4<>'completed' THEN NULL WHEN status='completed' THEN completed_at ELSE now() END
-		WHERE id=$1`, current.ID, in.Title, in.Body, in.Status, in.Priority, in.Category, in.Progress, nullableID(in.AssigneeID), in.DueDate, pos, a.User.ID); err != nil {
+		completed_at=CASE WHEN $4<>'completed' THEN NULL WHEN status='completed' THEN completed_at ELSE now() END,
+		branch=`+todoBranchSQL("$12", "$4")+`
+		WHERE id=$1`, current.ID, in.Title, in.Body, in.Status, in.Priority, in.Category, in.Progress, nullableID(in.AssigneeID), in.DueDate, pos, a.User.ID, in.Branch); err != nil {
 		return nil, err
 	}
 	if err := setTodoRelations(ctx, tx, p.ID, current.ID, in.ParentID, in.BlockedBy); err != nil {
@@ -332,10 +366,13 @@ func moveTodo(ctx context.Context, tx *sql.Tx, a Identity, in MoveTodoInput) (an
 		return nil, err
 	}
 	if !oneOf(in.Status, todoStatuses) {
-		return nil, problem("INVALID_INPUT", "status must be not_started, in_progress, in_review, completed or idea.")
+		return nil, problem("INVALID_INPUT", "status must be not_started, in_progress, in_review, pending_release, completed or idea.")
 	}
 	if !oneOf(in.Priority, todoPriorities) {
 		return nil, problem("INVALID_INPUT", "priority must be high, medium or low.")
+	}
+	if err := normalizeTodoBranch(in.Branch); err != nil {
+		return nil, err
 	}
 	// Lock the whole board so concurrent drops in one cell cannot pick the same gap.
 	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('todos:'||$1,0))`, p.ID); err != nil {
@@ -354,8 +391,9 @@ func moveTodo(ctx context.Context, tx *sql.Tx, a Identity, in MoveTodoInput) (an
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE todos SET status=$2,priority=$3,position=$4,updated_by=$5,updated_at=now(),revision=revision+1,
 		progress=CASE WHEN $2='completed' AND status<>'completed' AND progress IS NOT NULL THEN 100 ELSE progress END,
-		completed_at=CASE WHEN $2<>'completed' THEN NULL WHEN status='completed' THEN completed_at ELSE now() END
-		WHERE id=$1`, current.ID, in.Status, in.Priority, pos, a.User.ID); err != nil {
+		completed_at=CASE WHEN $2<>'completed' THEN NULL WHEN status='completed' THEN completed_at ELSE now() END,
+		branch=`+todoBranchSQL("$6", "$2")+`
+		WHERE id=$1`, current.ID, in.Status, in.Priority, pos, a.User.ID, in.Branch); err != nil {
 		return nil, err
 	}
 	return getTodo(ctx, tx, current.ID)
@@ -411,8 +449,8 @@ func deleteTodo(ctx context.Context, tx *sql.Tx, a Identity, in TodoRef) (any, e
 }
 
 func registerTodoTools(t Tools, s *Store) {
-	add(t, s, "list_todos", "List a project's to-dos (할 일) for the board: each has status (not_started, in_progress, in_review, completed, idea), priority (high, medium, low), category, optional progress 0-100, assignee and due date, ordered by priority, status and board position. Each also shows its parent (parent_id, one level of sub-items), the to-dos it waits for (blocked_by, open_blocker_count) and its sub-item counts. Filter by status, priority, category, assignee_id, mine, or query (words that must all appear in the title, body or category) — use query to check whether something is already on the board instead of reading every to-do. Up to 500.", false, func(in ListTodosInput) string { return in.ProjectID }, listTodos)
-	add(t, s, "save_todo", "Add a to-do, or change one with todo_id and expected_revision. Changing replaces every field, so send the current values you want to keep (omitted progress, assignee_id and due_date are cleared); parent_id and blocked_by are kept when omitted. Relations stay inside the project, sub-items are one level deep and blocked_by cycles are rejected. Editor access required.", true, func(in SaveTodoInput) string { return in.ProjectID }, saveTodo)
-	add(t, s, "move_todo", "Move a to-do to a status column and priority row on the board, before before_id or last. Moving to completed fills an existing progress bar. Editor access required.", true, func(in MoveTodoInput) string { return in.ProjectID }, moveTodo)
+	add(t, s, "list_todos", "List a project's to-dos (할 일) for the board: each has status (not_started, in_progress, in_review, pending_release, completed, idea), priority (high, medium, low), category, optional progress 0-100, assignee and due date, ordered by priority, status and board position. Each also shows its parent (parent_id, one level of sub-items), the to-dos it waits for (blocked_by, open_blocker_count) and its sub-item counts. Filter by status, priority, category, assignee_id, mine, or query (words that must all appear in the title, body or category) — use query to check whether something is already on the board instead of reading every to-do. Up to 500.", false, func(in ListTodosInput) string { return in.ProjectID }, listTodos)
+	add(t, s, "save_todo", "Add a to-do, or change one with todo_id and expected_revision. Changing replaces every field, so send the current values you want to keep (omitted progress, assignee_id and due_date are cleared); branch, parent_id and blocked_by are kept when omitted. Relations stay inside the project, sub-items are one level deep and blocked_by cycles are rejected. Editor access required.", true, func(in SaveTodoInput) string { return in.ProjectID }, saveTodo)
+	add(t, s, "move_todo", "Move a to-do to a status column and priority row on the board, before before_id or last. Moving to completed fills an existing progress bar. pending_release (반영 대기) is for work done and reviewed that waits to be merged or deployed: pass branch with the work branch, or it is filled from the latest linked task run's branch. Editor access required.", true, func(in MoveTodoInput) string { return in.ProjectID }, moveTodo)
 	add(t, s, "delete_todo", "Delete a to-do permanently. Editor access required.", true, func(in TodoRef) string { return in.ProjectID }, deleteTodo)
 }
