@@ -82,8 +82,8 @@ func run() error {
 			return err
 		}
 		if os.Getenv("GITHUB_TOKEN") != "" {
-			// GitHub tokens are set per repository in the web console now.
-			slog.Warn("GITHUB_TOKEN is no longer used and can be removed: set a GitHub token per repository in the web console (projects → repositories)")
+			// The server keeps no GitHub credentials; private repositories report through webhooks.
+			slog.Warn("GITHUB_TOKEN is no longer used and can be removed: register a GitHub webhook per repository in the web console")
 		}
 		if store.Deployment, err = kb.DetectDeploymentTarget(os.Getenv("SERVER_REPOSITORY"), os.Getenv("RAILWAY_GIT_REPO_OWNER"), os.Getenv("RAILWAY_GIT_REPO_NAME")); err != nil {
 			return err

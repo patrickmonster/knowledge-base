@@ -24,8 +24,8 @@ import (
 // A project owner registers a repository in the web console and pastes the
 // payload URL and secret into the repository's webhook settings on GitHub.
 // GitHub then pushes events as they happen, so issue sync and pull request
-// merge tracking no longer depend on polling the GitHub API (60 requests per
-// hour without a repository token):
+// merge tracking do not depend on polling the GitHub API (the server has no
+// GitHub token: 60 requests per hour, public repositories only):
 //
 //   - issues: opened, edited, closed, reopened, labeled, unlabeled → the same
 //     upsert as import_github_issues, keyed by owner/repo#number.
@@ -103,12 +103,8 @@ type GitHubWebhook struct {
 	PayloadURL        string   `json:"payload_url"`
 	// SecretSet is false for webhooks created before migration 028 until the
 	// secret is rotated; deliveries are refused until then.
-	SecretSet bool `json:"secret_set"`
-	// TokenConfigured tells whether the repository has a GitHub token on the
-	// project's 저장소 screen (first imports of a private repository and the
-	// safety-net merge checks need it).
-	TokenConfigured bool              `json:"token_configured"`
-	Recent          []WebhookDelivery `json:"recent"`
+	SecretSet bool              `json:"secret_set"`
+	Recent    []WebhookDelivery `json:"recent"`
 }
 
 type WebhookDelivery struct {
@@ -150,6 +146,10 @@ type GitHubWebhookSaved struct {
 	Removed    bool           `json:"removed,omitempty"`
 }
 
+// webhookPullRequestDays is how long a pull request state reported by a
+// webhook is kept for tasks that name the pull request later.
+const webhookPullRequestDays = 90
+
 func registerGitHubWebhookTools(t Tools, s *Store) {
 	add(t, s, "list_github_webhooks", "Web console only: list a project's GitHub webhooks (secrets never shown) with recent deliveries.", false, func(in ProjectInput) string { return in.ProjectID }, s.listGitHubWebhooks)
 	add(t, s, "set_github_webhook", "Web console only, project owner: create, update, show or rotate the secret of, or remove a GitHub webhook that syncs issues and pull request merges.", true, func(in GitHubWebhookInput) string { return in.ProjectID }, s.setGitHubWebhook)
@@ -162,8 +162,6 @@ func registerGitHubWebhookTools(t Tools, s *Store) {
 }
 
 const webhookSelect = `SELECT (to_jsonb(w)-'secret')||jsonb_build_object('created_by_name',u.name,'secret_set',w.secret IS NOT NULL,
-	'token_configured',EXISTS(SELECT 1 FROM project_repositories r WHERE r.project_id=w.project_id AND r.github_token IS NOT NULL
-		AND split_part(r.repository,'/',2)||'/'||split_part(r.repository,'/',3)=w.repository AND split_part(r.repository,'/',4)=''),
 	'recent',coalesce((SELECT jsonb_agg(to_jsonb(d)-'webhook_id' ORDER BY d.received_at DESC) FROM (SELECT * FROM github_webhook_deliveries
 		WHERE webhook_id=w.id ORDER BY received_at DESC LIMIT 10) d),'[]'::jsonb))
 	FROM github_webhooks w JOIN users u ON u.id=w.created_by`
@@ -557,6 +555,18 @@ func (s *Store) processWebhookEvent(ctx context.Context, tx *sql.Tx, hook webhoo
 		case env.Action == "closed":
 			state = "closed"
 		}
+		// Remember the state even when no task names the pull request yet: a
+		// task finished after the merge picks it up (insertPullRequests).
+		if _, err := tx.ExecContext(ctx, `INSERT INTO github_pull_requests(project_id,repository,number,state,merge_commit,merged_at)
+			VALUES($1,$2,$3,$4,$5,$6::timestamptz) ON CONFLICT (project_id,repository,number) DO UPDATE
+			SET state=EXCLUDED.state,merge_commit=EXCLUDED.merge_commit,merged_at=EXCLUDED.merged_at,received_at=now()`,
+			hook.ProjectID, hook.Repository, pr.Number, state, mergeCommit, mergedAt); err != nil {
+			return WebhookResult{}, err
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM github_pull_requests WHERE project_id=$1 AND received_at<now()-make_interval(days=>$2)`,
+			hook.ProjectID, webhookPullRequestDays); err != nil {
+			return WebhookResult{}, err
+		}
 		// Deployment ("deployed") is still decided by the server comparing its
 		// own build, after the next restart.
 		res, err := tx.ExecContext(ctx, `UPDATE task_pull_requests SET state=$4,merge_commit=$5,merged_at=$6::timestamptz,deployed_commit=NULL,checked_at=now(),check_error=NULL
@@ -566,7 +576,7 @@ func (s *Store) processWebhookEvent(ctx context.Context, tx *sql.Tx, hook webhoo
 		}
 		n, _ := res.RowsAffected()
 		if n == 0 {
-			return WebhookResult{Outcome: "ignored", Detail: fmt.Sprintf("#%d is not tracked by a task", pr.Number)}, nil
+			return WebhookResult{Outcome: "processed", Detail: fmt.Sprintf("#%d %s (no task yet; remembered)", pr.Number, state)}, nil
 		}
 		return WebhookResult{Outcome: "processed", Detail: fmt.Sprintf("#%d %s (%d task)", pr.Number, state, n)}, nil
 	}

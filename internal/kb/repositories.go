@@ -6,8 +6,6 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
-
-	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 // Project repositories: an agent working in a git checkout passes its remote
@@ -166,95 +164,7 @@ func manageProjectRepository(ctx context.Context, tx *sql.Tx, a Identity, in Pro
 	return p, repo, err
 }
 
-// ProjectRepository is one registered repository with its GitHub token state.
-// The token itself is never returned.
-type ProjectRepository struct {
-	Repository        string  `json:"repository"`
-	GitHubToken       bool    `json:"github_token"`
-	TokenSetByName    *string `json:"github_token_set_by_name"`
-	TokenSetAt        *string `json:"github_token_set_at"`
-	CreatedAt         string  `json:"created_at"`
-	SupportsGitHubAPI bool    `json:"supports_github_api"`
-}
-
-type RepositoryTokenInput struct {
-	ProjectID  string `json:"project_id"`
-	Repository string `json:"repository"`
-	// Token is a GitHub personal access token with read access to the
-	// repository; empty with remove=true deletes the stored token.
-	Token  string `json:"token,omitempty"`
-	Remove bool   `json:"remove,omitempty"`
-}
-
-// githubTokenPattern accepts GitHub personal access tokens (classic ghp_…,
-// fine-grained github_pat_…) and other printable tokens without whitespace.
-var githubTokenPattern = regexp.MustCompile(`^[\x21-\x7e]{20,255}$`)
-
-func projectRepositoryDetails(ctx context.Context, tx *sql.Tx, projectID string) ([]ProjectRepository, error) {
-	return many[ProjectRepository](ctx, tx, `SELECT jsonb_build_object('repository',r.repository,'github_token',r.github_token IS NOT NULL,
-		'github_token_set_by_name',CASE WHEN r.github_token IS NOT NULL THEN u.name END,'github_token_set_at',CASE WHEN r.github_token IS NOT NULL THEN r.github_token_set_at END,
-		'created_at',r.created_at,'supports_github_api',split_part(r.repository,'/',4)='')
-		FROM project_repositories r LEFT JOIN users u ON u.id=r.github_token_set_by WHERE r.project_id=$1 ORDER BY r.repository`, projectID)
-}
-
-// setRepositoryToken stores or removes the GitHub token of a registered
-// repository. Web console only (a signed-in person, never an MCP key), project
-// owner or admin. The token is not checked against GitHub here; the next merge
-// check or import reports NOT_FOUND or GITHUB_UNAUTHORIZED when it cannot read.
-func setRepositoryToken(ctx context.Context, tx *sql.Tx, a Identity, in RepositoryTokenInput) (any, error) {
-	if a.KeyID != "" {
-		return nil, problem("FORBIDDEN", "GitHub tokens can only be set by a signed-in person in the web console.")
-	}
-	p, repo, err := manageProjectRepository(ctx, tx, a, ProjectRepositoryInput{ProjectID: in.ProjectID, Repository: in.Repository})
-	if err != nil {
-		return nil, err
-	}
-	token := strings.TrimSpace(in.Token)
-	switch {
-	case in.Remove && token != "":
-		return nil, problem("INVALID_INPUT", "Send either token or remove, not both.")
-	case !in.Remove && !githubTokenPattern.MatchString(token):
-		return nil, problem("INVALID_INPUT", "token must be a GitHub access token (20–255 visible characters, no spaces).")
-	case !in.Remove && len(strings.Split(repo, "/")) != 3:
-		return nil, problem("INVALID_INPUT", "GitHub tokens apply to host/owner/name repositories only.")
-	}
-	var res sql.Result
-	if in.Remove {
-		res, err = tx.ExecContext(ctx, `UPDATE project_repositories SET github_token=NULL,github_token_set_by=NULL,github_token_set_at=NULL WHERE project_id=$1 AND repository=$2`, p.ID, repo)
-	} else {
-		res, err = tx.ExecContext(ctx, `UPDATE project_repositories SET github_token=$3,github_token_set_by=$4,github_token_set_at=now() WHERE project_id=$1 AND repository=$2`, p.ID, repo, token, a.User.ID)
-	}
-	if err != nil {
-		return nil, err
-	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return nil, problem("NOT_FOUND", "Register the repository for this project first.")
-	}
-	if !in.Remove {
-		// Pull requests that failed for lack of access are checked again on
-		// the next round instead of waiting for their usual interval.
-		if _, err := tx.ExecContext(ctx, `UPDATE task_pull_requests SET checked_at=NULL WHERE project_id=$1 AND check_error IS NOT NULL
-			AND repository=split_part($2,'/',2)||'/'||split_part($2,'/',3)`, p.ID, repo); err != nil {
-			return nil, err
-		}
-	}
-	return projectRepositoryDetails(ctx, tx, p.ID)
-}
-
 func registerRepositoryTools(t Tools, s *Store) {
-	add(t, s, "list_project_repositories", "List a project's registered source repositories and whether each has a GitHub access token (the token itself is never shown).", false, func(in ProjectInput) string { return in.ProjectID }, func(ctx context.Context, tx *sql.Tx, a Identity, in ProjectInput) (any, error) {
-		p, err := projectAccess(ctx, tx, a.User.ID, in.ProjectID, false)
-		if err != nil {
-			return nil, err
-		}
-		return projectRepositoryDetails(ctx, tx, p.ID)
-	})
-	add(t, s, "set_project_repository_token", "Web console only, project owner or admin: set (token) or delete (remove=true) the GitHub access token of a registered repository. Pull request merge checks and GitHub issue imports for that repository use it.", true, func(in RepositoryTokenInput) string { return in.ProjectID }, setRepositoryToken)
-	// Credentials are entered by people in the web console, never by an AI
-	// client's key, so the tool is not offered over MCP.
-	tool := t["set_project_repository_token"]
-	tool.Register = func(*mcp.Server, Identity) {}
-	t["set_project_repository_token"] = tool
 	add(t, s, "resolve_project", "Find the project on this server registered for a git checkout. Call it first, with the checkout's git remote, on every connected knowledge server. matched=true: use project.id for this task and follow the returned rules (the project's work rules for branches, commits and pull requests) right away. matched=false: this server is unrelated to the repository; leave it alone without asking the user. candidates: ask the user which project. Read-only and safe to call on any server.", false, nil, func(ctx context.Context, tx *sql.Tx, a Identity, in ResolveProjectInput) (any, error) {
 		return resolveProject(ctx, tx, a, in)
 	})

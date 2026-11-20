@@ -475,7 +475,7 @@ function todoLinkPills(t){
   if(pr)row.append(el('span',`#${pr.number} ${todoPRLabels[pr.state]||pr.state}`,'todo-link-pill pr-'+pr.state));
   if(unmerged.length){
     const warn=el('span',`⚠ 미병합 PR ${unmerged.length}`,'todo-link-pill pr-mismatch');
-    warn.title='완료로 표시됐지만 병합되지 않은 PR: '+unmerged.map(x=>`#${x.number} ${todoPRLabels[x.state]||x.state}`).join(', ');
+    warn.title='완료로 표시됐지만 병합되지 않은 PR: '+unmerged.map(x=>`#${x.number} ${todoPRLabels[x.state]||x.state}`).join(', ')+'. GitHub가 알려 주지 않은 PR(웹훅 등록 전 병합 등)은 할 일을 열어 연결된 AI 작업에서 "병합됨 확인"으로 기록할 수 있습니다.';
     row.append(warn);
   }
   if(t.open_issue_count)row.append(el('span',`질의 ${t.open_issue_count}`,'todo-link-pill issue'));
@@ -586,7 +586,7 @@ async function todoTasksSection(project,t,ctx){
       const li=el('li');
       li.append(el('span',taskStatusLabels[r.status]||r.status,'pill task-'+r.status),document.createTextNode(' '+r.title+' '));
       li.append(el('span',`${r.created_by_name||''} · ${new Date(r.started_at).toLocaleDateString()}`,'small muted'));
-      for(const pr of r.pull_requests||[]){const a=el('a',` #${pr.number} ${todoPRLabels[pr.state]||pr.state}`,'small');a.href=pr.url;a.target='_blank';a.rel='noopener noreferrer';li.append(a);}
+      for(const pr of r.pull_requests||[]){const a=el('a',` #${pr.number} ${todoPRLabels[pr.state]||pr.state}`+(pr.confirmed_at?' (수동 확인)':pr.check_error?' ⚠':''),'small');a.href=pr.url;a.target='_blank';a.rel='noopener noreferrer';a.title=prStateTitle(pr);li.append(a,...prConfirmButtons(project,pr,async()=>{await ctx?.reload?.();}));}
       // The task's creator, the owner or an admin (with edit access) can drop a wrong link.
       if((r.created_by===me.id||['owner','admin'].includes(project.role))&&['owner','admin','editor'].includes(project.role)){
         li.append(document.createTextNode(' '),btn('연결 해제',async()=>{await unlinkTaskTodo(project,{...r,todo:{id:t.id,title:t.title}},async()=>{li.remove();await ctx?.reload?.();});},'secondary small todo-task-unlink'));
