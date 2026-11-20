@@ -193,11 +193,11 @@ test('completed to-dos live on their own page; only in-progress, in-review and p
   assert.deepStrictEqual(heads,['시작 전','진행 중','검토대기','반영 대기','아이디어']);
   assert.strictEqual(c.document.querySelector('.todo-card[data-id="todo-3"]'),null,'completed card is not on the board');
   const ticked=[...c.document.querySelectorAll('.todo-card')].filter(n=>n.querySelector('.todo-done')).map(n=>n.dataset.id).sort();
-  assert.deepStrictEqual(ticked,['todo-1','todo-5','todo-6','todo-7']);
-  assert.match(c.document.querySelector('.todo-done-link').textContent,/완료된 할 일 2건/);
+  assert.deepStrictEqual(ticked,['todo-1','todo-11','todo-5','todo-6','todo-7']);
+  assert.match(c.document.querySelector('.todo-done-link').textContent,/완료된 할 일 4건/);
   await show(c,'todosDone');
   const titles=[...c.document.querySelectorAll('.todo-done-title')].map(n=>n.textContent).sort();
-  assert.deepStrictEqual(titles,['할 일 todo-3','할 일 todo-8']);
+  assert.deepStrictEqual(titles,['폐기 할 일 todo-10','할 일 todo-3','할 일 todo-8','할 일 todo-9']);
   check(c,'todosDone');
 });
 
@@ -206,7 +206,7 @@ test('a completed to-do with an unmerged pull request is flagged on the board an
   await show(c,'todos');
   // todo-8's latest PR is deployed, an older one is still open: every PR counts.
   const link=c.document.querySelector('.todo-done-link');
-  assert.match(link.textContent,/완료된 할 일 2건 · ⚠ 미병합 PR 1/);
+  assert.match(link.textContent,/완료된 할 일 4건 · ⚠ 미병합 PR 2/);
   assert.ok(link.classList.contains('todo-done-mismatch'));
   assert.strictEqual(c.document.querySelector('.todo-card .pr-mismatch'),null,'cards still on the board are not flagged');
   await show(c,'todosDone');
@@ -218,10 +218,61 @@ test('a completed to-do with an unmerged pull request is flagged on the board an
   assert.strictEqual(row('할 일 todo-3').querySelector('.pr-mismatch'),null,'a deployed PR is not flagged');
   const filter=c.document.querySelector('.todo-mismatch-filter');
   assert.strictEqual(filter.hidden,false);
-  assert.match(filter.textContent,/미병합 PR 있는 것만 \(1\)/);
+  assert.match(filter.textContent,/미병합 PR 있는 것만 \(2\)/);
   const box=filter.querySelector('input');box.checked=true;box.dispatchEvent(new c.window.Event('change'));await c.settle();
-  assert.deepStrictEqual([...c.document.querySelectorAll('.todo-done-title')].map(n=>n.textContent),['할 일 todo-8']);
+  assert.deepStrictEqual([...c.document.querySelectorAll('.todo-done-title')].map(n=>n.textContent).sort(),['할 일 todo-8','할 일 todo-9']);
   check(c,'todosDone › unmerged PR');
+});
+
+test('completed to-dos go back to 반영 대기 while a PR may land, or are dropped when every PR closed',async t=>{
+  const c=await open(t,'full');
+  await show(c,'todosDone');
+  const row=title=>[...c.document.querySelectorAll('#page tr')].find(r=>r.querySelector('.todo-done-title')?.textContent===title);
+  const labels=r=>[...r.querySelectorAll('.todo-done-actions button')].map(b=>b.textContent);
+  assert.deepStrictEqual(labels(row('할 일 todo-8')),['반영 대기로 되돌리기','진행 중으로'],'an open PR waits for the merge');
+  assert.deepStrictEqual(labels(row('할 일 todo-9')),['폐기로 표시','진행 중으로'],'every PR closed: drop it');
+  assert.deepStrictEqual(labels(row('할 일 todo-3')),['진행 중으로 되돌리기']);
+  const dropped=row('폐기 할 일 todo-10');
+  assert.strictEqual(dropped.querySelector('.pr-mismatch'),null,'a dropped to-do is not flagged');
+  assert.match(dropped.querySelector('.todo-resolution-dropped').title,/범위 제외/);
+  // Only dropped ones.
+  const which=c.document.querySelector('select[aria-label="종료 사유"]');
+  which.value='dropped';which.dispatchEvent(new c.window.Event('change'));await c.settle();
+  assert.deepStrictEqual([...c.document.querySelectorAll('.todo-done-title')].map(n=>n.textContent),['폐기 할 일 todo-10']);
+  which.value='';which.dispatchEvent(new c.window.Event('change'));await c.settle();
+  // Back to 반영 대기, one at a time and all at once.
+  row('할 일 todo-8').querySelector('.todo-done-actions button').click();await c.settle();
+  const lastMove=()=>c.requests.filter(r=>r.path==='/api/tools/move_todo').at(-1).body;
+  assert.strictEqual(lastMove().status,'pending_release');
+  const bulk=c.document.querySelector('.todo-bulk-release');
+  assert.strictEqual(bulk.hidden,false);
+  assert.match(bulk.textContent,/병합 전 1건 모두 반영 대기로/);
+  // Drop with a reason.
+  c.window.prompt=()=>' 불필요 ';
+  row('할 일 todo-9').querySelector('.todo-done-actions button').click();await c.settle();
+  const args=lastMove();
+  assert.strictEqual(args.resolution,'dropped');
+  assert.strictEqual(args.resolution_note,'불필요');
+  assert.strictEqual(args.status,'completed');
+  check(c,'todosDone › release or drop');
+});
+
+test('a 반영 대기 card shows auto completion, or the way out when every PR closed',async t=>{
+  const c=await open(t,'full');
+  await show(c,'todos');
+  const cardOf=id=>c.document.querySelector(`.todo-card[data-id="${id}"]`);
+  assert.match(cardOf('todo-6').querySelector('.todo-release-note').textContent,/PR 병합 시 자동 완료/);
+  assert.strictEqual(cardOf('todo-6').querySelector('.todo-closed-prs'),null);
+  const closed=cardOf('todo-11').querySelector('.todo-closed-prs');
+  assert.match(closed.textContent,/PR 모두 닫힘/);
+  assert.deepStrictEqual([...closed.querySelectorAll('button')].map(b=>b.textContent),['폐기로 완료','진행 중으로']);
+  c.window.prompt=()=>null;
+  closed.querySelector('button').click();await c.settle();
+  assert.strictEqual(c.document.querySelector('.todo-dialog'),null,'the card button does not open the dialog');
+  // The dialog offers 폐기 too.
+  cardOf('todo-1').click();await c.settle();
+  assert.ok([...c.document.querySelectorAll('.todo-dialog button')].some(b=>b.textContent==='폐기'));
+  check(c,'todos › release state');
 });
 
 test('pending-release cards show their work branch and the dialog edits it',async t=>{

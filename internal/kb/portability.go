@@ -371,6 +371,13 @@ func renderTodosMarkdown(todos []Todo) string {
 				}
 				title += " (선행: " + strings.Join(names, ", ") + ")"
 			}
+			if t.Resolution == "dropped" {
+				title += " (폐기"
+				if t.ResolutionNote != "" {
+					title += ": " + t.ResolutionNote
+				}
+				title += ")"
+			}
 			fmt.Fprintf(&b, "| %s | %s | %s | %s | %s | %s | %s |\n", t.Priority, cell(title), cell(t.Category), progress, cell(t.AssigneeName), t.DueDate, cell(truncateRunes(t.Body, 300)))
 		}
 	}
@@ -597,6 +604,11 @@ func importTodos(ctx context.Context, tx *sql.Tx, a Identity, projectID string, 
 			}
 			completedAt = at.UTC().Format(time.RFC3339Nano)
 		}
+		// A dropped (폐기) completion carries over; anything else imports as done.
+		resolution, note := "", ""
+		if in.Status == "completed" && t.Resolution == "dropped" {
+			resolution, note = "dropped", truncateRunes(strings.TrimSpace(t.ResolutionNote), 500)
+		}
 		var exists bool
 		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM todos WHERE project_id=$1 AND (id=$2 OR imported_from=$2))`, projectID, t.ID).Scan(&exists); err != nil {
 			return err
@@ -611,10 +623,10 @@ func importTodos(ctx context.Context, tx *sql.Tx, a Identity, projectID string, 
 		count++
 		newID := uuid.NewString()
 		created[t.ID] = newID
-		if _, err := tx.ExecContext(ctx, `INSERT INTO todos(id,project_id,title,body,status,priority,category,progress,due_date,position,created_by,updated_by,completed_at,imported_from)
+		if _, err := tx.ExecContext(ctx, `INSERT INTO todos(id,project_id,title,body,status,priority,category,progress,due_date,position,created_by,updated_by,completed_at,imported_from,resolution,resolution_note)
 			VALUES($1,$2,$3,$4,$5,$6,$7,$8,NULLIF($9,'')::date,$10,$11,$11,
-				CASE WHEN $5<>'completed' THEN NULL WHEN $12='' THEN now() ELSE $12::timestamptz END,$13)`,
-			newID, projectID, in.Title, in.Body, in.Status, in.Priority, in.Category, in.Progress, in.DueDate, t.Position, a.User.ID, completedAt, t.ID); err != nil {
+				CASE WHEN $5<>'completed' THEN NULL WHEN $12='' THEN now() ELSE $12::timestamptz END,$13,$14,$15)`,
+			newID, projectID, in.Title, in.Body, in.Status, in.Priority, in.Category, in.Progress, in.DueDate, t.Position, a.User.ID, completedAt, t.ID, resolution, note); err != nil {
 			return err
 		}
 		result.TodosCreated++

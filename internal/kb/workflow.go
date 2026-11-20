@@ -458,8 +458,17 @@ func (s *Store) finishTask(ctx context.Context, tx *sql.Tx, a Identity, in Finis
 	} else {
 		out.DecisionCandidates = nil
 	}
-	if in.Outcome == "completed" {
-		if out.Todo, err = completeRunTodo(ctx, tx, run.ID, a.User.ID, false); err != nil {
+	if in.Outcome == "completed" && len(pulls) > 0 {
+		// Done but not merged: the to-do waits in 반영 대기 and completes when
+		// the pull requests land, instead of showing done with an open PR.
+		if out.Todo, err = releaseRunTodo(ctx, tx, run.ID, a.User.ID); err != nil {
+			return nil, err
+		}
+		if out.Todo != nil && out.Todo.Status == "pending_release" {
+			out.Guidance += " The linked to-do waits in pending_release until the tracked pull requests are merged, then completes automatically. If they are closed without merging because the work is no longer needed, a person closes it as dropped (move_todo resolution dropped)."
+		}
+	} else if in.Outcome == "completed" {
+		if out.Todo, err = completeRunTodo(ctx, tx, run.ID, a.User.ID, false, false); err != nil {
 			return nil, err
 		}
 	} else if run.TodoID != "" {
