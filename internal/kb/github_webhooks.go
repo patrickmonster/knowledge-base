@@ -24,8 +24,8 @@ import (
 // A project owner registers a repository in the web console and pastes the
 // payload URL and secret into the repository's webhook settings on GitHub.
 // GitHub then pushes events as they happen, so issue sync and pull request
-// merge tracking no longer depend on polling the GitHub API (60 requests per
-// hour without GITHUB_TOKEN):
+// merge tracking do not depend on polling the GitHub API (the server has no
+// GitHub token: 60 requests per hour, public repositories only):
 //
 //   - issues: opened, edited, closed, reopened, labeled, unlabeled → the same
 //     upsert as import_github_issues, keyed by owner/repo#number.
@@ -117,9 +117,6 @@ type WebhookDelivery struct {
 
 type GitHubWebhookList struct {
 	Webhooks []GitHubWebhook `json:"webhooks"`
-	// TokenConfigured tells whether GITHUB_TOKEN is set (initial imports of
-	// private repositories and the safety-net checks need it).
-	TokenConfigured bool `json:"token_configured"`
 }
 
 type GitHubWebhookInput struct {
@@ -148,6 +145,10 @@ type GitHubWebhookSaved struct {
 	Secret     string         `json:"secret,omitempty"`
 	Removed    bool           `json:"removed,omitempty"`
 }
+
+// webhookPullRequestDays is how long a pull request state reported by a
+// webhook is kept for tasks that name the pull request later.
+const webhookPullRequestDays = 90
 
 func registerGitHubWebhookTools(t Tools, s *Store) {
 	add(t, s, "list_github_webhooks", "Web console only: list a project's GitHub webhooks (secrets never shown) with recent deliveries.", false, func(in ProjectInput) string { return in.ProjectID }, s.listGitHubWebhooks)
@@ -183,7 +184,7 @@ func (s *Store) listGitHubWebhooks(ctx context.Context, tx *sql.Tx, a Identity, 
 	for i := range items {
 		items[i].PayloadURL = s.webhookPayloadURL(items[i].ID)
 	}
-	return GitHubWebhookList{Webhooks: items, TokenConfigured: s.GitHub != nil && s.GitHub.Token != ""}, nil
+	return GitHubWebhookList{Webhooks: items}, nil
 }
 
 func (s *Store) setGitHubWebhook(ctx context.Context, tx *sql.Tx, a Identity, in GitHubWebhookInput) (any, error) {
@@ -554,6 +555,18 @@ func (s *Store) processWebhookEvent(ctx context.Context, tx *sql.Tx, hook webhoo
 		case env.Action == "closed":
 			state = "closed"
 		}
+		// Remember the state even when no task names the pull request yet: a
+		// task finished after the merge picks it up (insertPullRequests).
+		if _, err := tx.ExecContext(ctx, `INSERT INTO github_pull_requests(project_id,repository,number,state,merge_commit,merged_at)
+			VALUES($1,$2,$3,$4,$5,$6::timestamptz) ON CONFLICT (project_id,repository,number) DO UPDATE
+			SET state=EXCLUDED.state,merge_commit=EXCLUDED.merge_commit,merged_at=EXCLUDED.merged_at,received_at=now()`,
+			hook.ProjectID, hook.Repository, pr.Number, state, mergeCommit, mergedAt); err != nil {
+			return WebhookResult{}, err
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM github_pull_requests WHERE project_id=$1 AND received_at<now()-make_interval(days=>$2)`,
+			hook.ProjectID, webhookPullRequestDays); err != nil {
+			return WebhookResult{}, err
+		}
 		// Deployment ("deployed") is still decided by the server comparing its
 		// own build, after the next restart.
 		res, err := tx.ExecContext(ctx, `UPDATE task_pull_requests SET state=$4,merge_commit=$5,merged_at=$6::timestamptz,deployed_commit=NULL,checked_at=now(),check_error=NULL
@@ -563,7 +576,7 @@ func (s *Store) processWebhookEvent(ctx context.Context, tx *sql.Tx, hook webhoo
 		}
 		n, _ := res.RowsAffected()
 		if n == 0 {
-			return WebhookResult{Outcome: "ignored", Detail: fmt.Sprintf("#%d is not tracked by a task", pr.Number)}, nil
+			return WebhookResult{Outcome: "processed", Detail: fmt.Sprintf("#%d %s (no task yet; remembered)", pr.Number, state)}, nil
 		}
 		return WebhookResult{Outcome: "processed", Detail: fmt.Sprintf("#%d %s (%d task)", pr.Number, state, n)}, nil
 	}

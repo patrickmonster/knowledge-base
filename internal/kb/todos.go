@@ -133,7 +133,7 @@ const todoSelect = `SELECT to_jsonb(t)||jsonb_build_object('assignee_name',COALE
 	'open_task_count',(SELECT count(*) FROM task_runs r WHERE r.todo_id=t.id AND r.status='open'),
 	'open_issue_count',(SELECT count(*) FROM issues i WHERE i.todo_id=t.id AND i.status IN ('open','answered')),
 	'blocking_issue_count',(SELECT count(*) FROM issues i WHERE i.todo_id=t.id AND i.status='open' AND i.blocking),
-	'pull_requests',COALESCE((SELECT jsonb_agg(jsonb_build_object('repository',pr.repository,'number',pr.number,'url',pr.url,'state',pr.state) ORDER BY pr.created_at DESC)
+	'pull_requests',COALESCE((SELECT jsonb_agg(jsonb_build_object('repository',pr.repository,'number',pr.number,'url',pr.url,'state',pr.state,'task_id',pr.task_id,'check_error',pr.check_error,'confirmed_at',pr.confirmed_at) ORDER BY pr.created_at DESC)
 		FROM task_pull_requests pr JOIN task_runs r ON r.id=pr.task_id WHERE r.todo_id=t.id),'[]'::jsonb))||` + todoRelationsSelect + `
 	FROM todos t LEFT JOIN users a ON a.id=t.assignee_id LEFT JOIN users c ON c.id=t.created_by`
 
