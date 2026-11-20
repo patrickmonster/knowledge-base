@@ -25,7 +25,7 @@ import (
 // payload URL and secret into the repository's webhook settings on GitHub.
 // GitHub then pushes events as they happen, so issue sync and pull request
 // merge tracking no longer depend on polling the GitHub API (60 requests per
-// hour without GITHUB_TOKEN):
+// hour without a repository token):
 //
 //   - issues: opened, edited, closed, reopened, labeled, unlabeled → the same
 //     upsert as import_github_issues, keyed by owner/repo#number.
@@ -103,8 +103,12 @@ type GitHubWebhook struct {
 	PayloadURL        string   `json:"payload_url"`
 	// SecretSet is false for webhooks created before migration 028 until the
 	// secret is rotated; deliveries are refused until then.
-	SecretSet bool              `json:"secret_set"`
-	Recent    []WebhookDelivery `json:"recent"`
+	SecretSet bool `json:"secret_set"`
+	// TokenConfigured tells whether the repository has a GitHub token on the
+	// project's 저장소 screen (first imports of a private repository and the
+	// safety-net merge checks need it).
+	TokenConfigured bool              `json:"token_configured"`
+	Recent          []WebhookDelivery `json:"recent"`
 }
 
 type WebhookDelivery struct {
@@ -117,9 +121,6 @@ type WebhookDelivery struct {
 
 type GitHubWebhookList struct {
 	Webhooks []GitHubWebhook `json:"webhooks"`
-	// TokenConfigured tells whether GITHUB_TOKEN is set (initial imports of
-	// private repositories and the safety-net checks need it).
-	TokenConfigured bool `json:"token_configured"`
 }
 
 type GitHubWebhookInput struct {
@@ -161,6 +162,8 @@ func registerGitHubWebhookTools(t Tools, s *Store) {
 }
 
 const webhookSelect = `SELECT (to_jsonb(w)-'secret')||jsonb_build_object('created_by_name',u.name,'secret_set',w.secret IS NOT NULL,
+	'token_configured',EXISTS(SELECT 1 FROM project_repositories r WHERE r.project_id=w.project_id AND r.github_token IS NOT NULL
+		AND split_part(r.repository,'/',2)||'/'||split_part(r.repository,'/',3)=w.repository AND split_part(r.repository,'/',4)=''),
 	'recent',coalesce((SELECT jsonb_agg(to_jsonb(d)-'webhook_id' ORDER BY d.received_at DESC) FROM (SELECT * FROM github_webhook_deliveries
 		WHERE webhook_id=w.id ORDER BY received_at DESC LIMIT 10) d),'[]'::jsonb))
 	FROM github_webhooks w JOIN users u ON u.id=w.created_by`
@@ -183,7 +186,7 @@ func (s *Store) listGitHubWebhooks(ctx context.Context, tx *sql.Tx, a Identity, 
 	for i := range items {
 		items[i].PayloadURL = s.webhookPayloadURL(items[i].ID)
 	}
-	return GitHubWebhookList{Webhooks: items, TokenConfigured: s.GitHub != nil && s.GitHub.Token != ""}, nil
+	return GitHubWebhookList{Webhooks: items}, nil
 }
 
 func (s *Store) setGitHubWebhook(ctx context.Context, tx *sql.Tx, a Identity, in GitHubWebhookInput) (any, error) {

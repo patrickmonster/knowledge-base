@@ -30,19 +30,16 @@ func TestParseGitHubRepository(t *testing.T) {
 }
 
 func TestNewGitHubClient(t *testing.T) {
-	if c, err := NewGitHubClient("", ""); err != nil || c.BaseURL != "" || c.Token != "" {
+	if c, err := NewGitHubClient(""); err != nil || c.BaseURL != "" || c.Token != "" {
 		t.Fatalf("empty config: %+v %v", c, err)
 	}
-	if c, err := NewGitHubClient("https://ghe.example/api/v3", " tok "); err != nil || c.Token != "tok" {
+	if c, err := NewGitHubClient(" https://ghe.example/api/v3 "); err != nil || c.BaseURL != "https://ghe.example/api/v3" || c.Token != "" {
 		t.Fatalf("enterprise config: %+v %v", c, err)
 	}
 	for _, bad := range []string{"http://api.github.com", "https://u:p@api.github.com", "https://api.github.com?x=1", "ftp://x"} {
-		if _, err := NewGitHubClient(bad, ""); err == nil {
+		if _, err := NewGitHubClient(bad); err == nil {
 			t.Fatalf("accepted base URL %q", bad)
 		}
-	}
-	if _, err := NewGitHubClient("", "a b"); err == nil {
-		t.Fatal("accepted token with whitespace")
 	}
 }
 
@@ -112,10 +109,10 @@ func TestGitHubClientErrors(t *testing.T) {
 		code   string
 		hint   string
 	}{
-		{404, nil, "", "NOT_FOUND", "GITHUB_TOKEN"},
+		{404, nil, "", "NOT_FOUND", "저장소"},
 		{404, nil, "ghp_secretvalue", "NOT_FOUND", "token cannot read"},
 		{401, nil, "ghp_secretvalue", "GITHUB_UNAUTHORIZED", ""},
-		{403, map[string]string{"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": "1790000000"}, "", "GITHUB_RATE_LIMITED", "GITHUB_TOKEN"},
+		{403, map[string]string{"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": "1790000000"}, "", "GITHUB_RATE_LIMITED", "저장소"},
 		{429, nil, "ghp_secretvalue", "GITHUB_RATE_LIMITED", ""},
 		{403, nil, "ghp_secretvalue", "GITHUB_UNAUTHORIZED", ""},
 		{410, nil, "", "NOT_FOUND", "disabled"},

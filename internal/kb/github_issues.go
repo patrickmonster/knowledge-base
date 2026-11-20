@@ -37,29 +37,49 @@ const (
 
 // GitHubClient reads the GitHub REST API. Token is optional: public
 // repositories work without one (60 requests per hour per server address);
-// private repositories and higher limits need a token with read access to
-// issues. The token is never returned or logged.
+// private repositories and higher limits need a token with read access. The
+// server has no token of its own: each call takes the token a project owner or
+// admin set for that repository in the web console (githubFor). The token is
+// never returned or logged.
 type GitHubClient struct {
 	BaseURL string
 	Token   string
 	HTTP    *http.Client
 }
 
-// NewGitHubClient builds the import client from GITHUB_API_URL (optional,
-// https only, for GitHub Enterprise Server: https://host/api/v3) and
-// GITHUB_TOKEN (optional).
-func NewGitHubClient(baseURL, token string) (*GitHubClient, error) {
-	baseURL, token = strings.TrimSpace(baseURL), strings.TrimSpace(token)
+// NewGitHubClient builds the client from GITHUB_API_URL (optional, https
+// only, for GitHub Enterprise Server: https://host/api/v3).
+func NewGitHubClient(baseURL string) (*GitHubClient, error) {
+	baseURL = strings.TrimSpace(baseURL)
 	if baseURL != "" {
 		u, err := url.Parse(baseURL)
 		if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
 			return nil, errors.New("GITHUB_API_URL must be an https URL without credentials, query, or fragment")
 		}
 	}
-	if strings.ContainsAny(token, " \t\r\n") {
-		return nil, errors.New("GITHUB_TOKEN must not contain whitespace")
+	return &GitHubClient{BaseURL: baseURL}, nil
+}
+
+// githubFor returns a client for repo ("owner/name") in the project, carrying
+// the token set for that repository on the project's 저장소 screen, if any.
+// The repository is matched on owner/name whatever its host, so a GitHub
+// Enterprise repository registered as ghe.example/owner/name also matches.
+func (s *Store) githubFor(ctx context.Context, q Querier, projectID, repo string) (*GitHubClient, error) {
+	c := GitHubClient{}
+	if s.GitHub != nil {
+		c = *s.GitHub
 	}
-	return &GitHubClient{BaseURL: baseURL, Token: token}, nil
+	c.Token = ""
+	var token sql.NullString
+	err := q.QueryRowContext(ctx, `SELECT github_token FROM project_repositories
+		WHERE project_id=$1 AND github_token IS NOT NULL AND split_part(repository,'/',2)||'/'||split_part(repository,'/',3)=lower($2)
+			AND split_part(repository,'/',4)=''
+		ORDER BY (split_part(repository,'/',1)='github.com') DESC,repository LIMIT 1`, projectID, repo).Scan(&token)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return nil, err
+	}
+	c.Token = token.String
+	return &c, nil
 }
 
 type githubIssue struct {
@@ -195,11 +215,11 @@ func githubStatusError(resp *http.Response, hasToken bool) error {
 		return nil
 	case resp.StatusCode == http.StatusNotFound:
 		if hasToken {
-			return problem("NOT_FOUND", "GitHub repository not found, or the server's GitHub token cannot read it.")
+			return problem("NOT_FOUND", "GitHub repository not found, or the repository's GitHub token cannot read it.")
 		}
-		return problem("NOT_FOUND", "GitHub repository not found. Private repositories need GITHUB_TOKEN on the server.")
+		return problem("NOT_FOUND", "GitHub repository not found. For a private repository, a project owner or admin sets a GitHub token for it in the web console (프로젝트와 권한 → 저장소).")
 	case resp.StatusCode == http.StatusUnauthorized:
-		return problem("GITHUB_UNAUTHORIZED", "The server's GitHub token was rejected. Ask an administrator to replace GITHUB_TOKEN.")
+		return problem("GITHUB_UNAUTHORIZED", "The repository's GitHub token was rejected (expired or revoked). A project owner or admin replaces it in the web console (프로젝트와 권한 → 저장소).")
 	case resp.StatusCode == http.StatusTooManyRequests,
 		resp.StatusCode == http.StatusForbidden && resp.Header.Get("X-RateLimit-Remaining") == "0":
 		msg := "GitHub rate limit reached. Retry later"
@@ -207,7 +227,7 @@ func githubStatusError(resp *http.Response, hasToken bool) error {
 			msg += " (after " + time.Unix(reset, 0).UTC().Format(time.RFC3339) + ")"
 		}
 		if !hasToken {
-			msg += "; setting GITHUB_TOKEN on the server raises the limit"
+			msg += "; a GitHub token for the repository (프로젝트와 권한 → 저장소) raises the limit"
 		}
 		return problem("GITHUB_RATE_LIMITED", msg+".")
 	case resp.StatusCode == http.StatusForbidden:
@@ -272,15 +292,17 @@ func (s *Store) ImportGitHubIssues(ctx context.Context, a Identity, in ImportGit
 		return nil, err
 	}
 	// Authorize before calling GitHub so viewers and read-only keys cannot use
-	// the server's token or rate limit.
+	// the repository's token or the server's rate limit.
+	var gh *GitHubClient
 	if _, err := s.Perform(ctx, a, "import_github_issues_check", plan.in.ProjectID, true, false, func(tx *sql.Tx) (any, error) {
-		return nil, checkGitHubImportTargets(ctx, tx, a, &plan.in)
+		if err := checkGitHubImportTargets(ctx, tx, a, &plan.in); err != nil {
+			return nil, err
+		}
+		var err error
+		gh, err = s.githubFor(ctx, tx, plan.in.ProjectID, plan.repo)
+		return nil, err
 	}); err != nil {
 		return nil, err
-	}
-	gh := s.GitHub
-	if gh == nil {
-		gh = &GitHubClient{}
 	}
 	items, skipped, err := gh.ListIssues(ctx, plan.repo, plan.in.State, plan.labels, plan.in.Since, plan.in.Limit)
 	if err != nil {

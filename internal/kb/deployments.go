@@ -231,12 +231,18 @@ func (s *Store) checkDeployments(ctx context.Context, scope deploymentScope) (in
 	if err != nil {
 		return 0, err
 	}
-	gh := s.GitHub
-	if gh == nil {
-		gh = &GitHubClient{}
-	}
 	checked := 0
+	// A rate limit is per token (or per server address without one), so only
+	// the repositories sharing the exhausted token stop for this round.
+	limited := map[string]bool{}
 	for _, p := range rows {
+		gh, err := s.githubFor(ctx, s.DB, p.ProjectID, p.Repository)
+		if err != nil {
+			return checked, err
+		}
+		if limited[gh.Token] {
+			continue
+		}
 		c, cancel := context.WithTimeout(ctx, 45*time.Second)
 		next, err := s.checkPullRequest(c, gh, p)
 		cancel()
@@ -249,7 +255,7 @@ func (s *Store) checkDeployments(ctx context.Context, scope deploymentScope) (in
 				return checked, err
 			}
 			if code == "GITHUB_RATE_LIMITED" {
-				break
+				limited[gh.Token] = true
 			}
 			continue
 		}
