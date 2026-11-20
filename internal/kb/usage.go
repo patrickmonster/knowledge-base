@@ -119,6 +119,38 @@ type UsageInventory struct {
 	EmbeddingsFailed int          `json:"embeddings_failed"`
 }
 
+// UsageTodoWeek counts to-dos created and completed in one Monday-start week
+// (Asia/Seoul). The first and last weeks may extend past the window; only days
+// inside the window are counted.
+type UsageTodoWeek struct {
+	WeekStart string `json:"week_start" jsonschema:"Monday of the week, YYYY-MM-DD"`
+	Created   int    `json:"created"`
+	Completed int    `json:"completed"`
+}
+
+// UsageTodoBacklog is the waiting to-dos (not completed, not ideas) of one priority.
+type UsageTodoBacklog struct {
+	Priority       string `json:"priority" jsonschema:"high, medium or low"`
+	NotStarted     int    `json:"not_started"`
+	InProgress     int    `json:"in_progress"`
+	InReview       int    `json:"in_review"`
+	PendingRelease int    `json:"pending_release"`
+	Total          int    `json:"total"`
+	OldestDays     int    `json:"oldest_days" jsonschema:"Whole days since the oldest waiting to-do of this priority was created; 0 when none"`
+}
+
+// UsageTodos summarizes the project's to-do board (할 일).
+type UsageTodos struct {
+	Created        int                `json:"created" jsonschema:"To-dos created in the window"`
+	Completed      int                `json:"completed" jsonschema:"To-dos whose completion falls in the window and that are still completed"`
+	AvgLeadDays    *float64           `json:"avg_lead_days" jsonschema:"Average days from creation to completion of the to-dos completed in the window; null when none"`
+	MedianLeadDays *float64           `json:"median_lead_days"`
+	Waiting        int                `json:"waiting" jsonschema:"Current to-dos in not_started, in_progress, in_review or pending_release"`
+	Ideas          int                `json:"ideas"`
+	Weekly         []UsageTodoWeek    `json:"weekly" jsonschema:"Weeks overlapping the window, oldest first, zero-filled"`
+	Backlog        []UsageTodoBacklog `json:"backlog" jsonschema:"Waiting to-dos per priority: high, medium, low (always three rows)"`
+}
+
 type UsageStats struct {
 	ProjectID     string               `json:"project_id"`
 	Days          int                  `json:"days"`
@@ -135,6 +167,7 @@ type UsageStats struct {
 	SearchLatency []UsageSearchLatency `json:"search_latency" jsonschema:"Search time per retrieval path from search_knowledge and task context searches in the window"`
 	HNSWReview    UsageHNSWReview      `json:"hnsw_review" jsonschema:"Vector search times in the window against the project's HNSW review thresholds"`
 	KindGrowth    []UsageKindGrowth    `json:"kind_growth"`
+	Todos         UsageTodos           `json:"todos"`
 	Guidance      string               `json:"guidance"`
 }
 
@@ -158,7 +191,7 @@ func usageStats(ctx context.Context, tx *sql.Tx, a Identity, in UsageStatsInput,
 	}
 	args := []any{in.ProjectID, in.Days, usageTimezone, usageSearchActions, usageReadActions}
 	out := UsageStats{ProjectID: in.ProjectID, Days: in.Days, Timezone: usageTimezone,
-		Guidance: "Calls, searches, reads and active users come from the audit log and only cover what AUDIT_RETENTION_DAYS keeps; document writes come from revisions. Searches include start_task and get_task_context. search_misses lists zero-result search_knowledge queries, kept at most 365 days without the searching user; read them as knowledge to write or glossary synonyms to add. search_latency summarizes measured search times (same retention as search_misses); compare p95_vector_ms with max_scanned_chunks to decide when exact vector search needs an HNSW index. hnsw_review applies the project's thresholds (set_search_thresholds, or the server default) to all vector searches in the window: status review means a threshold is reached. The call that reads these statistics is not counted."}
+		Guidance: "Calls, searches, reads and active users come from the audit log and only cover what AUDIT_RETENTION_DAYS keeps; document writes come from revisions. Searches include start_task and get_task_context. search_misses lists zero-result search_knowledge queries, kept at most 365 days without the searching user; read them as knowledge to write or glossary synonyms to add. search_latency summarizes measured search times (same retention as search_misses); compare p95_vector_ms with max_scanned_chunks to decide when exact vector search needs an HNSW index. hnsw_review applies the project's thresholds (set_search_thresholds, or the server default) to all vector searches in the window: status review means a threshold is reached. todos covers the to-do board: created and completed in the window, lead time from creation to completion, weekly flow and the waiting backlog per priority (ideas excluded). The call that reads these statistics is not counted."}
 
 	type header struct {
 		From   string      `json:"from"`
@@ -296,5 +329,49 @@ func usageStats(ctx context.Context, tx *sql.Tx, a Identity, in UsageStatsInput,
 	FROM run GROUP BY kind,start ORDER BY start+sum(added) DESC,kind`, args[:3]...); err != nil {
 		return nil, err
 	}
+	if out.Todos, err = usageTodos(ctx, tx, args[:3]); err != nil {
+		return nil, err
+	}
 	return out, nil
+}
+
+// todoWaitingStatuses are the board columns that still need work.
+const todoWaitingStatuses = `('not_started','in_progress','in_review','pending_release')`
+
+func usageTodos(ctx context.Context, tx *sql.Tx, args []any) (UsageTodos, error) {
+	out, err := one[UsageTodos](ctx, tx, usageWindow+`,
+	d AS (SELECT extract(epoch FROM t.completed_at-t.created_at)/86400.0 AS lead FROM todos t, ws
+		WHERE t.project_id=$1 AND t.status='completed' AND t.completed_at>=ws.start_at)
+	SELECT jsonb_build_object(
+		'created',(SELECT count(*) FROM todos t WHERE t.project_id=$1 AND t.created_at>=ws.start_at),
+		'completed',(SELECT count(*) FROM d),
+		'avg_lead_days',(SELECT round(avg(lead)::numeric,1) FROM d),
+		'median_lead_days',(SELECT round((percentile_cont(0.5) WITHIN GROUP (ORDER BY lead))::numeric,1) FROM d),
+		'waiting',(SELECT count(*) FROM todos t WHERE t.project_id=$1 AND t.status IN `+todoWaitingStatuses+`),
+		'ideas',(SELECT count(*) FROM todos t WHERE t.project_id=$1 AND t.status='idea'))
+	FROM ws`, args...)
+	if err != nil {
+		return out, err
+	}
+	if out.Weekly, err = many[UsageTodoWeek](ctx, tx, usageWindow+`,
+	wk AS (SELECT generate_series(date_trunc('week',ws.from_day),date_trunc('week',ws.to_day),interval '7 days')::date AS week FROM ws),
+	c AS (SELECT date_trunc('week',t.completed_at AT TIME ZONE $3)::date AS week,count(*) AS n FROM todos t, ws
+		WHERE t.project_id=$1 AND t.status='completed' AND t.completed_at>=ws.start_at GROUP BY 1),
+	n AS (SELECT date_trunc('week',t.created_at AT TIME ZONE $3)::date AS week,count(*) AS n FROM todos t, ws
+		WHERE t.project_id=$1 AND t.created_at>=ws.start_at GROUP BY 1)
+	SELECT jsonb_build_object('week_start',to_char(wk.week,'YYYY-MM-DD'),'created',coalesce(n.n,0),'completed',coalesce(c.n,0))
+	FROM wk LEFT JOIN c USING(week) LEFT JOIN n USING(week) ORDER BY wk.week`, args...); err != nil {
+		return out, err
+	}
+	out.Backlog, err = many[UsageTodoBacklog](ctx, tx, `SELECT jsonb_build_object('priority',p.priority,
+		'not_started',count(t.id) FILTER (WHERE t.status='not_started'),
+		'in_progress',count(t.id) FILTER (WHERE t.status='in_progress'),
+		'in_review',count(t.id) FILTER (WHERE t.status='in_review'),
+		'pending_release',count(t.id) FILTER (WHERE t.status='pending_release'),
+		'total',count(t.id),
+		'oldest_days',coalesce(floor(extract(epoch FROM now()-min(t.created_at))/86400),0)::int)
+	FROM (VALUES ('high',0),('medium',1),('low',2)) AS p(priority,ord)
+	LEFT JOIN todos t ON t.project_id=$1 AND t.priority=p.priority AND t.status IN `+todoWaitingStatuses+`
+	GROUP BY p.priority,p.ord ORDER BY p.ord`, args[0])
+	return out, err
 }

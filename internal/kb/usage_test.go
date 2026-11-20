@@ -97,3 +97,78 @@ func TestUsageStats(t *testing.T) {
 	_, err = call(t, tools, editor, "get_usage_stats", UsageStatsInput{ProjectID: p.ID, Days: 366})
 	denied(t, err, "INVALID_INPUT")
 }
+
+func TestUsageStatsTodos(t *testing.T) {
+	s := testStore(t)
+	tools := NewTools(s)
+	admin := loginAs(t, s, "admin@example.com")
+	p := mustCall(t, tools, admin, "create_project", CreateProjectInput{Slug: "usage-todos", Name: "usage-todos"}).(Project)
+	other := mustCall(t, tools, admin, "create_project", CreateProjectInput{Slug: "usage-todos-other", Name: "usage-todos-other"}).(Project)
+
+	// An empty board still reports three priority rows and zero-filled weeks.
+	empty := mustCall(t, tools, admin, "get_usage_stats", UsageStatsInput{ProjectID: p.ID, Days: 7}).(UsageStats).Todos
+	if empty.Created != 0 || empty.Completed != 0 || empty.AvgLeadDays != nil || empty.MedianLeadDays != nil || len(empty.Backlog) != 3 || len(empty.Weekly) < 1 || len(empty.Weekly) > 2 {
+		t.Fatalf("empty: %+v", empty)
+	}
+
+	save := func(project, title, status, priority string) Todo {
+		return mustCall(t, tools, admin, "save_todo", SaveTodoInput{ProjectID: project, Title: title, Status: status, Priority: priority}).(Todo)
+	}
+	fast := save(p.ID, "빠른 완료", "completed", "high")
+	slow := save(p.ID, "느린 완료", "completed", "medium")
+	old := save(p.ID, "지난달 완료", "completed", "low")
+	waitHigh := save(p.ID, "오래 기다림", "not_started", "high")
+	save(p.ID, "진행 중", "in_progress", "high")
+	save(p.ID, "검토", "in_review", "medium")
+	save(p.ID, "반영 대기", "pending_release", "low")
+	save(p.ID, "아이디어", "idea", "high")
+	save(other.ID, "다른 프로젝트", "not_started", "high")
+
+	exec := func(q string, args ...any) {
+		t.Helper()
+		if _, err := s.DB.Exec(q, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// fast: 1 day lead; slow: 4 days lead; old: completed 40 days ago (outside a 7-day window).
+	exec(`UPDATE todos SET created_at=now()-interval '1 day', completed_at=now() WHERE id=$1`, fast.ID)
+	exec(`UPDATE todos SET created_at=now()-interval '5 days', completed_at=now()-interval '1 day' WHERE id=$1`, slow.ID)
+	exec(`UPDATE todos SET created_at=now()-interval '50 days', completed_at=now()-interval '40 days' WHERE id=$1`, old.ID)
+	exec(`UPDATE todos SET created_at=now()-interval '20 days' WHERE id=$1`, waitHigh.ID)
+
+	got := mustCall(t, tools, admin, "get_usage_stats", UsageStatsInput{ProjectID: p.ID, Days: 7}).(UsageStats).Todos
+	// Created in the window: all but old (50 days) and waitHigh (20 days).
+	if got.Created != 6 || got.Completed != 2 || got.Waiting != 4 || got.Ideas != 1 {
+		t.Fatalf("summary: %+v", got)
+	}
+	if got.AvgLeadDays == nil || *got.AvgLeadDays != 2.5 || got.MedianLeadDays == nil || *got.MedianLeadDays != 2.5 {
+		t.Fatalf("lead: avg %v median %v", got.AvgLeadDays, got.MedianLeadDays)
+	}
+	created, completed := 0, 0
+	for i, w := range got.Weekly {
+		created += w.Created
+		completed += w.Completed
+		if i > 0 && w.WeekStart <= got.Weekly[i-1].WeekStart {
+			t.Fatalf("weeks out of order: %+v", got.Weekly)
+		}
+	}
+	if created != got.Created || completed != got.Completed {
+		t.Fatalf("weekly sums %d/%d vs %+v", created, completed, got.Weekly)
+	}
+	want := []UsageTodoBacklog{
+		{Priority: "high", NotStarted: 1, InProgress: 1, Total: 2, OldestDays: 20},
+		{Priority: "medium", InReview: 1, Total: 1},
+		{Priority: "low", PendingRelease: 1, Total: 1},
+	}
+	for i, b := range got.Backlog {
+		if b != want[i] {
+			t.Fatalf("backlog[%d]: %+v want %+v", i, b, want[i])
+		}
+	}
+
+	// A 90-day window includes the to-do completed 40 days ago.
+	wide := mustCall(t, tools, admin, "get_usage_stats", UsageStatsInput{ProjectID: p.ID, Days: 90}).(UsageStats).Todos
+	if wide.Completed != 3 || wide.Created != 8 || wide.AvgLeadDays == nil || *wide.AvgLeadDays != 5 || *wide.MedianLeadDays != 4 {
+		t.Fatalf("wide: %+v avg %v median %v", wide, wide.AvgLeadDays, wide.MedianLeadDays)
+	}
+}

@@ -28,7 +28,7 @@ async function usagePage(){
     const [stats,quality]=await Promise.all([tool('get_usage_stats',{project_id:current.id,days}),tool('get_retrieval_metrics',{project_id:current.id,days}).catch(()=>null)]);
     if(ticket!==generation)return;
     summary.textContent=`${current.name} · ${stats.from} ~ ${stats.to} (${stats.timezone}) · 통계를 조회한 이 요청은 집계에서 빠집니다.`;
-    body.replaceChildren(usageTiles(stats),usageTrends(stats),usageKindGrowth(stats),usageQuality(quality),usageSearchMisses(stats),usageSearchLatency(stats,current,refresh),usageTables(stats));
+    body.replaceChildren(usageTiles(stats),usageTrends(stats),usageKindGrowth(stats),usageTodos(stats),usageQuality(quality),usageSearchMisses(stats),usageSearchLatency(stats,current,refresh),usageTables(stats));
   }
   await refresh();
   return root;
@@ -100,6 +100,23 @@ function usageKindGrowth(s){
   if(!s.kind_growth?.length){c.append(el('p','아직 문서가 없습니다.','muted'));return c;}
   c.append(table(['종류','기간 시작','추가','현재','누적 추이'],s.kind_growth.map(g=>[usageKinds[g.kind]||g.kind,usageNumber(g.start),g.added?'+'+usageNumber(g.added):'0',usageNumber(g.total),usageSparkline(g.cumulative,s.daily,usageKinds[g.kind]||g.kind)])));
   c.append(el('p','문서의 현재 종류 기준이며 보관(archived) 문서도 포함합니다.','small muted'));
+  return c;
+}
+
+// 할 일 지표: 기간 중 추가·완료, 생성→완료 소요 기간, 주별 흐름, 우선순위별 적체(아이디어 제외).
+const usagePriorities={high:'높음',medium:'보통',low:'낮음'};
+function usageTodos(s){
+  const c=card('할 일'),t=s.todos;c.classList.add('usage-todos');
+  if(!t){c.append(el('p','할 일 지표를 불러오지 못했습니다.','muted'));return c;}
+  const days=v=>v===null||v===undefined?'—':v+'일';
+  const row=el('div',undefined,'usage-quality');
+  for(const [label,value,note]of [['완료',usageNumber(t.completed),`기간 중 추가 ${usageNumber(t.created)}건`],['평균 소요',days(t.avg_lead_days),`중앙값 ${days(t.median_lead_days)} · 만든 날부터 완료까지`],['대기 중',usageNumber(t.waiting),'시작 전·진행 중·검토대기·반영 대기'],['아이디어',usageNumber(t.ideas),'적체에서 제외']]){const b=el('div',undefined,'usage-kpi');b.append(el('span',label,'small muted'),el('strong',String(value)),el('span',note,'small muted'));row.append(b);}
+  c.append(row);
+  const wrap=el('div',undefined,'usage-tables');
+  const weekly=el('div');weekly.append(el('h3','주별 흐름','small'),table(['주 시작(월)','추가','완료'],(t.weekly||[]).map(w=>[w.week_start,usageNumber(w.created),usageNumber(w.completed)])));
+  const backlog=el('div');backlog.append(el('h3','우선순위별 적체','small'),table(['우선순위','시작 전','진행 중','검토대기','반영 대기','합계','가장 오래됨'],(t.backlog||[]).map(b=>[usagePriorities[b.priority]||b.priority,usageNumber(b.not_started),usageNumber(b.in_progress),usageNumber(b.in_review),usageNumber(b.pending_release),usageNumber(b.total),b.total?b.oldest_days+'일':'—'])));
+  wrap.append(weekly,backlog);
+  c.append(wrap,el('p','완료는 기간 안에 완료로 옮겨졌고 지금도 완료인 할 일입니다. 첫 주와 마지막 주는 기간 안의 날짜만 셉니다. 가장 오래됨은 만든 날부터의 경과일입니다.','small muted'));
   return c;
 }
 
