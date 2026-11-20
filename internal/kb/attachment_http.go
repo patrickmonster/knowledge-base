@@ -118,6 +118,8 @@ func (a *App) attachmentUpload(w http.ResponseWriter, r *http.Request) {
 // attachmentImage streams an issue image to a signed-in member so the page can
 // show it inline under img-src 'self'. Only issue images (checked as raster
 // types on upload) are served, and the type is sniffed again before sending.
+// With ?size=thumb it serves a small copy for the issue cards
+// (serveIssueThumbnail).
 func (a *App) attachmentImage(w http.ResponseWriter, r *http.Request) {
 	a.attachmentInline(w, r, "view_issue_image", true)
 }
@@ -218,6 +220,10 @@ func (a *App) attachmentInline(w http.ResponseWriter, r *http.Request, action st
 		return
 	}
 	f := out.(Attachment)
+	if issueImage && r.URL.Query().Get("size") == "thumb" {
+		a.serveIssueThumbnail(w, r, f)
+		return
+	}
 	body, err := a.Store.Objects.Get(r.Context(), attachmentKey(f.ProjectID, f.ID))
 	if err != nil {
 		if issueImage {

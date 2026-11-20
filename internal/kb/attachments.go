@@ -522,6 +522,11 @@ func (s *Store) CleanupAttachments(ctx context.Context) error {
 			if err = s.Objects.Delete(ctx, f.key); err != nil {
 				return err
 			}
+			if thumb := thumbnailKeyFor(f.key); thumb != "" { // issue image thumbnail, if one was made
+				if err = s.Objects.Delete(ctx, thumb); err != nil {
+					return err
+				}
+			}
 			if _, err = tx.ExecContext(ctx, "DELETE FROM attachments WHERE id=$1", f.id); err != nil {
 				return err
 			}
