@@ -140,5 +140,5 @@ var SearchSettings string
 //go:embed 046_todo_pending_release.sql
 var TodoPendingRelease string
 
-//go:embed 047_webhook_pull_requests.sql
+//go:embed 048_webhook_pull_requests.sql
 var WebhookPullRequests string
