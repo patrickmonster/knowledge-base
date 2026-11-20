@@ -194,11 +194,34 @@ test('completed to-dos live on their own page; only in-progress, in-review and p
   assert.strictEqual(c.document.querySelector('.todo-card[data-id="todo-3"]'),null,'completed card is not on the board');
   const ticked=[...c.document.querySelectorAll('.todo-card')].filter(n=>n.querySelector('.todo-done')).map(n=>n.dataset.id).sort();
   assert.deepStrictEqual(ticked,['todo-1','todo-5','todo-6','todo-7']);
-  assert.match(c.document.querySelector('.todo-done-link').textContent,/완료된 할 일 1건/);
+  assert.match(c.document.querySelector('.todo-done-link').textContent,/완료된 할 일 2건/);
   await show(c,'todosDone');
-  const titles=[...c.document.querySelectorAll('.todo-done-title')].map(n=>n.textContent);
-  assert.deepStrictEqual(titles,['할 일 todo-3']);
+  const titles=[...c.document.querySelectorAll('.todo-done-title')].map(n=>n.textContent).sort();
+  assert.deepStrictEqual(titles,['할 일 todo-3','할 일 todo-8']);
   check(c,'todosDone');
+});
+
+test('a completed to-do with an unmerged pull request is flagged on the board and the completed page',async t=>{
+  const c=await open(t,'full');
+  await show(c,'todos');
+  // todo-8's latest PR is deployed, an older one is still open: every PR counts.
+  const link=c.document.querySelector('.todo-done-link');
+  assert.match(link.textContent,/완료된 할 일 2건 · ⚠ 미병합 PR 1/);
+  assert.ok(link.classList.contains('todo-done-mismatch'));
+  assert.strictEqual(c.document.querySelector('.todo-card .pr-mismatch'),null,'cards still on the board are not flagged');
+  await show(c,'todosDone');
+  const row=title=>[...c.document.querySelectorAll('#page tr')].find(r=>r.querySelector('.todo-done-title')?.textContent===title);
+  const warn=row('할 일 todo-8').querySelector('.pr-mismatch');
+  assert.strictEqual(warn.textContent,'⚠ 미병합 PR 1');
+  assert.match(warn.title,/#13 PR 열림/);
+  assert.doesNotMatch(warn.title,/#14/);
+  assert.strictEqual(row('할 일 todo-3').querySelector('.pr-mismatch'),null,'a deployed PR is not flagged');
+  const filter=c.document.querySelector('.todo-mismatch-filter');
+  assert.strictEqual(filter.hidden,false);
+  assert.match(filter.textContent,/미병합 PR 있는 것만 \(1\)/);
+  const box=filter.querySelector('input');box.checked=true;box.dispatchEvent(new c.window.Event('change'));await c.settle();
+  assert.deepStrictEqual([...c.document.querySelectorAll('.todo-done-title')].map(n=>n.textContent),['할 일 todo-8']);
+  check(c,'todosDone › unmerged PR');
 });
 
 test('pending-release cards show their work branch and the dialog edits it',async t=>{
