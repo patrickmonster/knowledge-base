@@ -314,3 +314,25 @@ test('an administrator can change the question score floor from 운영 현황',a
   assert.deepStrictEqual(sent.map(r=>r.body),[{issue_score_floor:0.7}]);
   check(c,'overview › search settings');
 });
+
+test('usage statistics show to-do flow, lead time and backlog per priority',async t=>{
+  const c=await open(t,'full');
+  await show(c,'usage');check(c,'usage');
+  const box=c.document.querySelector('#page .usage-todos');
+  assert.ok(box,'the to-do card is shown');
+  const kpis=[...box.querySelectorAll('.usage-kpi')].map(n=>n.textContent);
+  assert.match(kpis[0],/완료4기간 중 추가 6건/);
+  assert.match(kpis[1],/평균 소요2.5일중앙값 2일/);
+  const tables=box.querySelectorAll('table');
+  assert.strictEqual(tables[0].querySelectorAll('tbody tr').length,2,'one row per week');
+  const rows=[...tables[1].querySelectorAll('tbody tr')].map(r=>[...r.cells].map(x=>x.textContent));
+  assert.deepStrictEqual(rows.map(r=>r[0]),['높음','보통','낮음']);
+  assert.deepStrictEqual(rows[0].slice(-2),['2','12일']);
+
+  // With nothing on the board the lead time is a dash and empty priorities show no age.
+  const e=await open(t,'empty');
+  await show(e,'usage');check(e,'usage empty');
+  const empty=e.document.querySelector('#page .usage-todos');
+  assert.match(empty.querySelectorAll('.usage-kpi')[1].textContent,/평균 소요—/);
+  assert.deepStrictEqual([...empty.querySelectorAll('table')[1].querySelectorAll('tbody tr')].map(r=>r.cells[6].textContent),['—','—','—']);
+});

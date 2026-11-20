@@ -24,7 +24,7 @@ Go로 만든 팀 공용 지식 서버입니다. 프로젝트별 기획·결정·
 - 팀 확산([안내](docs/team-rollout.md)): 이슈 담당자 알림과 선택형 문서 생성·승격 알림, 재확인 요약 주기 발송(웹훅·Slack·이메일), 웹 문서 관계 보기·편집, 문서 버전 비교, 검토 대기 사이드바 배지, 공통 작업 영역 삭제·정리, 다른 저장소용 AGENTS.md 생성, 프로젝트 내보내기·가져오기(JSON·Markdown)
 - 작업 PR 병합·배포 자동 기록: `finish_task`에 남긴 PR을 GitHub에서 확인해 병합·배포(서버 자신의 저장소)되면 history에 상태 갱신 블록 추가, 미기록 PR은 작업 시작 맥락에 표시
 - 지식 품질과 AI 작업 흐름: 중복·충돌 결정 감지, 재확인 담당자·주기 요약, start_task 맥락 활용도 피드백과 검색 품질 지표, finish_task 결정 후보 추출, 오래 열린 작업 정리, 용어집(glossary)과 검색 동의어 확장([안내](docs/knowledge-quality.md))
-- 사용 통계 대시보드: 프로젝트별 도구 호출·활성 사용자·검색·문서 열람·작성·작업 수의 일별 추이, 문서 종류별 증가 추이, 결과 0건 검색어, 검색 방식별 검색 시간(HNSW 도입 판단용), 많이 쓴 도구·활동 사용자·많이 열람한 문서, 보유 현황, 검색 품질(`get_usage_stats`, 웹 '사용 통계')
+- 사용 통계 대시보드: 프로젝트별 도구 호출·활성 사용자·검색·문서 열람·작성·작업 수의 일별 추이, 문서 종류별 증가 추이, 할 일 완료·소요 기간·우선순위별 적체, 결과 0건 검색어, 검색 방식별 검색 시간(HNSW 도입 판단용), 많이 쓴 도구·활동 사용자·많이 열람한 문서, 보유 현황, 검색 품질(`get_usage_stats`, 웹 '사용 통계')
 - 재확인 · 맥락 피드백 화면: 오래된 문서·담당자·주기·마지막 확인과 담당 지정·확인 기록(편집자 이상), 검색 품질 지표와 작업별 피드백(웹 '재확인 · 피드백', 조회자는 읽기 전용)
 - 공식 Go MCP SDK 기반 Streamable HTTP `/mcp`
 - Railway용 Dockerfile, 배포 전 마이그레이션, `/healthz`, 배포 커밋·스키마 버전 확인 `/version`
@@ -161,7 +161,7 @@ Authorization: Bearer <발급받은 MCP 키>
 | `link_issue_todo` | 질의·이슈를 할 일에 연결·해제(편집자 이상). `create_issue`의 `todo_id`로도 연결하고, `task_id`만 넘기면 그 작업의 할 일을 따른다([안내](docs/todos.md#이슈질의와-연결)) |
 | `list_stale_todos` | 14일(`older_than_days`로 변경) 넘게 수정·이동·연결 작업·질의 변경이 없는 시작 전·진행 중·검토대기 할 일을 오래된 순으로. `start_task` 맥락의 `context.todos.stale`에도 최대 5건([안내](docs/todos.md#오래-묵은-할-일-정리-안내)) |
 | `link_task_todo` | 열린 작업을 할 일에 연결·해제. `start_task`의 `todo_id`와 같이 할 일을 진행 중으로 옮기고, 작업 완료·PR 병합 때 완료로 옮긴다([안내](docs/todos.md#진행-중-작업과-연결)) |
-| `get_usage_stats` | 프로젝트 사용 통계(최근 1~365일, 기본 30일, 한국 시간 일 단위): 합계·일별 추이·종류별 증가·결과 0건 검색어·검색 시간·HNSW 검토 판정(`hnsw_review`)·상위 도구·사용자·열람 문서·보유 현황 |
+| `get_usage_stats` | 프로젝트 사용 통계(최근 1~365일, 기본 30일, 한국 시간 일 단위): 합계·일별 추이·종류별 증가·할 일 지표(`todos`)·결과 0건 검색어·검색 시간·HNSW 검토 판정(`hnsw_review`)·상위 도구·사용자·열람 문서·보유 현황 |
 | `set_search_thresholds` | 소유자·관리자: 프로젝트의 HNSW 검토 기준(`vector_p95_ms`, `scanned_chunks`) 설정. 호출마다 두 값을 바꾸며 0이나 생략은 서버 기본값(`HNSW_REVIEW_*`) |
 
 문서 종류는 `brief`, `decision`, `history`, `artifact`, `reference`입니다. 상태는 `draft`, `active`, `archived`이고 기본 검색에는 활성 문서의 최신 버전만 포함됩니다. `update_document`는 `expected_revision`과 수정 이유 `reason`이 필요합니다. 충돌하면 최신 내용을 읽고 변경을 병합해야 합니다. 긴 본문의 일부만 고칠 때는 `patch.content`로 전체를 다시 보내지 않고 `edits`(`old_str`/`new_str` 쌍 배열, 최대 50개)를 보냅니다. 편집은 순서대로 적용되고, 각 `old_str`는 그 시점 본문에서 정확히 한 번 나와야 합니다(없거나 여러 번이면 `EDIT_NOT_APPLIED`로 아무것도 저장하지 않음). `new_str`가 비어 있으면 삭제이고, `patch.content`와 함께 쓸 수 없습니다. 제목·태그 등 다른 `patch` 필드와는 함께 쓸 수 있으며 응답에 `edits_applied`가 붙습니다.
