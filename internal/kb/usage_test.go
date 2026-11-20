@@ -172,3 +172,42 @@ func TestUsageStatsTodos(t *testing.T) {
 		t.Fatalf("wide: %+v avg %v median %v", wide, wide.AvgLeadDays, wide.MedianLeadDays)
 	}
 }
+
+// A dropped to-do is stored as completed but is not finished work: it must not
+// count as completed, in the weekly trend or in the lead times.
+func TestUsageStatsTodosExcludeDropped(t *testing.T) {
+	s := testStore(t)
+	tools := NewTools(s)
+	admin := loginAs(t, s, "admin@example.com")
+	p := mustCall(t, tools, admin, "create_project", CreateProjectInput{Slug: "usage-todos-dropped", Name: "usage-todos-dropped"}).(Project)
+
+	save := func(title string) Todo {
+		return mustCall(t, tools, admin, "save_todo", SaveTodoInput{ProjectID: p.ID, Title: title, Status: "completed", Priority: "medium"}).(Todo)
+	}
+	done := save("완료")
+	dropped := save("폐기")
+	exec := func(q string, args ...any) {
+		t.Helper()
+		if _, err := s.DB.Exec(q, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// done: 2 days lead; dropped: 10 days lead, which would skew the averages if counted.
+	exec(`UPDATE todos SET created_at=now()-interval '3 days', completed_at=now()-interval '1 day' WHERE id=$1`, done.ID)
+	exec(`UPDATE todos SET created_at=now()-interval '11 days', completed_at=now()-interval '1 day', resolution='dropped', resolution_note='범위 제외' WHERE id=$1`, dropped.ID)
+
+	got := mustCall(t, tools, admin, "get_usage_stats", UsageStatsInput{ProjectID: p.ID, Days: 30}).(UsageStats).Todos
+	if got.Completed != 1 {
+		t.Fatalf("completed: %+v", got)
+	}
+	if got.AvgLeadDays == nil || *got.AvgLeadDays != 2 || got.MedianLeadDays == nil || *got.MedianLeadDays != 2 {
+		t.Fatalf("lead: avg %v median %v", got.AvgLeadDays, got.MedianLeadDays)
+	}
+	completed := 0
+	for _, w := range got.Weekly {
+		completed += w.Completed
+	}
+	if completed != 1 {
+		t.Fatalf("weekly completed %d: %+v", completed, got.Weekly)
+	}
+}

@@ -338,10 +338,13 @@ func usageStats(ctx context.Context, tx *sql.Tx, a Identity, in UsageStatsInput,
 // todoWaitingStatuses are the board columns that still need work.
 const todoWaitingStatuses = `('not_started','in_progress','in_review','pending_release')`
 
+// usageTodos counts only to-dos that were actually finished: a dropped to-do
+// (resolution 'dropped') is stored as completed but is left out of the
+// completed count, the weekly completed trend and the lead times.
 func usageTodos(ctx context.Context, tx *sql.Tx, args []any) (UsageTodos, error) {
 	out, err := one[UsageTodos](ctx, tx, usageWindow+`,
 	d AS (SELECT extract(epoch FROM t.completed_at-t.created_at)/86400.0 AS lead FROM todos t, ws
-		WHERE t.project_id=$1 AND t.status='completed' AND t.completed_at>=ws.start_at)
+		WHERE t.project_id=$1 AND t.status='completed' AND t.resolution<>'dropped' AND t.completed_at>=ws.start_at)
 	SELECT jsonb_build_object(
 		'created',(SELECT count(*) FROM todos t WHERE t.project_id=$1 AND t.created_at>=ws.start_at),
 		'completed',(SELECT count(*) FROM d),
@@ -356,7 +359,7 @@ func usageTodos(ctx context.Context, tx *sql.Tx, args []any) (UsageTodos, error)
 	if out.Weekly, err = many[UsageTodoWeek](ctx, tx, usageWindow+`,
 	wk AS (SELECT generate_series(date_trunc('week',ws.from_day),date_trunc('week',ws.to_day),interval '7 days')::date AS week FROM ws),
 	c AS (SELECT date_trunc('week',t.completed_at AT TIME ZONE $3)::date AS week,count(*) AS n FROM todos t, ws
-		WHERE t.project_id=$1 AND t.status='completed' AND t.completed_at>=ws.start_at GROUP BY 1),
+		WHERE t.project_id=$1 AND t.status='completed' AND t.resolution<>'dropped' AND t.completed_at>=ws.start_at GROUP BY 1),
 	n AS (SELECT date_trunc('week',t.created_at AT TIME ZONE $3)::date AS week,count(*) AS n FROM todos t, ws
 		WHERE t.project_id=$1 AND t.created_at>=ws.start_at GROUP BY 1)
 	SELECT jsonb_build_object('week_start',to_char(wk.week,'YYYY-MM-DD'),'created',coalesce(n.n,0),'completed',coalesce(c.n,0))
