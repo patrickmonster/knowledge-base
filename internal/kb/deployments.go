@@ -379,7 +379,7 @@ func (s *Store) recordTaskDeployment(ctx context.Context, tx *sql.Tx, taskID str
 	details := map[string]any{"task_id": taskID, "pull_requests": len(rows)}
 	// The change landed: the linked to-do is done even if the task ended partial.
 	if s.pullsLanded(rows) {
-		todo, err := completeRunTodo(ctx, tx, taskID, creator, pullsDeployed(rows))
+		todo, err := completeRunTodo(ctx, tx, taskID, creator, pullsDeployed(rows), true)
 		if err != nil {
 			return false, err
 		}
