@@ -11,6 +11,7 @@ require (
 	github.com/ledongthuc/pdf v0.0.0-20261020125853-5e46805f718e
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	golang.org/x/crypto v0.59.0
+	golang.org/x/image v0.47.0
 	golang.org/x/text v0.44.0
 )
 

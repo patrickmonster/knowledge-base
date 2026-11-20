@@ -1,7 +1,10 @@
 package kb
 
 import (
+	"bytes"
 	"context"
+	"image/color"
+	"image/jpeg"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -110,6 +113,65 @@ func TestIssueImageAttachments(t *testing.T) {
 		w.Header().Get("X-Content-Type-Options") != "nosniff" || !strings.Contains(w.Header().Get("Content-Security-Policy"), "sandbox") {
 		t.Fatalf("image response: %d %q %v", w.Code, w.Header().Get("Content-Type"), w.Header())
 	}
+	// ?size=thumb on a small image serves the original and stores nothing.
+	thumbAs := func(email, id string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest("GET", "/api/attachments/"+id+"/image?size=thumb&project_id="+p.ID, nil)
+		cookie, err := s.Login(ctx, email, testPassword)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.AddCookie(&http.Cookie{Name: "kb_session", Value: cookie})
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		return w
+	}
+	thumbGet := func(id string) *httptest.ResponseRecorder { return thumbAs("viewer@example.com", id) }
+	puts := m.puts
+	if w := thumbGet(img.ID); w.Code != 200 || w.Body.String() != png || m.puts != puts {
+		t.Fatalf("thumb of tiny image: %d", w.Code)
+	}
+	// A large photo gets a small JPEG copy, stored once and reused.
+	bigPNG := encodePNG(t, solid(1600, 1200, color.RGBA{10, 120, 200, 255}))
+	big, err := prepare(PrepareAttachmentInput{ProjectID: p.ID, IssueID: issue.ID, Filename: "photo.png", SizeBytes: int64(len(bigPNG))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.UploadAttachment(ctx, owner, AttachmentInput{p.ID, big.ID}, bytes.NewReader(bigPNG)); err != nil {
+		t.Fatal(err)
+	}
+	tw := thumbGet(big.ID)
+	if tw.Code != 200 || tw.Header().Get("Content-Type") != "image/jpeg" || !strings.Contains(tw.Header().Get("Content-Security-Policy"), "sandbox") {
+		t.Fatalf("thumb response: %d %v", tw.Code, tw.Header())
+	}
+	if cfg, err := jpeg.DecodeConfig(bytes.NewReader(tw.Body.Bytes())); err != nil || cfg.Width != 480 || cfg.Height != 360 {
+		t.Fatalf("thumb size: %v %dx%d", err, cfg.Width, cfg.Height)
+	}
+	stored, ok := m.files[thumbnailKey(p.ID, big.ID)]
+	if !ok || !bytes.Equal(stored, tw.Body.Bytes()) {
+		t.Fatal("thumbnail not stored")
+	}
+	puts = m.puts
+	if w2 := thumbGet(big.ID); w2.Code != 200 || !bytes.Equal(w2.Body.Bytes(), stored) || m.puts != puts {
+		t.Fatal("stored thumbnail not reused")
+	}
+	if w := get("viewer@example.com", p.ID, big.ID); w.Code != 200 || !bytes.Equal(w.Body.Bytes(), bigPNG) {
+		t.Fatal("original changed")
+	}
+	if w := thumbAs("admin@example.com", big.ID); w.Code != 404 {
+		t.Fatalf("non-member thumb: %d", w.Code)
+	}
+	// Deleting the photo removes its thumbnail too.
+	mustCall(t, tools, owner, "delete_attachment", AttachmentInput{p.ID, big.ID})
+	if err = s.CleanupAttachments(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := m.files[thumbnailKey(p.ID, big.ID)]; ok {
+		t.Fatal("thumbnail left after delete")
+	}
+	if _, ok := m.files[attachmentKey(p.ID, big.ID)]; ok {
+		t.Fatal("original left after delete")
+	}
+
 	// Ordinary project files are not served inline.
 	plain := preparedAttachment(t, tools, owner, p.ID, png)
 	if _, err = s.UploadAttachment(ctx, owner, AttachmentInput{p.ID, plain.ID}, strings.NewReader(png)); err != nil {

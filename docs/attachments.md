@@ -69,7 +69,7 @@
 
 ## 질의·이슈 사진
 
-`prepare_attachment_upload`의 `issue_id`로 질의·이슈에 이미지(PNG·JPG·GIF·WEBP, 장당 10 MiB)를 연결합니다. 업로드 때 실제 내용이 허용된 이미지인지 확인하고, 웹은 `GET /api/attachments/{id}/image`로 인라인 표시합니다. 자세한 사용법은 [이슈·질의 베이스](issues.md#사진-첨부).
+`prepare_attachment_upload`의 `issue_id`로 질의·이슈에 이미지(PNG·JPG·GIF·WEBP, 장당 10 MiB)를 연결합니다. 업로드 때 실제 내용이 허용된 이미지인지 확인하고, 웹은 `GET /api/attachments/{id}/image`로 인라인 표시하고, 카드 썸네일은 `&size=thumb`으로 축소본(버킷 `thumbnails/…`에 한 번 만들어 저장)을 받습니다. 자세한 사용법은 [이슈·질의 베이스](issues.md#사진-첨부).
 
 ## 저장과 권한
 

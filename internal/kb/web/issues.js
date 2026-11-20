@@ -200,7 +200,7 @@ async function issuesPage() {
       box.replaceChildren(...files.map(f=>{
         const fig=el('figure',undefined,'issue-image'), link=el('a'), img=el('img');
         link.href=issueImageURL(f);link.target='_blank';link.rel='noopener';link.title=f.filename+' 원본 보기';
-        img.src=issueImageURL(f);img.alt=f.filename;img.loading='lazy';link.append(img);
+        img.src=issueImageURL(f)+'&size=thumb';img.alt=f.filename;img.loading='lazy';link.append(img);
         fig.append(link,el('figcaption',f.filename));
         if (canWrite()) {
           const remove=el('button','×','issue-image-remove');remove.type='button';remove.title='사진 삭제';remove.setAttribute('aria-label',f.filename+' 삭제');
