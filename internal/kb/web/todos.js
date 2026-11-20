@@ -130,7 +130,10 @@ async function todosPage(){
     staleText.textContent=`${ctx.staleDays}일 넘게 멈춘 것만 (${stale?.total??ctx.stale.size})`;
     drawIssuePanel(project,issuePanel,todos);
     const done=todos.filter(t=>t.status==='completed').length;
-    doneLink.textContent=`완료된 할 일 ${done}건`;
+    const mismatched=todos.filter(t=>todoUnmergedPRs(t).length).length;
+    doneLink.textContent=`완료된 할 일 ${done}건`+(mismatched?` · ⚠ 미병합 PR ${mismatched}`:'');
+    doneLink.classList.toggle('todo-done-mismatch',mismatched>0);
+    doneLink.title=mismatched?`완료로 표시됐지만 병합되지 않은 PR이 연결된 할 일 ${mismatched}건`:'';
     const cats=[...new Set(todos.map(t=>t.category).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
     const chosen=category.value;
     category.replaceChildren(new Option('모든 분류',''),...cats.map(c=>new Option(c,c)));
@@ -372,9 +375,12 @@ async function todosDonePage(){
   const category=el('select');category.setAttribute('aria-label','분류');
   const mineLabel=el('label',undefined,'inline-check'),mine=el('input');mine.type='checkbox';
   mineLabel.append(mine,document.createTextNode('내게 배정된 것만'));
+  // Completed to-dos whose linked PRs are not all merged can be shown alone.
+  const mismatchLabel=el('label',undefined,'inline-check todo-mismatch-filter'),mismatchOnly=el('input'),mismatchText=el('span','미병합 PR 있는 것만');mismatchOnly.type='checkbox';
+  mismatchLabel.append(mismatchOnly,mismatchText);mismatchLabel.hidden=true;
   const summary=el('span','','small muted');summary.setAttribute('role','status');
   const search=todoSearchBox(()=>draw());
-  filters.append(category,search,mineLabel,summary);
+  filters.append(category,search,mineLabel,mismatchLabel,summary);
   bar.append(filters,btn('← 할 일 보드',()=>render('todos'),'secondary'));
   const list=el('div',undefined,'todo-done-list');
   root.append(bar,list);
@@ -392,11 +398,14 @@ async function todosDonePage(){
     const chosen=category.value;
     category.replaceChildren(new Option('모든 분류',''),...cats.map(c=>new Option(c,c)));
     category.value=cats.includes(chosen)?chosen:'';
+    const mismatched=ctx.todos.filter(t=>todoUnmergedPRs(t).length).length;
+    mismatchLabel.hidden=!mismatched&&!mismatchOnly.checked;
+    mismatchText.textContent=`미병합 PR 있는 것만 (${mismatched})`;
     draw();
   }
   function draw(){
     const words=todoWords(search.value);
-    const items=ctx.todos.filter(t=>(!category.value||t.category===category.value)&&(!mine.checked||t.assignee_id===me.id)&&todoMatches(t,words));
+    const items=ctx.todos.filter(t=>(!category.value||t.category===category.value)&&(!mine.checked||t.assignee_id===me.id)&&(!mismatchOnly.checked||todoUnmergedPRs(t).length)&&todoMatches(t,words));
     summary.textContent=`${items.length}건`+(ctx.todos.length>=500?' · 최근 500건까지 표시':'');
     if(!items.length){list.replaceChildren(el('p',ctx.todos.length?'조건에 맞는 완료된 할 일이 없습니다.':'아직 완료된 할 일이 없습니다. 보드에서 진행 중·검토대기 카드의 “완료”를 체크하면 여기로 옵니다.','empty'));return;}
     const rows=items.map(t=>{
@@ -409,6 +418,7 @@ async function todosDonePage(){
         notify(`“${t.title}”을(를) 진행 중으로 되돌렸습니다.`);await refresh();
       },'secondary'));
       const done=when(t);
+      if(todoUnmergedPRs(t).length)title.classList.add('todo-done-mismatch');
       return [done?new Date(done).toLocaleDateString():'—',title,el('span',todoPriorityLabel[t.priority]||t.priority,'todo-priority todo-p-'+t.priority),t.category||'—',t.assignee_name||'—',links,actions];
     });
     list.replaceChildren(table(['완료일','제목','우선순위','분류','담당자','연결',''],rows));
@@ -416,6 +426,7 @@ async function todosDonePage(){
   function when(t){return t.completed_at||t.updated_at||'';}
   category.addEventListener('change',draw);
   mine.addEventListener('change',draw);
+  mismatchOnly.addEventListener('change',draw);
   await refresh();
   return root;
 }
@@ -448,12 +459,25 @@ async function drawIssuePanel(project,panel,todos){
 
 // Linked AI tasks (start_task todo_id / link_task_todo) and their latest pull request.
 const todoPRLabels={unknown:'확인 전',open:'PR 열림',closed:'PR 닫힘',merged:'PR 병합',deployed:'PR 배포'};
+// A completed to-do whose linked pull requests are not all merged or deployed
+// (open, closed without merge, or not checked yet): every PR counts, not just
+// the latest one shown on the card.
+function todoUnmergedPRs(t){
+  if(t.status!=='completed')return [];
+  return (t.pull_requests||[]).filter(pr=>pr.state!=='merged'&&pr.state!=='deployed');
+}
 function todoLinkPills(t){
-  if(!t.task_count&&!t.open_issue_count)return null;
+  const unmerged=todoUnmergedPRs(t);
+  if(!t.task_count&&!t.open_issue_count&&!unmerged.length)return null;
   const row=el('div',undefined,'todo-links');
   if(t.task_count)row.append(el('span',`작업 ${t.task_count}`+(t.open_task_count?` · 진행 중 ${t.open_task_count}`:''),'todo-link-pill'+(t.open_task_count?' active':'')));
   const pr=(t.pull_requests||[])[0];
   if(pr)row.append(el('span',`#${pr.number} ${todoPRLabels[pr.state]||pr.state}`,'todo-link-pill pr-'+pr.state));
+  if(unmerged.length){
+    const warn=el('span',`⚠ 미병합 PR ${unmerged.length}`,'todo-link-pill pr-mismatch');
+    warn.title='완료로 표시됐지만 병합되지 않은 PR: '+unmerged.map(x=>`#${x.number} ${todoPRLabels[x.state]||x.state}`).join(', ');
+    row.append(warn);
+  }
   if(t.open_issue_count)row.append(el('span',`질의 ${t.open_issue_count}`,'todo-link-pill issue'));
   if(t.blocking_issue_count)row.append(el('span',`보류 ${t.blocking_issue_count}`,'todo-link-pill blocking'));
   return row;
