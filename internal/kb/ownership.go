@@ -14,6 +14,7 @@ type TransferOwnerInput struct {
 	UserID            string `json:"user_id" jsonschema:"Current admin, editor, or viewer who becomes the owner"`
 	ConfirmSlug       string `json:"confirm_slug" jsonschema:"The project slug, retyped to confirm"`
 	PreviousOwnerRole string `json:"previous_owner_role,omitempty" jsonschema:"Role kept by the previous owner: admin, editor (default), or viewer"`
+	WorkAreas         string `json:"work_areas,omitempty" jsonschema:"Work areas the previous owner owns: keep (default unless the previous owner becomes viewer) or transfer to the new owner. A viewer cannot own areas, so viewer always transfers"`
 }
 
 // transferProjectOwner moves ownership in one transaction: projects.owner_id
@@ -28,6 +29,20 @@ func transferProjectOwner(ctx context.Context, tx *sql.Tx, actor Identity, in Tr
 	}
 	if in.PreviousOwnerRole != "admin" && in.PreviousOwnerRole != "editor" && in.PreviousOwnerRole != "viewer" {
 		return nil, problem("INVALID_INPUT", "previous_owner_role must be admin, editor, or viewer.")
+	}
+	// Viewers cannot own work areas (projectEditor), so a previous owner who
+	// stays as viewer hands their areas over; otherwise they keep them unless asked.
+	if in.WorkAreas == "" {
+		in.WorkAreas = "keep"
+		if in.PreviousOwnerRole == "viewer" {
+			in.WorkAreas = "transfer"
+		}
+	}
+	if in.WorkAreas != "keep" && in.WorkAreas != "transfer" {
+		return nil, problem("INVALID_INPUT", "work_areas must be keep or transfer.")
+	}
+	if in.WorkAreas == "keep" && in.PreviousOwnerRole == "viewer" {
+		return nil, problem("INVALID_INPUT", "A viewer cannot own work areas: use work_areas transfer, or stay as admin or editor.")
 	}
 	if _, err := projectAccess(ctx, tx, actor.User.ID, in.ProjectID, true); err != nil {
 		return nil, err
@@ -68,12 +83,23 @@ func transferProjectOwner(ctx context.Context, tx *sql.Tx, actor Identity, in Tr
 	if _, err = tx.ExecContext(ctx, `UPDATE project_members SET role=$3 WHERE project_id=$1 AND user_id=$2`, in.ProjectID, actor.User.ID, in.PreviousOwnerRole); err != nil {
 		return nil, err
 	}
+	var moved int64
+	if in.WorkAreas == "transfer" {
+		result, err := tx.ExecContext(ctx, `UPDATE work_areas SET owner_id=$3,updated_at=clock_timestamp() WHERE project_id=$1 AND owner_id=$2`, in.ProjectID, actor.User.ID, in.UserID)
+		if err != nil {
+			return nil, err
+		}
+		if moved, err = result.RowsAffected(); err != nil {
+			return nil, err
+		}
+	}
 	return map[string]any{"project_id": in.ProjectID, "owner_id": in.UserID, "previous_owner_id": actor.User.ID,
-		"previous_owner_role": in.PreviousOwnerRole, "new_owner_previous_role": role}, nil
+		"previous_owner_role": in.PreviousOwnerRole, "new_owner_previous_role": role,
+		"work_areas": in.WorkAreas, "work_areas_moved": moved}, nil
 }
 
 func registerOwnershipTools(t Tools, s *Store) {
-	add(t, s, "transfer_project_owner", "Web console only: the owner hands the project to an active member; the previous owner becomes editor or viewer.", true, func(in TransferOwnerInput) string { return in.ProjectID }, transferProjectOwner)
+	add(t, s, "transfer_project_owner", "Web console only: the owner hands the project to an active member; the previous owner becomes admin, editor or viewer and keeps or hands over their work areas.", true, func(in TransferOwnerInput) string { return in.ProjectID }, transferProjectOwner)
 	// Hidden from MCP clients; the web console calls it through /api/tools.
 	tool := t["transfer_project_owner"]
 	tool.Register = func(*mcp.Server, Identity) {}
