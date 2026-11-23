@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/google/uuid"
 )
@@ -263,15 +262,9 @@ func listDocuments(ctx context.Context, tx *sql.Tx, actor Identity, in ListInput
 	if in.Kind != "" && !validKind(in.Kind) {
 		return nil, problem("INVALID_INPUT", "Unknown kind.")
 	}
-	tags := normalizeTags(in.Tags)
-	if len(tags) > 10 {
-		return nil, problem("INVALID_INPUT", "Filter by at most 10 tags.")
-	}
-	for i, tag := range tags {
-		if utf8.RuneCountInString(tag) > 50 {
-			return nil, problem("INVALID_INPUT", "Each tag filter must have at most 50 characters.")
-		}
-		tags[i] = strings.ToLower(tag)
+	tags, err := tagFilter(in.Tags)
+	if err != nil {
+		return nil, err
 	}
 	if in.Author != "" {
 		if err := validID(in.Author); err != nil {
