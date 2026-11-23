@@ -139,3 +139,6 @@ var SearchSettings string
 
 //go:embed 046_todo_pending_release.sql
 var TodoPendingRelease string
+
+//go:embed 047_document_trigram.sql
+var DocumentTrigram string
