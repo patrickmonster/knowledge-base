@@ -143,5 +143,5 @@ var TodoPendingRelease string
 //go:embed 047_document_trigram.sql
 var DocumentTrigram string
 
-//go:embed 049_scanner_settings.sql
+//go:embed 050_scanner_settings.sql
 var ScannerSettings string
