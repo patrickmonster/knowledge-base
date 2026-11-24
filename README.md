@@ -145,6 +145,7 @@ Authorization: Bearer <발급받은 MCP 키>
 | `get_document_history` | 최근 50개 수정 버전의 작성자·이유 조회 |
 | `link_documents`, `unlink_documents`, `get_document_links` | 문서 간 관계(`supersedes`, `implements`, `related`) 추가·삭제·조회 |
 | `search_knowledge` | 프로젝트 내 하이브리드·의미·키워드 검색(관련 질의·이슈는 `issues`로 따로) |
+| `grep_documents` | 문서 본문·제목에서 정확한 문자열이나 정규식(RE2)을 찾아 일치 줄·줄 번호·앞뒤 문맥을 돌려준다([정확 검색](#정확-검색-grep_documents)) |
 | `search_across_projects` | 참여 중인 여러 프로젝트를 한 번에 검색(`project_ids` 생략 시 전체, 최대 50개) |
 | `get_embedding_status` | 프로젝트별 임베딩 대기·처리·완료·실패 건수 조회 |
 | `reindex_project_embeddings` | 소유자 전용: 현재 본문으로 청크를 다시 만들고 벡터 재생성 예약(새 버전은 만들지 않음) |
@@ -232,6 +233,16 @@ Authorization: Bearer <발급받은 MCP 키>
 관련 질의·이슈가 있으면 `issues`(최대 5건)와 벡터가 아직 없는 질의 조각 수 `unindexed_issue_chunks`가 더해집니다. 의미·하이브리드 검색에서는 벡터 점수 하한에 못 미치는 질의를 빼고 그 수를 `filtered_issues`로 알립니다(전역 관리자가 웹 **운영 현황 → 검색 설정**에서 변경, 기본값은 `ISSUE_SCORE_FLOOR`). 질의 본문·답변도 문서와 같은 방식으로 청크·임베딩합니다([안내](docs/issues.md#검색)).
 
 `mode`는 `hybrid`, `semantic`, `lexical` 중 선택합니다. `warning`의 실제 메시지는 영어입니다. 검색 점수는 모드마다 다르며 확률이나 신뢰도 백분율이 아닙니다.
+
+### 정확 검색 (grep_documents)
+
+`search_knowledge`는 순위를 매기는 토큰 검색이라 식별자·오류 문구·경로처럼 글자 그대로 찾아야 하는 값을 놓치거나 뒤로 밀 수 있습니다. `grep_documents`는 grep처럼 줄 단위로 정확히 일치하는 곳을 모두 찾습니다. 의미 검색과 함께 쓰면 됩니다.
+
+- `pattern`은 기본이 고정 문자열이고 대소문자를 구분하지 않습니다. `case_sensitive: true`로 구분하고, `regex: true`면 RE2(Go) 정규식으로 줄마다 맞춥니다(줄을 넘는 일치, 전후방 탐색(lookaround), 역참조(``)는 지원하지 않음).
+- 필터: `status`(기본 `active`), `kind`, `tags`(모두 일치). 문서는 최근 수정 순이며 `limit`(기본 20, 최대 50)·`offset`으로 넘기고 다음 쪽은 `next_offset`을 씁니다.
+- 문서마다 `match_count`(일치 줄 수 전체), 최대 `max_matches`(기본 5, 최대 50)개의 `matches`(`line`, `text`, 선택 `context` 0–5줄의 `before`·`after`), 제목 일치 `title_match`, `citation`을 돌려줍니다. 400자가 넘는 줄은 일치 위치 주변만 잘라 `…`로 표시합니다.
+- 고정 문자열은 DB에서 `LIKE`/`ILIKE`로 먼저 거르고(`047_document_trigram` 마이그레이션의 `pg_trgm` 색인 사용) 서버가 줄마다 다시 확인합니다. 정규식은 DB에서 거를 수 없어 최근 문서부터 최대 2,000개·32 MiB까지만 훑고, 넘으면 `scan_truncated: true`와 `warning`을 붙입니다. 이때는 필터를 좁힙니다.
+- 권한은 `get_document`와 같습니다(프로젝트 참여자·상위 프로젝트 읽기 권한). 첨부 본문 추출 문서(`첨부 본문: <파일명>`)도 같은 방식으로 찾습니다.
 
 ### 프로젝트 횡단 검색
 
