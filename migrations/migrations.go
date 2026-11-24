@@ -148,3 +148,6 @@ var TodoResolution string
 
 //go:embed 049_webhook_pull_requests.sql
 var WebhookPullRequests string
+
+//go:embed 050_scanner_settings.sql
+var ScannerSettings string
