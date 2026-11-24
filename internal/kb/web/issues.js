@@ -355,7 +355,7 @@ async function issuesPage() {
   }
   function renderImport() {
     const importCard=card('기존 이슈 가져오기');
-    importCard.append(el('p','GitHub 저장소의 이슈를 이 프로젝트의 이슈·질의로 가져옵니다(단방향, PR 제외). 웹훅은 설정 이후의 이벤트만 보내므로, 기존 이슈는 처음 한 번 여기서 가져옵니다. 다시 가져오면 같은 항목의 제목·본문·라벨이 갱신되고, 상태는 GitHub에서 열림·닫힘이 바뀐 경우에만 따라갑니다. 여기서 단 답변·담당자·영역은 유지됩니다. 비공개 저장소는 서버에 GITHUB_TOKEN이 있어야 합니다.','small muted'));
+    importCard.append(el('p','GitHub 저장소의 이슈를 이 프로젝트의 이슈·질의로 가져옵니다(단방향, PR 제외). 웹훅은 설정 이후의 이벤트만 보내므로, 기존 이슈는 처음 한 번 여기서 가져옵니다. 다시 가져오면 같은 항목의 제목·본문·라벨이 갱신되고, 상태는 GitHub에서 열림·닫힘이 바뀐 경우에만 따라갑니다. 여기서 단 답변·담당자·영역은 유지됩니다. 서버는 GitHub 토큰을 쓰지 않으므로 공개 저장소만 가져올 수 있습니다(시간당 60회). 비공개 저장소는 웹훅을 등록해 이후 이슈부터 받습니다.','small muted'));
     if (!canWrite()) { importCard.append(el('p','편집자 이상만 가져올 수 있습니다.','small muted')); return importCard; }
     const f=el('form',undefined,'issue-form-grid');
     const repo=field(f,'저장소 (owner/name 또는 GitHub 주소)','repository');repo.placeholder='octocat/hello-world';repo.maxLength=200;
@@ -377,7 +377,7 @@ async function issuesPage() {
       result.replaceChildren(el('p','GitHub에서 가져오는 중…','muted'));
       try {
         const r=await tool('import_github_issues',input);
-        const text=`${r.repository}: ${r.fetched}건 조회 · 새로 ${r.created} · 갱신 ${r.updated} · 변경 없음 ${r.unchanged}`+(r.skipped_pull_requests?` · PR ${r.skipped_pull_requests}건 제외`:'')+(r.authenticated?'':' · 토큰 없이 조회(공개 저장소만)');
+        const text=`${r.repository}: ${r.fetched}건 조회 · 새로 ${r.created} · 갱신 ${r.updated} · 변경 없음 ${r.unchanged}`+(r.skipped_pull_requests?` · PR ${r.skipped_pull_requests}건 제외`:'');
         result.replaceChildren(el('p',text,'small'));
         notify('GitHub 이슈를 가져왔습니다.');await refresh();
       } catch(e) { result.replaceChildren(); throw e; }

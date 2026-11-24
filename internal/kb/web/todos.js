@@ -15,6 +15,16 @@ function askTodoBranch(t){
   const v=prompt(`“${t.title}”의 작업 브랜치를 입력하세요. 비워 두면 연결된 AI 작업의 브랜치를 씁니다.`,t.branch||'');
   return v==null?null:v.trim();
 }
+// 폐기: close a to-do as out of scope or no longer needed (move_todo
+// resolution dropped). It counts as finished but is not flagged for unmerged
+// pull requests. Returns false when the person cancels.
+async function dropTodo(project,t){
+  const note=prompt(`“${t.title}”을(를) 폐기(범위 제외·불필요)로 닫습니다. 사유를 입력하세요 (선택, 500자 이하).`,t.resolution_note||'');
+  if(note==null)return false;
+  await tool('move_todo',{project_id:project.id,todo_id:t.id,status:'completed',priority:t.priority,resolution:'dropped',resolution_note:note.trim().slice(0,500)});
+  notify(`“${t.title}”을(를) 폐기로 닫았습니다. “완료된 할 일”에서 볼 수 있습니다.`);
+  return true;
+}
 const todoPriorities=[['high','높음'],['medium','보통'],['low','낮음']];
 const todoStatusLabel=Object.fromEntries(todoStatuses), todoPriorityLabel=Object.fromEntries(todoPriorities);
 // Live filter over the cards already loaded: every word must appear in the
@@ -228,6 +238,23 @@ async function todosPage(){
     if(t.branch){const b=el('p',undefined,'todo-branch');b.title='작업 브랜치';b.append(el('code',t.branch));c.append(b);}
     else if(t.status==='pending_release')c.append(el('p','브랜치 미입력','todo-branch missing'));
     const links=todoLinkPills(t);if(links)c.append(links);
+    if(t.status==='pending_release'){
+      // finish_task put it here: it completes on its own once the PRs merge.
+      if(t.release_auto&&!todoPRsAllClosed(t)){const n=el('p','PR 병합 시 자동 완료','todo-release-note');n.title='AI 작업이 PR을 올린 채 끝나 반영 대기로 왔습니다. 연결 PR이 병합되면 완료로 옮겨집니다.';c.append(n);}
+      // Every PR closed without a merge: nothing moves on its own, so offer the two ways out.
+      if(todoPRsAllClosed(t)){
+        const box=el('div',undefined,'todo-closed-prs');
+        box.append(el('p','PR 모두 닫힘 (병합 없음)','todo-release-note closed'));
+        if(canWrite){
+          // Buttons on the card must not also open its edit dialog.
+          box.addEventListener('click',e=>e.stopPropagation());
+          const drop=btn('폐기로 완료',async()=>{if(await dropTodo(project,t))await refresh();},'secondary small todo-drop');
+          const back=btn('진행 중으로',async()=>{await tool('move_todo',{project_id:project.id,todo_id:t.id,status:'in_progress',priority:t.priority});await refresh();},'secondary small');
+          box.append(drop,back);
+        }
+        c.append(box);
+      }
+    }
     const rel=todoRelationPills(t);if(rel)c.append(rel);
     const meta=[t.assignee_name,t.due_date?`마감 ${t.due_date}`:''].filter(Boolean).join(' · ');
     if(meta){const m=el('p',meta,'todo-meta');if(t.due_date&&t.status!=='completed'&&t.due_date<todayISO())m.classList.add('overdue');c.append(m);}
@@ -378,10 +405,29 @@ async function todosDonePage(){
   // Completed to-dos whose linked PRs are not all merged can be shown alone.
   const mismatchLabel=el('label',undefined,'inline-check todo-mismatch-filter'),mismatchOnly=el('input'),mismatchText=el('span','미병합 PR 있는 것만');mismatchOnly.type='checkbox';
   mismatchLabel.append(mismatchOnly,mismatchText);mismatchLabel.hidden=true;
+  // 완료 vs 폐기 (resolution dropped).
+  const resolution=el('select');resolution.setAttribute('aria-label','종료 사유');
+  resolution.append(new Option('완료·폐기 모두',''),new Option('완료만','done'),new Option('폐기만','dropped'));
   const summary=el('span','','small muted');summary.setAttribute('role','status');
   const search=todoSearchBox(()=>draw());
-  filters.append(category,search,mineLabel,mismatchLabel,summary);
-  bar.append(filters,btn('← 할 일 보드',()=>render('todos'),'secondary'));
+  // Every to-do with an open or unchecked PR goes back to 반영 대기 at once.
+  const bulk=btn('',async()=>{
+    const targets=ctx.todos.filter(t=>todoAwaitingPRs(t).length);
+    if(!targets.length||!confirm(`병합 전 PR이 있는 완료 할 일 ${targets.length}건을 반영 대기로 되돌릴까요?`))return;
+    bulk.disabled=true;
+    let moved=0;
+    try{for(const t of targets){await tool('move_todo',{project_id:project.id,todo_id:t.id,status:'pending_release',priority:t.priority});moved++;}}
+    catch(err){notify(err.message,true);}
+    finally{bulk.disabled=false;}
+    if(moved)notify(`${moved}건을 반영 대기로 되돌렸습니다.`);
+    await refresh();
+  },'secondary todo-bulk-release');
+  bulk.hidden=true;
+  filters.append(category,resolution,search,mineLabel,mismatchLabel,summary);
+  const right=el('div',undefined,'todo-bar-actions');
+  if(canWrite)right.append(bulk);
+  right.append(btn('← 할 일 보드',()=>render('todos'),'secondary'));
+  bar.append(filters,right);
   const list=el('div',undefined,'todo-done-list');
   root.append(bar,list);
   const ctx={todos:[],members:[],reload:refresh};
@@ -401,11 +447,13 @@ async function todosDonePage(){
     const mismatched=ctx.todos.filter(t=>todoUnmergedPRs(t).length).length;
     mismatchLabel.hidden=!mismatched&&!mismatchOnly.checked;
     mismatchText.textContent=`미병합 PR 있는 것만 (${mismatched})`;
+    const awaiting=ctx.todos.filter(t=>todoAwaitingPRs(t).length).length;
+    bulk.hidden=!awaiting;bulk.textContent=`병합 전 ${awaiting}건 모두 반영 대기로`;
     draw();
   }
   function draw(){
     const words=todoWords(search.value);
-    const items=ctx.todos.filter(t=>(!category.value||t.category===category.value)&&(!mine.checked||t.assignee_id===me.id)&&(!mismatchOnly.checked||todoUnmergedPRs(t).length)&&todoMatches(t,words));
+    const items=ctx.todos.filter(t=>(!category.value||t.category===category.value)&&(!mine.checked||t.assignee_id===me.id)&&(!mismatchOnly.checked||todoUnmergedPRs(t).length)&&(!resolution.value||(resolution.value==='dropped')===(t.resolution==='dropped'))&&todoMatches(t,words));
     summary.textContent=`${items.length}건`+(ctx.todos.length>=500?' · 최근 500건까지 표시':'');
     if(!items.length){list.replaceChildren(el('p',ctx.todos.length?'조건에 맞는 완료된 할 일이 없습니다.':'아직 완료된 할 일이 없습니다. 보드에서 진행 중·검토대기 카드의 “완료”를 체크하면 여기로 옵니다.','empty'));return;}
     const rows=items.map(t=>{
@@ -413,10 +461,26 @@ async function todosDonePage(){
       title.addEventListener('click',()=>todoDialog(root,project,ctx,t));
       const links=todoLinkPills(t)||'—';
       const actions=el('div',undefined,'todo-done-actions');
-      if(canWrite)actions.append(btn('진행 중으로 되돌리기',async()=>{
-        await tool('move_todo',{project_id:project.id,todo_id:t.id,status:'in_progress',priority:t.priority});
-        notify(`“${t.title}”을(를) 진행 중으로 되돌렸습니다.`);await refresh();
-      },'secondary'));
+      const move=(status,label)=>async()=>{
+        try{
+          await tool('move_todo',{project_id:project.id,todo_id:t.id,status,priority:t.priority});
+          notify(`“${t.title}”을(를) ${label}(으)로 되돌렸습니다.`);await refresh();
+        }catch(err){notify(err.message,true);}
+      };
+      if(canWrite){
+        // Open or unchecked PR: the work is done and waits for the merge (반영 대기).
+        // Every PR closed unmerged: most likely dropped from scope (폐기).
+        if(todoAwaitingPRs(t).length){
+          actions.append(btn('반영 대기로 되돌리기',move('pending_release','반영 대기'),'primary'),btn('진행 중으로',move('in_progress','진행 중'),'secondary'));
+        }else if(todoUnmergedPRs(t).length){
+          actions.append(btn('폐기로 표시',async()=>{if(await dropTodo(project,t))await refresh();},'primary'),btn('진행 중으로',move('in_progress','진행 중'),'secondary'));
+        }else actions.append(btn('진행 중으로 되돌리기',move('in_progress','진행 중'),'secondary'));
+      }
+      if(t.resolution==='dropped'){
+        const tag=el('span','폐기','todo-resolution-dropped');
+        if(t.resolution_note)tag.title='폐기 사유: '+t.resolution_note;
+        title.prepend(tag,document.createTextNode(' '));
+      }
       const done=when(t);
       if(todoUnmergedPRs(t).length)title.classList.add('todo-done-mismatch');
       return [done?new Date(done).toLocaleDateString():'—',title,el('span',todoPriorityLabel[t.priority]||t.priority,'todo-priority todo-p-'+t.priority),t.category||'—',t.assignee_name||'—',links,actions];
@@ -427,6 +491,7 @@ async function todosDonePage(){
   category.addEventListener('change',draw);
   mine.addEventListener('change',draw);
   mismatchOnly.addEventListener('change',draw);
+  resolution.addEventListener('change',draw);
   await refresh();
   return root;
 }
@@ -462,10 +527,15 @@ const todoPRLabels={unknown:'확인 전',open:'PR 열림',closed:'PR 닫힘',mer
 // A completed to-do whose linked pull requests are not all merged or deployed
 // (open, closed without merge, or not checked yet): every PR counts, not just
 // the latest one shown on the card.
+// A dropped (폐기) to-do is not flagged: its PRs were closed on purpose.
 function todoUnmergedPRs(t){
-  if(t.status!=='completed')return [];
+  if(t.status!=='completed'||t.resolution==='dropped')return [];
   return (t.pull_requests||[]).filter(pr=>pr.state!=='merged'&&pr.state!=='deployed');
 }
+// Of those, the PRs still open or not checked yet: the change may still land.
+function todoAwaitingPRs(t){return todoUnmergedPRs(t).filter(pr=>pr.state!=='closed');}
+// Linked PRs that were all closed without a merge.
+function todoPRsAllClosed(t){const prs=t.pull_requests||[];return prs.length>0&&prs.every(pr=>pr.state==='closed');}
 function todoLinkPills(t){
   const unmerged=todoUnmergedPRs(t);
   if(!t.task_count&&!t.open_issue_count&&!unmerged.length)return null;
@@ -475,7 +545,7 @@ function todoLinkPills(t){
   if(pr)row.append(el('span',`#${pr.number} ${todoPRLabels[pr.state]||pr.state}`,'todo-link-pill pr-'+pr.state));
   if(unmerged.length){
     const warn=el('span',`⚠ 미병합 PR ${unmerged.length}`,'todo-link-pill pr-mismatch');
-    warn.title='완료로 표시됐지만 병합되지 않은 PR: '+unmerged.map(x=>`#${x.number} ${todoPRLabels[x.state]||x.state}`).join(', ');
+    warn.title='완료로 표시됐지만 병합되지 않은 PR: '+unmerged.map(x=>`#${x.number} ${todoPRLabels[x.state]||x.state}`).join(', ')+'. GitHub가 알려 주지 않은 PR(웹훅 등록 전 병합 등)은 할 일을 열어 연결된 AI 작업에서 "병합됨 확인"으로 기록할 수 있습니다.';
     row.append(warn);
   }
   if(t.open_issue_count)row.append(el('span',`질의 ${t.open_issue_count}`,'todo-link-pill issue'));
@@ -586,7 +656,7 @@ async function todoTasksSection(project,t,ctx){
       const li=el('li');
       li.append(el('span',taskStatusLabels[r.status]||r.status,'pill task-'+r.status),document.createTextNode(' '+r.title+' '));
       li.append(el('span',`${r.created_by_name||''} · ${new Date(r.started_at).toLocaleDateString()}`,'small muted'));
-      for(const pr of r.pull_requests||[]){const a=el('a',` #${pr.number} ${todoPRLabels[pr.state]||pr.state}`,'small');a.href=pr.url;a.target='_blank';a.rel='noopener noreferrer';li.append(a);}
+      for(const pr of r.pull_requests||[]){const a=el('a',` #${pr.number} ${todoPRLabels[pr.state]||pr.state}`+(pr.confirmed_at?' (수동 확인)':pr.check_error?' ⚠':''),'small');a.href=pr.url;a.target='_blank';a.rel='noopener noreferrer';a.title=prStateTitle(pr);li.append(a,...prConfirmButtons(project,pr,async()=>{await ctx?.reload?.();}));}
       // The task's creator, the owner or an admin (with edit access) can drop a wrong link.
       if((r.created_by===me.id||['owner','admin'].includes(project.role))&&['owner','admin','editor'].includes(project.role)){
         li.append(document.createTextNode(' '),btn('연결 해제',async()=>{await unlinkTaskTodo(project,{...r,todo:{id:t.id,title:t.title}},async()=>{li.remove();await ctx?.reload?.();});},'secondary small todo-task-unlink'));
@@ -621,6 +691,7 @@ function todoDialog(parent,project,ctx,t){
   const branch=field(grid,'작업 브랜치 (반영 대기)','branch','text',t.branch||'');branch.required=false;branch.maxLength=200;
   branch.placeholder='예: feat/todo-pending-release';branch.spellcheck=false;branch.autocomplete='off';
   const relations=todoRelationsSection(ctx,t,canWrite);form.append(relations.node);
+  if(editing&&t.resolution==='dropped')form.append(el('p','폐기로 닫힌 할 일입니다'+(t.resolution_note?` — 사유: ${t.resolution_note}`:'.'),'todo-dropped-note'));
   if(editing){
     form.append(el('p',`${t.created_by_name||''} 작성 · ${new Date(t.updated_at).toLocaleString()} 수정`,'small muted'));
     const slot=el('div');form.append(slot);
@@ -635,6 +706,10 @@ function todoDialog(parent,project,ctx,t){
       await tool('delete_todo',{project_id:project.id,todo_id:t.id});
       dialog.close();notify('할 일을 삭제했습니다.');await ctx.reload();
     },'danger todo-delete'));
+    // Out of scope or no longer needed: close it with a reason instead of deleting it.
+    if(editing&&t.resolution!=='dropped')actions.append(btn('폐기',async()=>{
+      if(await dropTodo(project,t)){dialog.close();await ctx.reload();}
+    },'secondary todo-drop'));
     const save=el('button',editing?'저장':'추가');save.type='submit';
     actions.append(close,save);
     form.addEventListener('submit',async e=>{

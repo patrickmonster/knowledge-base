@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 // Deployment checks (PR 병합·배포 확인).
@@ -161,6 +163,9 @@ type TrackedPullRequest struct {
 	CheckError        *string `json:"check_error,omitempty"`
 	RecordedState     *string `json:"recorded_state,omitempty"`
 	RecordedAt        *string `json:"recorded_at,omitempty"`
+	ConfirmedBy       *string `json:"confirmed_by,omitempty"`
+	ConfirmedByName   *string `json:"confirmed_by_name,omitempty"`
+	ConfirmedAt       *string `json:"confirmed_at,omitempty"`
 	CreatedAt         string  `json:"created_at"`
 }
 
@@ -189,7 +194,11 @@ func insertPullRequests(ctx context.Context, tx *sql.Tx, projectID, taskID, hist
 			return err
 		}
 	}
-	return nil
+	// A pull request merged or closed before the task was finished was
+	// reported by the repository's webhook already; take that state now.
+	_, err := tx.ExecContext(ctx, `UPDATE task_pull_requests t SET state=g.state,merge_commit=g.merge_commit,merged_at=g.merged_at,checked_at=now(),check_error=NULL
+		FROM github_pull_requests g WHERE t.task_id=$1 AND t.state='unknown' AND g.project_id=t.project_id AND g.repository=t.repository AND g.number=t.number`, taskID)
+	return err
 }
 
 type deploymentScope struct {
@@ -329,7 +338,8 @@ func (s *Store) recordDeployments(ctx context.Context, projectID, taskID string)
 }
 
 func (s *Store) recordTaskDeployment(ctx context.Context, tx *sql.Tx, taskID string) (bool, error) {
-	rows, err := many[TrackedPullRequest](ctx, tx, `SELECT to_jsonb(p) FROM task_pull_requests p WHERE task_id=$1 ORDER BY repository,number FOR UPDATE`, taskID)
+	rows, err := many[TrackedPullRequest](ctx, tx, `SELECT to_jsonb(p)||jsonb_build_object('confirmed_by_name',(SELECT name FROM users WHERE id=p.confirmed_by))
+		FROM task_pull_requests p WHERE task_id=$1 ORDER BY repository,number FOR UPDATE OF p`, taskID)
 	if err != nil || len(rows) == 0 {
 		return false, err
 	}
@@ -379,7 +389,7 @@ func (s *Store) recordTaskDeployment(ctx context.Context, tx *sql.Tx, taskID str
 	details := map[string]any{"task_id": taskID, "pull_requests": len(rows)}
 	// The change landed: the linked to-do is done even if the task ended partial.
 	if s.pullsLanded(rows) {
-		todo, err := completeRunTodo(ctx, tx, taskID, creator, pullsDeployed(rows))
+		todo, err := completeRunTodo(ctx, tx, taskID, creator, pullsDeployed(rows), true)
 		if err != nil {
 			return false, err
 		}
@@ -412,6 +422,17 @@ func seoulTime(raw *string) string {
 }
 
 func (s *Store) describePullRequest(p TrackedPullRequest) string {
+	if p.ConfirmedAt != nil && (p.State == "merged" || p.State == "closed") {
+		who := "소유자·관리자"
+		if p.ConfirmedByName != nil && *p.ConfirmedByName != "" {
+			who = *p.ConfirmedByName
+		}
+		state := "병합"
+		if p.State == "closed" {
+			state = "병합되지 않고 닫힘"
+		}
+		return state + " — " + who + "이(가) 웹에서 수동 확인 " + seoulTime(p.ConfirmedAt) + "(GitHub가 이 서버에 알리지 않은 PR)"
+	}
 	merged := "병합"
 	if p.MergedAt != nil {
 		merged += " " + seoulTime(p.MergedAt)
@@ -438,11 +459,26 @@ func (s *Store) describePullRequest(p TrackedPullRequest) string {
 // deploymentBlock renders the status block prepended to a history.
 func deploymentBlock(now time.Time, rows []TrackedPullRequest, s *Store) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "> **상태 갱신 (%s Asia/Seoul, 서버 자동 확인)** — 아래 본문은 작성 시점 기록이며 그대로 보존한다.\n", now.In(seoul).Format("2006-01-02 15:04"))
+	manual, auto := 0, 0
+	for _, p := range rows {
+		if p.ConfirmedAt != nil {
+			manual++
+		} else {
+			auto++
+		}
+	}
+	source := "서버 자동 확인"
+	switch {
+	case manual > 0 && auto == 0:
+		source = "웹 수동 확인"
+	case manual > 0:
+		source = "서버 자동 확인·웹 수동 확인"
+	}
+	fmt.Fprintf(&b, "> **상태 갱신 (%s Asia/Seoul, %s)** — 아래 본문은 작성 시점 기록이며 그대로 보존한다.\n", now.In(seoul).Format("2006-01-02 15:04"), source)
 	for _, p := range rows {
 		b.WriteString("> - PR " + p.URL + ": " + s.describePullRequest(p) + "\n")
 	}
-	b.WriteString("> - GitHub 병합 상태와 실행 중인 서버 빌드만 확인했다. 운영에서 기능을 실제로 써 본 확인은 포함하지 않는다.\n")
+	b.WriteString("> - GitHub 병합 상태(웹훅 수신·조회 또는 수동 확인)와 실행 중인 서버 빌드만 확인했다. 운영에서 기능을 실제로 써 본 확인은 포함하지 않는다.\n")
 	return b.String()
 }
 
@@ -509,7 +545,73 @@ type DeploymentCheckResult struct {
 	PullRequests      []TrackedPullRequest `json:"pull_requests"`
 }
 
+// PullRequestConfirmInput marks a tracked pull request merged or closed by
+// hand, for one GitHub never reported to this server (merged before the
+// repository's webhook was registered, or in a private repository the server
+// cannot read).
+type PullRequestConfirmInput struct {
+	ProjectID  string `json:"project_id"`
+	TaskID     string `json:"task_id"`
+	Repository string `json:"repository" jsonschema:"owner/name as tracked"`
+	Number     int    `json:"number"`
+	State      string `json:"state" jsonschema:"merged or closed"`
+}
+
+// confirmPullRequest is web console only (a signed-in person, never an MCP
+// key) and needs project owner or admin access. Only pull requests the server
+// could not settle (unknown or open) can be confirmed.
+func (s *Store) confirmPullRequest(ctx context.Context, tx *sql.Tx, a Identity, in PullRequestConfirmInput) (TrackedPullRequest, error) {
+	if a.KeyID != "" {
+		return TrackedPullRequest{}, problem("FORBIDDEN", "Pull requests are confirmed by a signed-in person in the web console.")
+	}
+	p, err := projectAccess(ctx, tx, a.User.ID, in.ProjectID, true)
+	if err != nil {
+		return TrackedPullRequest{}, err
+	}
+	if p.Role != "owner" && p.Role != "admin" {
+		return TrackedPullRequest{}, problem("FORBIDDEN", "Owner or admin access is required.")
+	}
+	if in.State != "merged" && in.State != "closed" {
+		return TrackedPullRequest{}, problem("INVALID_INPUT", "state must be merged or closed.")
+	}
+	repo := strings.ToLower(strings.TrimSpace(in.Repository))
+	var current string
+	err = tx.QueryRowContext(ctx, `SELECT state FROM task_pull_requests WHERE project_id=$1 AND task_id::text=$2 AND repository=$3 AND number=$4 FOR UPDATE`,
+		p.ID, in.TaskID, repo, in.Number).Scan(&current)
+	if errors.Is(err, sql.ErrNoRows) {
+		return TrackedPullRequest{}, problem("NOT_FOUND", "Pull request not tracked by this task.")
+	}
+	if err != nil {
+		return TrackedPullRequest{}, err
+	}
+	if current != "unknown" && current != "open" {
+		return TrackedPullRequest{}, problem("CONFLICT", "GitHub already settled this pull request as "+current+".")
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE task_pull_requests SET state=$5,merge_commit=NULL,merged_at=NULL,checked_at=now(),check_error=NULL,confirmed_by=$6,confirmed_at=now()
+		WHERE project_id=$1 AND task_id=$2 AND repository=$3 AND number=$4`, p.ID, in.TaskID, repo, in.Number, in.State, a.User.ID); err != nil {
+		return TrackedPullRequest{}, err
+	}
+	return one[TrackedPullRequest](ctx, tx, `SELECT to_jsonb(t)||jsonb_build_object('confirmed_by_name',u.name) FROM task_pull_requests t LEFT JOIN users u ON u.id=t.confirmed_by
+		WHERE t.task_id=$1 AND t.repository=$2 AND t.number=$3`, in.TaskID, repo, in.Number)
+}
+
 func registerDeploymentTools(t Tools, s *Store) {
+	addCall(t, "confirm_pull_request", "Web console only, project owner or admin: mark a tracked pull request merged or closed by hand when GitHub never reported it (merged before the repository's webhook existed). The task history gets a status block saying it was confirmed by hand.", true, func(ctx context.Context, a Identity, in PullRequestConfirmInput) (any, error) {
+		ctx = auditInput(ctx, in)
+		out, err := s.Perform(ctx, a, "confirm_pull_request", in.ProjectID, true, false, func(tx *sql.Tx) (any, error) { return s.confirmPullRequest(ctx, tx, a, in) })
+		if err != nil {
+			return nil, err
+		}
+		if _, err := s.recordDeployments(ctx, in.ProjectID, in.TaskID); err != nil {
+			return nil, err
+		}
+		return out, nil
+	})
+	// A person confirms what they saw on GitHub; an AI client's key cannot.
+	tool := t["confirm_pull_request"]
+	tool.Register = func(*mcp.Server, Identity) {}
+	t["confirm_pull_request"] = tool
+
 	addCall(t, "check_task_deployments", "Check now on GitHub whether the pull requests named in finish_task were merged, closed, or (for this server's own repository) deployed, and prepend a status block to each history whose pull requests reached a final state. The original history body is kept. Without task_id it checks your tasks in the project. Editor access required.", true, s.CheckTaskDeployments)
 }
 

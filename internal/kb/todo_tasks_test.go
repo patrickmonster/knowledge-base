@@ -232,3 +232,85 @@ func TestPendingReleaseTodoWaitsForRelease(t *testing.T) {
 		t.Fatalf("the other to-do still waits: %s", got)
 	}
 }
+
+// finish_task completed with pull requests puts the to-do in 반영 대기 (not
+// completed with an open PR); a merge completes it, while pull requests closed
+// unmerged leave it for a person, who can close it as 폐기 (dropped).
+func TestFinishTaskWithPullRequestsWaitsForMerge(t *testing.T) {
+	s := testStore(t)
+	f, srv := newFakeGitHub(t)
+	s.GitHub = &GitHubClient{BaseURL: srv.URL}
+	tools := NewTools(s)
+	owner := loginAs(t, s, "admin@example.com")
+	p := mustCall(t, tools, owner, "create_project", CreateProjectInput{Slug: "todo-await-merge", Name: "await merge"}).(Project)
+	get := func(id string) Todo {
+		for _, td := range mustCall(t, tools, owner, "list_todos", ListTodosInput{ProjectID: p.ID}).([]Todo) {
+			if td.ID == id {
+				return td
+			}
+		}
+		t.Fatalf("to-do %s not found", id)
+		return Todo{}
+	}
+
+	merged := mustCall(t, tools, owner, "save_todo", SaveTodoInput{ProjectID: p.ID, Title: "병합될 일"}).(Todo)
+	run := mustCall(t, tools, owner, "start_task", StartTaskInput{ProjectID: p.ID, RequestKey: "await-1", Title: "병합", Task: "병합", TodoID: merged.ID, Branch: "feat/await"}).(StartTaskResult).Run
+	done := finishFixture(p.ID, run.ID)
+	done.PullRequests = []string{"x/y#5"}
+	if c := mustCall(t, tools, owner, "finish_task", done).(TaskCompletion); c.Todo == nil || c.Todo.Status != "pending_release" {
+		t.Fatalf("finish_task completed with an unmerged PR waits in 반영 대기: %+v", c.Todo)
+	}
+	if td := get(merged.ID); !td.ReleaseAuto || td.Branch != "feat/await" || td.CompletedAt != "" {
+		t.Fatalf("release_auto and the run's branch: %+v", td)
+	}
+	f.set("/repos/x/y/pulls/5", map[string]any{"state": "closed", "merged": true, "merge_commit_sha": "5555555", "merged_at": "2026-11-20T02:00:00Z"})
+	mustCall(t, tools, owner, "check_task_deployments", DeploymentCheckInput{ProjectID: p.ID})
+	if td := get(merged.ID); td.Status != "completed" || td.ReleaseAuto || td.Resolution != "" {
+		t.Fatalf("the merge completes a to-do finish_task put in 반영 대기: %+v", td)
+	}
+
+	// Without pull requests finish_task completes as before.
+	plain := mustCall(t, tools, owner, "save_todo", SaveTodoInput{ProjectID: p.ID, Title: "PR 없는 일"}).(Todo)
+	run2 := mustCall(t, tools, owner, "start_task", StartTaskInput{ProjectID: p.ID, RequestKey: "await-2", Title: "문서", Task: "문서", TodoID: plain.ID}).(StartTaskResult).Run
+	if c := mustCall(t, tools, owner, "finish_task", finishFixture(p.ID, run2.ID)).(TaskCompletion); c.Todo == nil || c.Todo.Status != "completed" {
+		t.Fatalf("finish_task completed without PRs completes: %+v", c.Todo)
+	}
+
+	closed := mustCall(t, tools, owner, "save_todo", SaveTodoInput{ProjectID: p.ID, Title: "범위 제외될 일"}).(Todo)
+	run3 := mustCall(t, tools, owner, "start_task", StartTaskInput{ProjectID: p.ID, RequestKey: "await-3", Title: "닫힘", Task: "닫힘", TodoID: closed.ID}).(StartTaskResult).Run
+	done3 := finishFixture(p.ID, run3.ID)
+	done3.PullRequests = []string{"x/y#6"}
+	mustCall(t, tools, owner, "finish_task", done3)
+	f.set("/repos/x/y/pulls/6", map[string]any{"state": "closed", "merged": false})
+	mustCall(t, tools, owner, "check_task_deployments", DeploymentCheckInput{ProjectID: p.ID})
+	if td := get(closed.ID); td.Status != "pending_release" {
+		t.Fatalf("PRs closed unmerged leave the to-do for a person: %+v", td)
+	}
+
+	_, err := call(t, tools, owner, "move_todo", MoveTodoInput{ProjectID: p.ID, TodoID: closed.ID, Status: "in_progress", Priority: "medium", Resolution: ptr("dropped")})
+	denied(t, err, "INVALID_INPUT")
+	_, err = call(t, tools, owner, "move_todo", MoveTodoInput{ProjectID: p.ID, TodoID: closed.ID, Status: "completed", Priority: "medium", ResolutionNote: "이유"})
+	denied(t, err, "INVALID_INPUT")
+	_, err = call(t, tools, owner, "move_todo", MoveTodoInput{ProjectID: p.ID, TodoID: closed.ID, Status: "completed", Priority: "medium", Resolution: ptr("gone")})
+	denied(t, err, "INVALID_INPUT")
+	dropped := mustCall(t, tools, owner, "move_todo", MoveTodoInput{ProjectID: p.ID, TodoID: closed.ID, Status: "completed", Priority: "medium", Resolution: ptr("dropped"), ResolutionNote: " 범위 제외 "}).(Todo)
+	if dropped.Status != "completed" || dropped.Resolution != "dropped" || dropped.ResolutionNote != "범위 제외" || dropped.ReleaseAuto || dropped.CompletedAt == "" {
+		t.Fatalf("drop: %+v", dropped)
+	}
+	// Saving the completed to-do (dialog edit) keeps the resolution; leaving completed clears it.
+	kept := mustCall(t, tools, owner, "save_todo", SaveTodoInput{ProjectID: p.ID, TodoID: closed.ID, ExpectedRevision: dropped.Revision, Title: "범위 제외될 일 (수정)", Status: "completed", Priority: "medium"}).(Todo)
+	if kept.Resolution != "dropped" || kept.ResolutionNote != "범위 제외" {
+		t.Fatalf("save keeps the resolution: %+v", kept)
+	}
+	back := mustCall(t, tools, owner, "move_todo", MoveTodoInput{ProjectID: p.ID, TodoID: closed.ID, Status: "in_progress", Priority: "medium"}).(Todo)
+	if back.Resolution != "" || back.ResolutionNote != "" || back.CompletedAt != "" {
+		t.Fatalf("back in progress clears the resolution: %+v", back)
+	}
+	// A plain completion is done; a person-made 반영 대기 is not release_auto.
+	if td := mustCall(t, tools, owner, "move_todo", MoveTodoInput{ProjectID: p.ID, TodoID: closed.ID, Status: "pending_release", Priority: "medium"}).(Todo); td.ReleaseAuto {
+		t.Fatalf("a manual move is not release_auto: %+v", td)
+	}
+	if td := mustCall(t, tools, owner, "move_todo", MoveTodoInput{ProjectID: p.ID, TodoID: closed.ID, Status: "completed", Priority: "medium"}).(Todo); td.Resolution != "" {
+		t.Fatalf("a plain completion is done: %+v", td)
+	}
+}

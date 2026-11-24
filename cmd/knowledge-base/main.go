@@ -78,8 +78,12 @@ func run() error {
 		if store.MFAKey, err = kb.ParseMFAKey(os.Getenv("MFA_ENCRYPTION_KEY")); err != nil {
 			return err
 		}
-		if store.GitHub, err = kb.NewGitHubClient(os.Getenv("GITHUB_API_URL"), os.Getenv("GITHUB_TOKEN")); err != nil {
+		if store.GitHub, err = kb.NewGitHubClient(os.Getenv("GITHUB_API_URL")); err != nil {
 			return err
+		}
+		if os.Getenv("GITHUB_TOKEN") != "" {
+			// The server keeps no GitHub credentials; private repositories report through webhooks.
+			slog.Warn("GITHUB_TOKEN is no longer used and can be removed: register a GitHub webhook per repository in the web console")
 		}
 		if store.Deployment, err = kb.DetectDeploymentTarget(os.Getenv("SERVER_REPOSITORY"), os.Getenv("RAILWAY_GIT_REPO_OWNER"), os.Getenv("RAILWAY_GIT_REPO_NAME")); err != nil {
 			return err
