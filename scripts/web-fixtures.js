@@ -156,6 +156,8 @@ function mockAPI(variant){
     'POST /api/admin/discord/channels':()=>[],
     'POST /api/admin/discord':()=>({}),
     'POST /api/admin/discord/register-commands':()=>({scope:'guild',commands:['kb']}),
+    'GET /api/admin/scanner':()=>({source:full?'admin':'server',enabled:full,env_configured:false,setting:full?'clamav.internal:3310':null,address:full?'clamav.internal:3310':undefined}),
+    'POST /api/admin/scanner':()=>({}),
     'GET /api/admin/users':()=>[{...ME,activated:true,mfa_enabled:full,created_at:T},...list([{...OTHER,activated:true,mfa_enabled:true,created_at:T},{id:'user-3',name:'퇴사자',email:'gone@example.com',global_role:'member',disabled:true,activated:false,mfa_enabled:false,created_at:T}])],
     'POST /api/admin/users':()=>({}),
     'POST /api/admin/users/mfa-reset':()=>({}),

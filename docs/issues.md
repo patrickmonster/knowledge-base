@@ -111,32 +111,35 @@ open / answered ──update_issue──▶ closed(닫힘: 취소·불필요)
 
 | 변수 | 내용 |
 | --- | --- |
-| `GITHUB_TOKEN` | 선택. 없으면 공개 저장소만, 서버 주소당 시간당 60회 제한. 비공개 저장소는 Issues 읽기 권한이 있는 fine-grained 토큰을 지정합니다. 응답·로그·문서에 남기지 않습니다 |
 | `GITHUB_API_URL` | 선택. GitHub Enterprise Server용 `https://<host>/api/v3`. https만 허용 |
 
-오류 코드: `NOT_FOUND`(저장소 없음·권한 없음·이슈 비활성), `GITHUB_UNAUTHORIZED`(토큰 거부), `GITHUB_RATE_LIMITED`(한도 초과, 재설정 시각 포함), `GITHUB_UNAVAILABLE`(연결 실패·5xx).
+서버는 GitHub 토큰을 쓰지 않습니다(`GITHUB_TOKEN`은 없어졌고, 남아 있으면 시작 로그에 경고만 남깁니다). 그래서 가져오기는 **공개 저장소만**, 서버 주소당 시간당 60회까지 됩니다. 비공개 저장소는 아래 웹훅으로 등록 이후의 이슈를 받습니다.
+
+오류 코드: `NOT_FOUND`(저장소 없음·비공개·이슈 비활성), `GITHUB_UNAUTHORIZED`(GitHub가 접근 거부), `GITHUB_RATE_LIMITED`(한도 초과, 재설정 시각 포함), `GITHUB_UNAVAILABLE`(연결 실패·5xx).
 
 ## GitHub 웹훅 (자동 동기화)
 
-가져오기는 누를 때만 반영됩니다. 이후 변경을 계속 따라가려면 프로젝트 소유자가 웹 **이슈 · 질의 → GitHub 연동 탭 → GitHub 웹훅**에서 저장소를 등록합니다. GitHub가 이벤트가 생길 때만 이 서버로 알려 주므로 GitHub API 호출 한도를 거의 쓰지 않고, 비공개 저장소의 새 이벤트도 `GITHUB_TOKEN` 없이 받습니다.
+웹훅은 이 서버가 GitHub 저장소의 변경을 아는 유일한 경로입니다(서버에 GitHub 토큰이 없음). GitHub가 이벤트가 생길 때만 알려 주므로 API 호출 한도를 쓰지 않고, 비공개 저장소도 받습니다. 다만 **등록 이후의 이벤트만** 오므로 프로젝트를 처음 셋팅할 때 저장소마다 등록합니다.
 
-1. 웹에서 저장소(`owner/name`)와 동기화 범위(이슈, 작업 PR 병합·닫힘)를 정해 **웹훅 추가**를 누릅니다. 이슈는 가져오기와 같은 종류·영역·담당자·추가 태그를 씁니다.
+1. 웹 **프로젝트와 권한 → 저장소**에서 GitHub 저장소 옆 **웹훅 등록**을 누릅니다(소유자만. 프로젝트를 만들 때 저장소를 적으면 이 화면이 바로 열립니다). 이슈 동기화와 작업 PR 병합·닫힘 반영이 켜진 채로 만들어집니다. 이슈 종류·영역·담당자·추가 태그를 정해 만들려면 **이슈 · 질의 → GitHub 연동 탭 → GitHub 웹훅 → 웹훅 추가**를 씁니다.
 2. 표시되는 **Webhook ID**, **Payload URL**(`/api/github/webhooks/<Webhook ID>`)과 **Secret** 중 Payload URL과 Secret을 GitHub 저장소 **Settings → Webhooks → Add webhook**에 붙여 넣습니다. Content type은 `application/json`을 권장합니다(GitHub 기본값 `application/x-www-form-urlencoded`도 받습니다). 이벤트는 *Let me select individual events*에서 **Issues**와 **Pull requests**를 고릅니다. 같은 정보는 웹훅 목록의 **연결 정보**에서 소유자가 다시 볼 수 있습니다. Secret이 새어 나갔다고 의심되면 **Secret 재발급** 후 GitHub 설정도 바꿉니다.
 3. GitHub가 보내는 `ping`이 웹 화면의 최근 수신에 `처리`로 보이면 연결된 것입니다. GitHub의 *Recent Deliveries*에서도 응답을 볼 수 있습니다.
-4. 기존 이슈는 위의 가져오기로 한 번 가져옵니다(웹훅은 등록 이후 이벤트만 보냅니다).
+4. 기존 이슈는 위의 가져오기로 한 번 가져옵니다(공개 저장소만. 웹훅은 등록 이후 이벤트만 보냅니다).
 
 처리하는 이벤트:
 
 | 이벤트 | 동작 |
 | --- | --- |
 | `issues` (opened·edited·closed·reopened·labeled·unlabeled) | 가져오기와 같은 규칙으로 `owner/repo#번호` 항목을 만들거나 갱신. GitHub 수정 시각이 저장된 것보다 오래된 이벤트는 무시(늦게 도착한 재전송이 최신 내용을 되돌리지 않음) |
-| `pull_request` (closed·reopened) | `finish_task`의 `pull_requests`로 추적 중인 PR의 병합·닫힘·다시 열림을 반영하고 history 상태 갱신 블록을 기록. 배포 여부는 서버가 재시작 뒤 자기 빌드와 비교해 판단 |
+| `pull_request` (closed·reopened) | 병합·닫힘·다시 열림을 프로젝트·저장소별로 90일 기억하고(`github_pull_requests`), `finish_task`의 `pull_requests`로 추적 중인 PR에 반영해 history 상태 갱신 블록을 기록. 아직 어느 작업도 이름을 대지 않은 PR(병합 뒤 `finish_task`)은 `처리 · remembered`로 남고, 나중에 그 PR을 넣은 `finish_task`가 바로 그 상태를 받아 기록. 배포 여부는 서버가 재시작 뒤 자기 빌드와 비교해 판단 |
 | `ping` | 연결 확인 |
 | 그 밖의 이벤트·동작 | `무시`로 기록 |
 
 보안과 동작:
 
 - 모든 요청은 `X-Hub-Signature-256`(HMAC-SHA256) 서명이 맞아야 하고, payload의 저장소가 등록한 저장소와 같아야 합니다. `X-GitHub-Delivery`로 같은 전달을 한 번만 처리합니다. 처리에 실패한 전달은 기록하지 않으므로 GitHub에서 **Redeliver**하면 다시 처리됩니다. 본문은 2 MiB까지 받습니다.
+- 서버가 꺼져 있던 동안 GitHub가 보낸 전달은 실패로 남고 GitHub는 자동으로 다시 보내지 않습니다. GitHub 저장소 **Settings → Webhooks → Recent Deliveries**에서 실패한 전달을 **Redeliver**합니다.
+- 웹훅을 등록하기 전에 병합된 PR은 GitHub가 알려 주지 않습니다. 진행 중 작업·할 일 화면에서 소유자·관리자가 GitHub에서 확인한 뒤 **병합됨 확인**·**닫힘 확인**으로 기록합니다([PR 병합·배포 기록](task-workflow.md#pr-병합배포-기록)).
 - Secret은 서버가 만들어 발급한 그대로 DB에 저장합니다(이 서버가 받는 쪽이라 HMAC 검증에 원문이 필요하고, 별도 서버 키 설정이 필요 없습니다). 목록 응답에는 들어가지 않으며 소유자만 **연결 정보**(`set_github_webhook`의 `show_secret`)로 볼 수 있습니다. 028 마이그레이션 이전에 만든 웹훅은 Secret이 비어 수신을 거부하므로 **Secret 재발급** 후 GitHub 설정을 바꿉니다.
 - 이벤트는 웹훅을 마지막으로 저장한 소유자 이름으로 처리되고(이슈 작성자, 감사 로그 `github_webhook`), 그 사람이 편집 권한을 잃으면 거부됩니다. 소유자가 웹훅을 다시 저장하면 됩니다.
 - 웹훅 설정·조회는 웹 콘솔 전용이며 MCP 키로는 쓸 수 없습니다. 수신 기록은 30일 뒤 지웁니다.

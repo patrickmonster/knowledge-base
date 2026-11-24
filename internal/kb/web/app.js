@@ -46,7 +46,7 @@ let pageFocus=null;
 function openPage(name,focus){if(focus?.project_id&&projectList.some(p=>p.id===focus.project_id))setCurrentProject(focus.project_id);pageFocus={...focus,page:name};return render(name);}
 function takePageFocus(name){const f=pageFocus;pageFocus=null;return f?.page===name?f:null;}
 async function render(name){const ticket=++renderGeneration;pageName=name;$('#page-title').textContent=titles[name];updateProjectBadge();document.querySelectorAll('[data-page]').forEach(b=>b.classList.toggle('active',b.dataset.page===name));const page=$('#page');page.replaceChildren(el('p','불러오는 중…','muted'));try{const content=await({rules:rulesPage,prompts:promptsPage,search:searchPage,documents:documentsPage,todos:todosPage,todosDone:todosDonePage,tasks:tasksPage,reviews:reviewsPage,issues:issuesPage,attachments:attachmentsPage,vectors:vectorPage,usage:usagePage,rechecks:rechecksPage,projects,keys,account,overview,users,audit}[name])();if(pageName===name&&ticket===renderGeneration&&me)page.replaceChildren(content);}catch(e){if(pageName===name&&ticket===renderGeneration&&me)page.replaceChildren(el('p',e.message,'muted'));throw e;}}
-async function overview(){const d=await api('/api/admin/stats'),root=el('div'),grid=el('div',undefined,'grid');root.append(el('p','최근 24시간의 작업 기록입니다. 새로고침 시 최신 상태를 조회합니다.','muted'),btn('새로고침',()=>render('overview'),'secondary refresh'));for(const [key,label]of [['active_users','활성 사용자'],['projects','전체 프로젝트'],['active_keys','유효한 MCP 키'],['requests_24h','기록된 작업 · 24시간'],['denied_24h','거부된 작업 · 24시간'],['errors_24h','처리 오류 · 24시간'],['login_failures_24h','로그인 실패 · 24시간'],['average_duration_ms','평균 처리 시간 · ms']]){const c=card();c.classList.add('metric');c.append(el('p',label,'muted'),el('div',d[key],'value'));grid.append(c);}root.append(grid);try{const draw=async()=>{const old=root.querySelector('.retention-card');const n=retentionCard(await api('/api/admin/retention'),draw);n.classList.add('retention-card');old?old.replaceWith(n):root.append(n);};await draw();}catch(e){root.append(el('p','보관 정책을 불러오지 못했습니다: '+e.message,'muted'));}try{const draw=async()=>{const old=root.querySelector('.search-settings-card');const n=searchSettingsCard(await api('/api/admin/search-settings'),draw);n.classList.add('search-settings-card');old?old.replaceWith(n):root.append(n);};await draw();}catch(e){root.append(el('p','검색 설정을 불러오지 못했습니다: '+e.message,'muted'));}try{root.append(await discordAdminCard());}catch(e){root.append(el('p','Discord 설정을 불러오지 못했습니다: '+e.message,'muted'));}return root;}
+async function overview(){const d=await api('/api/admin/stats'),root=el('div'),grid=el('div',undefined,'grid');root.append(el('p','최근 24시간의 작업 기록입니다. 새로고침 시 최신 상태를 조회합니다.','muted'),btn('새로고침',()=>render('overview'),'secondary refresh'));for(const [key,label]of [['active_users','활성 사용자'],['projects','전체 프로젝트'],['active_keys','유효한 MCP 키'],['requests_24h','기록된 작업 · 24시간'],['denied_24h','거부된 작업 · 24시간'],['errors_24h','처리 오류 · 24시간'],['login_failures_24h','로그인 실패 · 24시간'],['average_duration_ms','평균 처리 시간 · ms']]){const c=card();c.classList.add('metric');c.append(el('p',label,'muted'),el('div',d[key],'value'));grid.append(c);}root.append(grid);try{const draw=async()=>{const old=root.querySelector('.retention-card');const n=retentionCard(await api('/api/admin/retention'),draw);n.classList.add('retention-card');old?old.replaceWith(n):root.append(n);};await draw();}catch(e){root.append(el('p','보관 정책을 불러오지 못했습니다: '+e.message,'muted'));}try{const draw=async()=>{const old=root.querySelector('.search-settings-card');const n=searchSettingsCard(await api('/api/admin/search-settings'),draw);n.classList.add('search-settings-card');old?old.replaceWith(n):root.append(n);};await draw();}catch(e){root.append(el('p','검색 설정을 불러오지 못했습니다: '+e.message,'muted'));}try{const draw=async()=>{const old=root.querySelector('.scanner-card');const n=scannerCard(await api('/api/admin/scanner'),draw);n.classList.add('scanner-card');old?old.replaceWith(n):root.append(n);};await draw();}catch(e){root.append(el('p','악성 파일 검사 설정을 불러오지 못했습니다: '+e.message,'muted'));}try{root.append(await discordAdminCard());}catch(e){root.append(el('p','Discord 설정을 불러오지 못했습니다: '+e.message,'muted'));}return root;}
 function retentionCard(r,reload){const c=card('보관 정책'),p=r.policy||{},src=r.sources||{},def=r.defaults||{},days=n=>n?n+'일':'무기한 보관',when=v=>v?new Date(v).toLocaleString():'없음',d=r.data||{},last=r.last_purge,from=k=>src[k]==='admin'?' · 관리자 설정':' · 서버 기본값';
 c.append(table(['항목','설정','현재 보관 건수','가장 오래된 기록'],[['감사 로그',days(p.audit_days)+from('audit_days'),String(d.audit_events??'-'),when(d.oldest_audit_event)],['문서 이전 버전',days(p.revision_days)+from('revision_days')+(p.revision_days?' · 문서별 최신 '+p.revision_keep_latest+'개 유지'+from('revision_keep_latest'):''),String(d.revisions??'-'),when(d.oldest_revision)]]));
 c.append(el('p',last?'마지막 정리: '+when(last.at)+' · 감사 로그 '+last.details.audit_events+'건, 버전 '+last.details.revisions+'건 삭제':'아직 정리 실행 기록이 없습니다.','muted'));
@@ -76,6 +76,19 @@ const save=el('button','검색 설정 저장');form.append(save);
 form.addEventListener('submit',async e=>{e.preventDefault();const t=i.value.trim(),body={issue_score_floor:t===''?null:Number(t)};
 save.disabled=true;try{await api('/api/admin/search-settings',body);notify('검색 설정을 저장했습니다.');await reload();}catch(err){notify(err.message,true);}finally{save.disabled=false;}});
 c.append(form,el('p','벡터 유사도(코사인)가 하한에 못 미치는 질의는 결과에서 빠지고, 빠진 건수는 검색 응답의 filtered_issues로 알려 줍니다. 문서 결과와 키워드 검색은 그대로입니다. 환경변수 ISSUE_SCORE_FLOOR는 이 화면에서 값을 비웠을 때의 기본값으로만 쓰입니다.','muted'));return c;}
+
+// Malware scanner address a global administrator can change (scanner_settings).
+function scannerCard(s,reload){const c=card('악성 파일 검사 (ClamAV)'),from={admin:'관리자 설정',server:'서버 기본값(환경변수 CLAMAV_ADDRESS)'}[s.source]||s.source;
+c.append(el('p','현재: '+(s.enabled?'사용 중 · '+s.address:'사용 안 함')+' · 출처: '+from,'muted'));
+const form=el('form',undefined,'scanner-form'),mode=el('select');mode.name='mode';for(const [v,l]of [['default','서버 기본값 따르기'],['off','사용 안 함'],['address','주소 지정']]){const o=el('option',l);o.value=v;mode.append(o);}
+const addr=el('input');addr.name='address';addr.placeholder='호스트:포트 (예: clamav.railway.internal:3310)';addr.autocomplete='off';
+mode.value=s.setting===null||s.setting===undefined?'default':s.setting===''?'off':'address';addr.value=s.setting||'';
+const sync=()=>{addr.hidden=mode.value!=='address';addr.required=mode.value==='address';};mode.addEventListener('change',sync);sync();
+const ml=el('label','검사 방식'),save=el('button','검사 설정 저장');ml.append(mode);form.append(ml,addr,save);
+form.addEventListener('submit',async e=>{e.preventDefault();const address=mode.value==='default'?null:mode.value==='off'?'':addr.value.trim();
+if(mode.value==='off'&&s.enabled&&!confirm('검사를 끄면 이후 업로드는 악성 파일 검사 없이 저장됩니다. 끌까요?'))return;
+save.disabled=true;try{await api('/api/admin/scanner',{address});notify('검사 설정을 저장했습니다.');await reload();}catch(err){notify(err.message,true);}finally{save.disabled=false;}});
+c.append(form,el('p','값은 서버에 저장되며 재시작 없이 바로 적용됩니다. 주소를 지정하면 모든 업로드를 clamd로 검사하고, 연결되지 않으면 업로드가 거부됩니다(fail closed). 서버 기본값은 환경변수 CLAMAV_ADDRESS이며, 이 화면에서 지정하면 그 값이 우선합니다. 상태는 첨부 화면에서 확인할 수 있습니다.','muted'));return c;}
 
 // Lists the caller's projects as a table; 프로젝트 만들기 opens the create form in a modal.
 async function projects(){
@@ -120,6 +133,9 @@ function openProjectDialog(parent){
     dialog.close();
     const failed=await addRepositories(created.id,repos);
     notify(failed.length?'프로젝트를 만들었지만 저장소 '+failed.length+'개를 등록하지 못했습니다: '+failed.join(' · '):'프로젝트를 만들었습니다.',failed.length>0);
+    // GitHub repositories need their webhook from the start (no PR is missed),
+    // so the 저장소 screen opens with the "웹훅 등록" buttons.
+    if(repos.length>failed.length){await repositories({...created,role:'owner',owner_id:me.id});return;}
     await loadProjects();await render('projects');
   });
   const actions=el('div',undefined,'actions project-dialog-actions');actions.append(btn('취소',()=>dialog.close()),form.querySelector('button'));form.append(actions);
@@ -163,7 +179,57 @@ root.append(up,down);$('#page').replaceChildren(root);}
 function parseRepositoryLines(text){return [...new Set(text.split(/[\n,]/).map(s=>s.trim()).filter(Boolean))];}
 async function addRepositories(projectID,repos){const failed=[];for(const r of repos){try{await tool('add_project_repository',{project_id:projectID,repository:r});}catch(e){failed.push(r+' ('+e.message+')');}}return failed;}
 function repositoryPills(repos){const box=el('div',undefined,'repo-pills');if(!repos?.length){box.append(el('span','등록된 저장소 없음','small muted'));return box;}for(const r of repos)box.append(el('span',r,'pill'));return box;}
-async function repositories(project){await loadProjects();const repos=(projectList.find(p=>p.id===project.id)||project).repositories||[],canManage=project.role==='owner'||project.role==='admin',root=el('div'),c=card(project.name+' · 소스 저장소');root.append(btn('프로젝트 목록',()=>render('projects'),'secondary refresh'),c);c.append(el('p','AI 에이전트는 작업 중인 저장소의 git remote로 이 프로젝트를 찾습니다(resolve_project). 같은 프로젝트에 저장소를 여러 개(최대 20개) 연결할 수 있고, 주소는 host/owner/name 형태로 정리되어 저장됩니다.','small muted'));const rows=repos.map(r=>{const host=r.split('/')[0],link=el('a',r);link.href='https://'+r;link.target='_blank';link.rel='noopener noreferrer';const cells=[host==='github.com'||host==='gitlab.com'||host==='bitbucket.org'?link:el('code',r)];if(canManage)cells.push(btn('삭제',async()=>{if(!confirm(r+' 저장소 연결을 해제할까요? 이 저장소에서 작업하는 AI가 더 이상 이 프로젝트를 찾지 못합니다.'))return;await tool('remove_project_repository',{project_id:project.id,repository:r});notify('저장소 연결을 해제했습니다.');await repositories(project);},'danger'));return cells;});c.append(table(canManage?['저장소','']:['저장소'],rows));if(canManage){const f=el('form');f.append(el('h2','저장소 추가'));const l=el('label','저장소 주소 (한 줄에 하나 · git remote get-url origin 결과 또는 owner/name)'),t=el('textarea');t.name='repositories';t.rows=3;t.required=true;t.placeholder='https://github.com/owner/name.git\ngit@github.com:owner/other.git\nowner/name';l.append(t);f.append(l);formSubmit(f,'저장소 추가',async d=>{const list=parseRepositoryLines(d.repositories||'');if(!list.length)return;const failed=await addRepositories(project.id,list);if(failed.length)notify('등록하지 못한 저장소: '+failed.join(' · '),true);else notify('저장소를 등록했습니다.');await repositories(project);});c.append(f);}else c.append(el('p','저장소 추가·삭제는 프로젝트 소유자·관리자만 할 수 있습니다.','small muted'));$('#page').replaceChildren(root);}
+// The 저장소 screen also sets up each GitHub repository's webhook: the server
+// keeps no GitHub token, so merges and issues of a private repository only
+// arrive through the webhook, from the moment it is registered.
+async function repositories(project){
+  await loadProjects();
+  const repos=(projectList.find(p=>p.id===project.id)||project).repositories||[],canManage=project.role==='owner'||project.role==='admin',isOwner=project.role==='owner',root=el('div'),c=card(project.name+' · 소스 저장소');
+  root.append(btn('프로젝트 목록',()=>render('projects'),'secondary refresh'),c);
+  c.append(el('p','AI 에이전트는 작업 중인 저장소의 git remote로 이 프로젝트를 찾습니다(resolve_project). 같은 프로젝트에 저장소를 여러 개(최대 20개) 연결할 수 있고, 주소는 host/owner/name 형태로 정리되어 저장됩니다.','small muted'));
+  c.append(el('p','GitHub 저장소는 웹훅을 함께 등록하세요. 서버는 GitHub 토큰을 쓰지 않으므로, 비공개 저장소의 PR 병합·이슈는 웹훅을 등록한 이후의 것만 반영됩니다. 프로젝트를 처음 셋팅할 때 등록해 두면 놓치는 PR이 없습니다.','small muted'));
+  let hooks=[];
+  try{hooks=(await tool('list_github_webhooks',{project_id:project.id})).webhooks;}catch{}
+  const reload=()=>repositories(project);
+  const githubRepo=r=>{const parts=r.split('/');return parts[0]==='github.com'&&parts.length===3?parts[1]+'/'+parts[2]:'';};
+  const missing=repos.map(githubRepo).filter(g=>g&&!hooks.some(h=>h.repository===g));
+  if(missing.length)c.append(el('p',`⚠ 웹훅이 없는 GitHub 저장소 ${missing.length}개: ${missing.join(', ')}`+(isOwner?' — 아래 "웹훅 등록"을 누르세요.':' — 프로젝트 소유자에게 등록을 요청하세요.'),'pill error'));
+  const registerWebhook=async g=>{
+    const r=await tool('set_github_webhook',{project_id:project.id,repository:g,import_issues:true,track_pull_requests:true,issue_kind:'issue'});
+    webhookSecretDialog(r);await reload();
+  };
+  const rows=repos.map(r=>{
+    const host=r.split('/')[0],link=el('a',r);link.href='https://'+r;link.target='_blank';link.rel='noopener noreferrer';
+    const cells=[host==='github.com'||host==='gitlab.com'||host==='bitbucket.org'?link:el('code',r)];
+    const g=githubRepo(r),hook=g&&hooks.find(h=>h.repository===g),state=el('div');
+    if(!g)state.append(el('span','—','muted'));
+    else if(hook){
+      state.append(el('span',hook.enabled?'웹훅 연결됨':'웹훅 꺼짐','pill'+(hook.enabled?'':' error')));
+      state.append(el('div',hook.last_delivery_at?`최근 수신 ${new Date(hook.last_delivery_at).toLocaleString()}`:'아직 받은 이벤트 없음 — GitHub에 Payload URL·Secret을 붙여 넣었는지 확인하세요','small muted'));
+      if(!hook.track_pull_requests)state.append(el('div','작업 PR 병합·닫힘 반영이 꺼져 있습니다','small muted'));
+    }else{
+      state.append(el('span','웹훅 없음','pill error'));
+      if(isOwner)state.append(btn('웹훅 등록',()=>registerWebhook(g)));
+    }
+    cells.push(state);
+    if(canManage)cells.push(btn('삭제',async()=>{if(!confirm(r+' 저장소 연결을 해제할까요? 이 저장소에서 작업하는 AI가 더 이상 이 프로젝트를 찾지 못합니다.'))return;await tool('remove_project_repository',{project_id:project.id,repository:r});notify('저장소 연결을 해제했습니다.');await reload();},'danger'));
+    return cells;
+  });
+  c.append(table(canManage?['저장소','GitHub 웹훅','']:['저장소','GitHub 웹훅'],rows));
+  if(hooks.length)c.append(el('p','웹훅 세부 설정(이슈 종류·영역·담당자, Secret 재발급)은 이슈 · 질의 → GitHub 연동 탭에서 바꿉니다.','small muted'));
+  if(canManage){
+    const f=el('form');f.append(el('h2','저장소 추가'));
+    const l=el('label','저장소 주소 (한 줄에 하나 · git remote get-url origin 결과 또는 owner/name)'),t=el('textarea');t.name='repositories';t.rows=3;t.required=true;t.placeholder='https://github.com/owner/name.git\ngit@github.com:owner/other.git\nowner/name';l.append(t);f.append(l);
+    formSubmit(f,'저장소 추가',async d=>{
+      const list=parseRepositoryLines(d.repositories||'');if(!list.length)return;
+      const failed=await addRepositories(project.id,list);
+      if(failed.length)notify('등록하지 못한 저장소: '+failed.join(' · '),true);else notify('저장소를 등록했습니다. GitHub 저장소는 이어서 웹훅을 등록하세요.');
+      await reload();
+    });
+    c.append(f);
+  }else c.append(el('p','저장소 추가·삭제는 프로젝트 소유자·관리자만 할 수 있습니다.','small muted'));
+  $('#page').replaceChildren(root);
+}
 const roleLabels={owner:'소유자',admin:'관리자',editor:'편집자',viewer:'조회자'};
 async function members(project){const data=await tool('list_project_members',{project_id:project.id}),root=el('div'),c=card(project.name+' · 참여자');root.append(btn('프로젝트 목록',()=>render('projects'),'secondary refresh'),c);c.append(table(['이름','사용자 ID','역할'],data.map(u=>[u.name,el('code',u.user_id),roleLabels[u.role]||u.role])));if(project.role==='owner'){const f=el('form');f.append(el('h2','권한 설정'));field(f,'사용자 ID (사용자의 내 계정 화면에서 확인)','user_id');selectField(f,'역할','role',[['editor','편집자 — 조회·추가·수정'],['admin','관리자 — 편집 + 소유자 규칙 관리'],['viewer','조회자 — 조회만'],['remove','프로젝트에서 제외']]);formSubmit(f,'권한 적용',async d=>{if(d.role==='remove'&&!confirm('이 사용자를 프로젝트에서 제외할까요?'))return;await tool('set_project_member',{...d,project_id:project.id});notify('권한을 적용했습니다.');await members(project);});c.append(f);const candidates=data.filter(u=>u.role!=='owner'&&!u.disabled);if(candidates.length){const t=el('form');t.append(el('h2','소유자 이전'),el('p','새 소유자는 참여자 관리·재색인 권한을 갖고, 나는 아래에서 고른 역할로 남습니다. 되돌리려면 새 소유자가 다시 이전해야 합니다.'));selectField(t,'새 소유자','user_id',candidates.map(u=>[u.user_id,u.name+' ('+(roleLabels[u.role]||u.role)+')']));selectField(t,'이전 후 내 역할','previous_owner_role',[['editor','편집자'],['admin','관리자'],['viewer','조회자']]);field(t,'확인을 위해 주소용 이름 입력: '+project.slug,'confirm_slug');formSubmit(t,'소유자 이전',async d=>{if(d.confirm_slug!==project.slug){notify('주소용 이름이 일치하지 않습니다.',true);return;}const name=candidates.find(u=>u.user_id===d.user_id)?.name||d.user_id;if(!confirm(name+'에게 “'+project.name+'” 소유권을 넘길까요?'))return;await tool('transfer_project_owner',{...d,project_id:project.id});notify('소유자를 이전했습니다.');await loadProjects();await members({...project,role:d.previous_owner_role});});c.append(t);}}$('#page').replaceChildren(root);}
 function mcpGuide(url){

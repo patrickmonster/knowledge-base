@@ -6,6 +6,25 @@
 const taskStatusLabels={open:'진행 중',completed:'완료',abandoned:'중단'};
 const taskOutcomeLabels={completed:'완료',partial:'부분 완료',blocked:'진행 불가',cancelled:'취소'};
 const taskPRStateLabels={unknown:'확인 전',open:'열림',closed:'닫힘',merged:'병합',deployed:'배포'};
+// A pull request GitHub never reported to this server (merged before the
+// repository's webhook was registered, or private with no access) can be
+// confirmed by a project owner or admin after checking it on GitHub.
+function prConfirmButtons(project,pr,done){
+  if(!['owner','admin'].includes(project.role)||!['unknown','open'].includes(pr.state)||!pr.task_id)return [];
+  const ask=(state,label)=>btn(label,async()=>{
+    if(!confirm(`${pr.repository}#${pr.number}을(를) GitHub에서 직접 확인했나요?\n${state==='merged'?'병합됨':'닫힘'}으로 기록하면 작업 기록(history)에 수동 확인 블록이 붙고 되돌릴 수 없습니다.`))return;
+    await tool('confirm_pull_request',{project_id:project.id,task_id:pr.task_id,repository:pr.repository,number:pr.number,state});
+    notify(`${pr.repository}#${pr.number}을(를) ${state==='merged'?'병합됨':'닫힘'}으로 기록했습니다.`);
+    await done?.();
+  },'secondary small pr-confirm');
+  return [ask('merged','병합됨 확인'),ask('closed','닫힘 확인')];
+}
+function prStateTitle(pr){
+  if(pr.confirmed_at)return '소유자·관리자가 웹에서 수동 확인 '+new Date(pr.confirmed_at).toLocaleString();
+  if(pr.check_error==='NOT_FOUND')return 'GitHub에서 읽지 못했습니다(비공개 저장소). 웹훅 등록 이후의 병합은 자동으로 반영되고, 그 전에 병합된 PR은 "병합됨 확인"으로 기록합니다.';
+  if(pr.check_error)return '최근 확인 오류: '+pr.check_error;
+  return '';
+}
 const staleTaskDays=7;
 
 async function tasksPage() {
@@ -86,8 +105,8 @@ async function tasksPage() {
     if (r.status==='abandoned'&&r.closed_reason) c.append(el('p',`중단 사유: ${r.closed_reason}`+(r.closed_by_name?` (${r.closed_by_name})`:''),'small'));
     const facts=el('div',undefined,'task-facts');
     for (const pr of r.pull_requests||[]) {
-      const a=el('a',`${pr.repository}#${pr.number} · ${taskPRStateLabels[pr.state]||pr.state}`,'pill task-pr task-pr-'+pr.state);
-      a.href=pr.url;a.target='_blank';a.rel='noopener noreferrer';facts.append(a);
+      const a=el('a',`${pr.repository}#${pr.number} · ${taskPRStateLabels[pr.state]||pr.state}`+(pr.confirmed_at?' (수동 확인)':pr.check_error?' ⚠':''),'pill task-pr task-pr-'+pr.state);
+      a.href=pr.url;a.target='_blank';a.rel='noopener noreferrer';a.title=prStateTitle(pr);facts.append(a,...prConfirmButtons(p,pr,refresh));
     }
     if (r.todo) {
       const b=btn(`할 일 · ${r.todo.title} (${todoStatusLabel[r.todo.status]||r.todo.status})`,()=>render('todos'),'secondary task-todo');

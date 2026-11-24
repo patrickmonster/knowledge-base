@@ -145,18 +145,19 @@ Authorization: Bearer <발급받은 MCP 키>
 | `get_document_history` | 최근 50개 수정 버전의 작성자·이유 조회 |
 | `link_documents`, `unlink_documents`, `get_document_links` | 문서 간 관계(`supersedes`, `implements`, `related`) 추가·삭제·조회 |
 | `search_knowledge` | 프로젝트 내 하이브리드·의미·키워드 검색(관련 질의·이슈는 `issues`로 따로) |
+| `grep_documents` | 문서 본문·제목에서 정확한 문자열이나 정규식(RE2)을 찾아 일치 줄·줄 번호·앞뒤 문맥을 돌려준다([정확 검색](#정확-검색-grep_documents)) |
 | `search_across_projects` | 참여 중인 여러 프로젝트를 한 번에 검색(`project_ids` 생략 시 전체, 최대 50개) |
 | `get_embedding_status` | 프로젝트별 임베딩 대기·처리·완료·실패 건수 조회 |
 | `reindex_project_embeddings` | 소유자 전용: 현재 본문으로 청크를 다시 만들고 벡터 재생성 예약(새 버전은 만들지 않음) |
 | `get_task_context` | 작업에 필요한 발췌문·출처·최근 결정 탐색 정보 구성. 선택 입력 `related_project_ids`로 참여 중인 다른 프로젝트 자료를 `related_sources`에 따로 함께 조회 |
 | `start_task`, `finish_task` | 작업 시작 맥락 저장·종료 결과와 문서 일괄 저장. `start_task`에 `branch`·`worktree`·`paths`를 넘기면 같은 곳의 다른 진행 중 작업을 `run.context.concurrent_runs` 경고로 알려 준다(차단 없음, 7일 넘은 작업은 `stale`; [안내](docs/task-workflow.md#동시-작업-경고-concurrent_runs)) |
 | `get_task_run`, `list_task_runs` | 작업 상태·출처·완료 문서 조회 및 중단된 작업 ID 복구 |
-| `check_task_deployments` | `finish_task`의 `pull_requests`로 남긴 PR의 병합·배포를 지금 확인하고 history에 상태 갱신 블록 추가(서버도 20분마다 자동 확인) |
+| `check_task_deployments` | `finish_task`의 `pull_requests`로 남긴 PR의 병합·배포를 지금 확인하고 history에 상태 갱신 블록 추가(서버도 20분마다 자동 확인, 토큰 없이 공개 저장소만). 비공개 저장소는 웹훅으로 반영되고, 웹훅 등록 전에 병합된 PR은 웹에서 소유자·관리자가 **병합됨 확인**(웹 전용 `confirm_pull_request`) |
 | `get_document_templates`, `create_templated_document` | 기획·결정·히스토리 양식 조회·필수 항목 검증 후 저장 |
 | `list_work_areas`, `set_work_area` | 공통 작업 영역과 담당자 조회·관리 |
 | `create_issue`, `list_issues`, `get_issue` | 질의·이슈 등록·목록(상태·담당자·검색어 필터)·상세 |
 | `answer_issue`, `comment_issue`, `update_issue` | 답변·댓글·해결/닫기/다시 열기, 질의응답 지식 문서화(`publish_answer`) |
-| `import_github_issues` | GitHub 저장소 이슈를 질의·이슈로 가져오기(단방향, 다시 가져오면 갱신). 서버 `GITHUB_TOKEN`(선택)·`GITHUB_API_URL`(선택, GitHub Enterprise). 이후 변경은 웹 콘솔의 GitHub 웹훅(`/api/github/webhooks/<id>`, 웹훅별 Secret)으로 자동 반영 |
+| `import_github_issues` | GitHub 저장소 이슈를 질의·이슈로 가져오기(단방향, 다시 가져오면 갱신). 공개 저장소만(서버는 GitHub 토큰을 쓰지 않음), `GITHUB_API_URL`(선택, GitHub Enterprise). 이후 변경은 웹 콘솔의 GitHub 웹훅(`/api/github/webhooks/<id>`, 웹훅별 Secret)으로 자동 반영 |
 | `list_todos`, `save_todo`, `move_todo`, `delete_todo` | 할 일 보드 조회(상태·우선순위·분류·담당자·낱말 검색 `query` 필터, 연결 작업 수·PR 상태 포함)·추가·수정(`expected_revision`, 하위 항목 `parent_id`·선행 할 일 `blocked_by`)·칸 이동(`before_id`)·삭제. 쓰기는 편집자 이상 |
 | `link_issue_todo` | 질의·이슈를 할 일에 연결·해제(편집자 이상). `create_issue`의 `todo_id`로도 연결하고, `task_id`만 넘기면 그 작업의 할 일을 따른다([안내](docs/todos.md#이슈질의와-연결)) |
 | `list_stale_todos` | 14일(`older_than_days`로 변경) 넘게 수정·이동·연결 작업·질의 변경이 없는 시작 전·진행 중·검토대기 할 일을 오래된 순으로. `start_task` 맥락의 `context.todos.stale`에도 최대 5건([안내](docs/todos.md#오래-묵은-할-일-정리-안내)) |
@@ -232,6 +233,16 @@ Authorization: Bearer <발급받은 MCP 키>
 관련 질의·이슈가 있으면 `issues`(최대 5건)와 벡터가 아직 없는 질의 조각 수 `unindexed_issue_chunks`가 더해집니다. 의미·하이브리드 검색에서는 벡터 점수 하한에 못 미치는 질의를 빼고 그 수를 `filtered_issues`로 알립니다(전역 관리자가 웹 **운영 현황 → 검색 설정**에서 변경, 기본값은 `ISSUE_SCORE_FLOOR`). 질의 본문·답변도 문서와 같은 방식으로 청크·임베딩합니다([안내](docs/issues.md#검색)).
 
 `mode`는 `hybrid`, `semantic`, `lexical` 중 선택합니다. `warning`의 실제 메시지는 영어입니다. 검색 점수는 모드마다 다르며 확률이나 신뢰도 백분율이 아닙니다.
+
+### 정확 검색 (grep_documents)
+
+`search_knowledge`는 순위를 매기는 토큰 검색이라 식별자·오류 문구·경로처럼 글자 그대로 찾아야 하는 값을 놓치거나 뒤로 밀 수 있습니다. `grep_documents`는 grep처럼 줄 단위로 정확히 일치하는 곳을 모두 찾습니다. 의미 검색과 함께 쓰면 됩니다.
+
+- `pattern`은 기본이 고정 문자열이고 대소문자를 구분하지 않습니다. `case_sensitive: true`로 구분하고, `regex: true`면 RE2(Go) 정규식으로 줄마다 맞춥니다(줄을 넘는 일치, 전후방 탐색(lookaround), 역참조(``)는 지원하지 않음).
+- 필터: `status`(기본 `active`), `kind`, `tags`(모두 일치). 문서는 최근 수정 순이며 `limit`(기본 20, 최대 50)·`offset`으로 넘기고 다음 쪽은 `next_offset`을 씁니다.
+- 문서마다 `match_count`(일치 줄 수 전체), 최대 `max_matches`(기본 5, 최대 50)개의 `matches`(`line`, `text`, 선택 `context` 0–5줄의 `before`·`after`), 제목 일치 `title_match`, `citation`을 돌려줍니다. 400자가 넘는 줄은 일치 위치 주변만 잘라 `…`로 표시합니다.
+- 고정 문자열은 DB에서 `LIKE`/`ILIKE`로 먼저 거르고(`047_document_trigram` 마이그레이션의 `pg_trgm` 색인 사용) 서버가 줄마다 다시 확인합니다. 정규식은 DB에서 거를 수 없어 최근 문서부터 최대 2,000개·32 MiB까지만 훑고, 넘으면 `scan_truncated: true`와 `warning`을 붙입니다. 이때는 필터를 좁힙니다.
+- 권한은 `get_document`와 같습니다(프로젝트 참여자·상위 프로젝트 읽기 권한). 첨부 본문 추출 문서(`첨부 본문: <파일명>`)도 같은 방식으로 찾습니다.
 
 ### 프로젝트 횡단 검색
 

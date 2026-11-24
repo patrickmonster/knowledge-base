@@ -12,12 +12,12 @@ function webhookSecretDialog(r){
 
 async function githubWebhookCard(project,{members=[],areas=[]}={}) {
   const c=card('GitHub 웹훅 (자동 동기화)');
-  c.append(el('p','GitHub에서 이슈가 열리거나 바뀌고, PR이 병합·닫힐 때 GitHub가 이 서버로 알려 줍니다. 이벤트가 생길 때만 반영하므로 GitHub API 호출 한도를 거의 쓰지 않고, 비공개 저장소의 새 이벤트도 토큰 없이 받습니다.','small muted'));
+  c.append(el('p','GitHub에서 이슈가 열리거나 바뀌고, PR이 병합·닫힐 때 GitHub가 이 서버로 알려 줍니다. 이벤트가 생길 때만 반영하므로 GitHub API 호출 한도를 쓰지 않고, 비공개 저장소도 토큰 없이 받습니다.','small muted'));
   c.append(el('p','웹훅은 설정 이후의 이벤트만 보냅니다. 기존 이슈는 아래 "기존 이슈 가져오기"로 한 번 가져오세요. 서버 재시작 중 놓친 PR 병합은 6시간 간격 확인으로 보정합니다.','small muted'));
   let data;
   try { data=await tool('list_github_webhooks',{project_id:project.id}); }
   catch(e) { c.append(el('p',e.message,'muted')); return c; }
-  c.append(el('p',data.token_configured?'서버에 GITHUB_TOKEN이 설정되어 있습니다.':'서버에 GITHUB_TOKEN이 없습니다. 웹훅 수신에는 필요 없지만, 비공개 저장소의 처음 가져오기와 누락 보정 확인에는 필요합니다.','small muted'));
+  c.append(el('p','서버는 GitHub 토큰을 쓰지 않습니다. 비공개 저장소는 웹훅으로만 반영되므로 프로젝트를 처음 셋팅할 때 저장소마다 웹훅을 등록하세요. 웹훅 등록 전에 병합된 PR은 진행 중 작업·할 일 화면에서 "병합됨 확인"으로 기록합니다. 서버가 꺼져 있던 동안의 이벤트는 GitHub 저장소 Settings → Webhooks → Recent Deliveries에서 Redeliver로 다시 보낼 수 있습니다.','small muted'));
   const owner=project.role==='owner';
   const areaName=id=>areas.find(a=>a.id===id)?.name, memberName=id=>members.find(m=>m.user_id===id)?.name;
   c.append(table(['저장소','동기화','최근 수신',''],data.webhooks.map(h=>{

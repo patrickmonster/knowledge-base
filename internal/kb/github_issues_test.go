@@ -30,19 +30,16 @@ func TestParseGitHubRepository(t *testing.T) {
 }
 
 func TestNewGitHubClient(t *testing.T) {
-	if c, err := NewGitHubClient("", ""); err != nil || c.BaseURL != "" || c.Token != "" {
+	if c, err := NewGitHubClient(""); err != nil || c.BaseURL != "" {
 		t.Fatalf("empty config: %+v %v", c, err)
 	}
-	if c, err := NewGitHubClient("https://ghe.example/api/v3", " tok "); err != nil || c.Token != "tok" {
+	if c, err := NewGitHubClient(" https://ghe.example/api/v3 "); err != nil || c.BaseURL != "https://ghe.example/api/v3" {
 		t.Fatalf("enterprise config: %+v %v", c, err)
 	}
 	for _, bad := range []string{"http://api.github.com", "https://u:p@api.github.com", "https://api.github.com?x=1", "ftp://x"} {
-		if _, err := NewGitHubClient(bad, ""); err == nil {
+		if _, err := NewGitHubClient(bad); err == nil {
 			t.Fatalf("accepted base URL %q", bad)
 		}
-	}
-	if _, err := NewGitHubClient("", "a b"); err == nil {
-		t.Fatal("accepted token with whitespace")
 	}
 }
 
@@ -63,7 +60,7 @@ func TestGitHubClientListIssues(t *testing.T) {
 		mu.Lock()
 		queries = append(queries, r.URL.RawQuery)
 		mu.Unlock()
-		if r.URL.Path != "/repos/o/r/issues" || r.Header.Get("Authorization") != "Bearer secret" {
+		if r.URL.Path != "/repos/o/r/issues" || r.Header.Get("Authorization") != "" {
 			http.Error(w, "bad", http.StatusBadRequest)
 			return
 		}
@@ -85,7 +82,7 @@ func TestGitHubClientListIssues(t *testing.T) {
 		json.NewEncoder(w).Encode(items)
 	}))
 	defer srv.Close()
-	c := &GitHubClient{BaseURL: srv.URL, Token: "secret"}
+	c := &GitHubClient{BaseURL: srv.URL}
 	got, skipped, err := c.ListIssues(t.Context(), "o/r", "all", []string{"bug", "ui"}, "2026-11-01T00:00:00Z", 500)
 	if err != nil {
 		t.Fatal(err)
@@ -108,34 +105,32 @@ func TestGitHubClientErrors(t *testing.T) {
 	cases := []struct {
 		status int
 		header map[string]string
-		token  string
 		code   string
 		hint   string
 	}{
-		{404, nil, "", "NOT_FOUND", "GITHUB_TOKEN"},
-		{404, nil, "ghp_secretvalue", "NOT_FOUND", "token cannot read"},
-		{401, nil, "ghp_secretvalue", "GITHUB_UNAUTHORIZED", ""},
-		{403, map[string]string{"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": "1790000000"}, "", "GITHUB_RATE_LIMITED", "GITHUB_TOKEN"},
-		{429, nil, "ghp_secretvalue", "GITHUB_RATE_LIMITED", ""},
-		{403, nil, "ghp_secretvalue", "GITHUB_UNAUTHORIZED", ""},
-		{410, nil, "", "NOT_FOUND", "disabled"},
-		{422, nil, "", "INVALID_INPUT", ""},
-		{502, nil, "", "GITHUB_UNAVAILABLE", ""},
+		{404, nil, "NOT_FOUND", "webhook"},
+		{401, nil, "GITHUB_UNAUTHORIZED", ""},
+		{403, map[string]string{"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": "1790000000"}, "GITHUB_RATE_LIMITED", "webhook"},
+		{429, nil, "GITHUB_RATE_LIMITED", ""},
+		{403, nil, "GITHUB_UNAUTHORIZED", ""},
+		{410, nil, "NOT_FOUND", "disabled"},
+		{422, nil, "INVALID_INPUT", ""},
+		{502, nil, "GITHUB_UNAVAILABLE", ""},
 	}
 	for _, tc := range cases {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Header.Get("Authorization") != "" {
+				t.Error("the server must not send GitHub credentials")
+			}
 			for k, v := range tc.header {
 				w.Header().Set(k, v)
 			}
 			w.WriteHeader(tc.status)
 		}))
-		_, _, err := (&GitHubClient{BaseURL: srv.URL, Token: tc.token}).ListIssues(t.Context(), "o/r", "open", nil, "", 10)
+		_, _, err := (&GitHubClient{BaseURL: srv.URL}).ListIssues(t.Context(), "o/r", "open", nil, "", 10)
 		srv.Close()
 		if errorCode(err) != tc.code || !strings.Contains(PublicError(err), tc.hint) {
 			t.Fatalf("status %d: got %v", tc.status, err)
-		}
-		if tc.token != "" && strings.Contains(PublicError(err), tc.token) {
-			t.Fatal("token leaked into error")
 		}
 	}
 }
@@ -226,7 +221,7 @@ func TestImportGitHubIssues(t *testing.T) {
 
 	in := ImportGitHubIssuesInput{ProjectID: p.ID, Repository: "https://github.com/O/R", State: "all", Kind: "auto", AreaID: area.ID, Tags: []string{"외부"}}
 	r := mustCall(t, tools, admin, "import_github_issues", in).(ImportGitHubIssuesResult)
-	if r.Repository != "O/R" || r.Fetched != 3 || r.Created != 3 || r.SkippedPullRequests != 1 || r.Authenticated {
+	if r.Repository != "O/R" || r.Fetched != 3 || r.Created != 3 || r.SkippedPullRequests != 1 {
 		t.Fatalf("first import: %+v", r)
 	}
 	list := mustCall(t, tools, admin, "list_issues", IssueListInput{ProjectID: p.ID, Status: "all"}).([]Issue)

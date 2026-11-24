@@ -66,8 +66,12 @@ func (s *Store) attachmentUsage(ctx context.Context, q Querier, projectID string
 		return nil, err
 	}
 	scanner := "none"
-	if s.Scanner != nil {
-		scanner = s.Scanner.Name()
+	active, _, err := s.effectiveScanner(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	if active != nil {
+		scanner = active.Name()
 	}
 	var quota any
 	if s.AttachmentQuotaBytes > 0 {
@@ -106,19 +110,23 @@ func (s *Store) screenUpload(ctx context.Context, a Identity, in AttachmentInput
 			return err
 		}
 	}
-	if s.Scanner == nil {
+	scanner, _, err := s.effectiveScanner(ctx, s.DB)
+	if err != nil {
+		return err
+	}
+	if scanner == nil {
 		return nil
 	}
-	signature, err := s.Scanner.Scan(ctx, file)
+	signature, err := scanner.Scan(ctx, file)
 	if _, seekErr := file.Seek(0, io.SeekStart); seekErr != nil && err == nil {
 		err = seekErr
 	}
 	if err != nil {
-		slog.Error("malware scan failed", "scanner", s.Scanner.Name())
+		slog.Error("malware scan failed", "scanner", scanner.Name())
 		return reject("SCAN_UNAVAILABLE", "The malware scanner is unavailable. Prepare a new upload and try again later.", nil)
 	}
 	if signature != "" {
-		return reject("MALWARE_DETECTED", "The file was rejected by the malware scanner.", map[string]any{"reason": "malware", "scanner": s.Scanner.Name(), "signature": signature})
+		return reject("MALWARE_DETECTED", "The file was rejected by the malware scanner.", map[string]any{"reason": "malware", "scanner": scanner.Name(), "signature": signature})
 	}
 	return nil
 }

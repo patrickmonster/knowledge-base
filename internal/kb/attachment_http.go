@@ -27,10 +27,14 @@ func (a *App) attachmentStorage(r *http.Request, id Identity) (any, error) {
 		return nil, err
 	}
 	status := attachmentStorageStatus{State: "not_configured", Scanner: "not_configured"}
-	if a.Store.Scanner != nil {
+	scanner, _, err := a.Store.effectiveScanner(r.Context(), a.Store.DB)
+	if err != nil {
+		return nil, err
+	}
+	if scanner != nil {
 		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 		status.Scanner = "connected"
-		if err := a.Store.Scanner.Ping(ctx); err != nil {
+		if err := scanner.Ping(ctx); err != nil {
 			// Never echo the private scanner address.
 			status.Scanner = "unavailable"
 		}
