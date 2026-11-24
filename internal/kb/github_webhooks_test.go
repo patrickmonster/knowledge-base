@@ -172,8 +172,22 @@ func TestGitHubWebhooks(t *testing.T) {
 	if !strings.Contains(doc.Content, "o/r/pull/9: 병합") || !strings.Contains(doc.Content, "커밋 9999999") {
 		t.Fatalf("history after webhook:\n%s", doc.Content)
 	}
-	if _, out := send("pull_request", "d-7", strings.Replace(merged, `"number":9`, `"number":10`, 1)); out["data"].(map[string]any)["outcome"] != "ignored" {
+	// A pull request merged before any task names it is remembered and
+	// reaches the history of the task finished later.
+	if _, out := send("pull_request", "d-7", strings.Replace(merged, `"number":9`, `"number":10`, 1)); out["data"].(map[string]any)["outcome"] != "processed" ||
+		!strings.Contains(out["data"].(map[string]any)["detail"].(string), "remembered") {
 		t.Fatalf("untracked pull request: %v", out)
+	}
+	late := mustCall(t, tools, admin, "start_task", StartTaskInput{ProjectID: p.ID, RequestKey: "hook-2", Title: "늦은 기록", Task: "병합 뒤 완료"}).(StartTaskResult).Run
+	lateFinish := finishFixture(p.ID, late.ID)
+	lateFinish.PullRequests = []string{"o/r#10"}
+	lateDone := mustCall(t, tools, admin, "finish_task", lateFinish).(TaskCompletion)
+	doc = mustCall(t, tools, admin, "get_document", DocumentRef{ProjectID: p.ID, DocumentID: lateDone.Documents[0].ID}).(Document)
+	if !strings.Contains(doc.Content, "o/r/pull/10: 병합") || doc.Revision != 2 {
+		t.Fatalf("history of a task finished after the merge: rev %d\n%s", doc.Revision, doc.Content)
+	}
+	if again := mustCall(t, tools, admin, "finish_task", lateFinish).(TaskCompletion); again.Documents[0].ID != lateDone.Documents[0].ID {
+		t.Fatalf("finish_task retry after the status block: %+v", again)
 	}
 
 	// The owner losing edit access stops issue processing; turning the webhook

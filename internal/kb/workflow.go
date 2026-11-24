@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"regexp"
 	"strings"
 	"time"
@@ -108,7 +109,18 @@ func registerWorkflowTools(t Tools, s *Store) {
 	})
 	add(t, s, "create_templated_document", "Validate template sections and save a brief, decision or history document. Default status is draft. Read get_document_templates first.", true, func(in TemplateDocumentInput) string { return in.ProjectID }, createTemplatedDocument)
 	add(t, s, "start_task", "Call before project work: retrieve knowledge and persist the starting context. Editor access required. Reuse request_key and identical inputs on retries; keep the returned run.id for finish_task. Pass branch, worktree and paths (optional) and check run.context.concurrent_runs: other open tasks on the same branch/worktree or overlapping paths (a warning, nothing is blocked). This does not execute the work itself.", true, func(in StartTaskInput) string { return in.ProjectID }, s.startTask)
-	add(t, s, "finish_task", "Call after work: atomically save a history and optional brief/decision documents, then close the task. Only its creator may finish. Retry identical inputs safely; changed input after completion conflicts. Never claim tests or deployment that did not occur.", true, func(in FinishTaskInput) string { return in.ProjectID }, s.finishTask)
+	addCall(t, "finish_task", "Call after work: atomically save a history and optional brief/decision documents, then close the task. Only its creator may finish. Retry identical inputs safely; changed input after completion conflicts. Never claim tests or deployment that did not occur.", true, func(ctx context.Context, a Identity, in FinishTaskInput) (any, error) {
+		ctx = auditInput(ctx, in)
+		out, err := s.Perform(ctx, a, "finish_task", in.ProjectID, true, false, func(tx *sql.Tx) (any, error) { return s.finishTask(ctx, tx, a, in) })
+		if err == nil && len(in.PullRequests) > 0 {
+			// Pull requests a webhook already reported merged or closed are
+			// written into the new history right away.
+			if _, err := s.recordDeployments(ctx, in.ProjectID, in.TaskID); err != nil && ctx.Err() == nil {
+				slog.Error("deployment record after finish_task failed", "error", err)
+			}
+		}
+		return out, err
+	})
 	add(t, s, "get_task_run", "Read a task, its starting context snapshot and completion document IDs. The snapshot may be outdated; refresh knowledge before resuming work.", false, func(in TaskRef) string { return in.ProjectID }, func(ctx context.Context, tx *sql.Tx, a Identity, in TaskRef) (any, error) {
 		if _, err := projectAccess(ctx, tx, a.User.ID, in.ProjectID, false); err != nil {
 			return nil, err
@@ -160,7 +172,7 @@ const taskListSelect = `SELECT (to_jsonb(r)-'context'-'completion_hash')||jsonb_
 	'age_days',floor(extract(epoch FROM now()-r.started_at)/86400)::int,
 	'created_by_name',u.name,
 	'closed_by_name',cu.name,
-	'pull_requests',COALESCE((SELECT jsonb_agg(jsonb_build_object('repository',pr.repository,'number',pr.number,'url',pr.url,'state',pr.state) ORDER BY pr.repository,pr.number)
+	'pull_requests',COALESCE((SELECT jsonb_agg(jsonb_build_object('repository',pr.repository,'number',pr.number,'url',pr.url,'state',pr.state,'task_id',pr.task_id,'check_error',pr.check_error,'confirmed_at',pr.confirmed_at) ORDER BY pr.repository,pr.number)
 		FROM task_pull_requests pr WHERE pr.task_id=r.id),'[]'::jsonb),
 	'open_issues',(SELECT count(*) FROM issues i WHERE i.task_id=r.id AND i.status IN ('open','answered')),
 	'issue_count',(SELECT count(*) FROM issues i WHERE i.task_id=r.id),

@@ -145,3 +145,6 @@ var DocumentTrigram string
 
 //go:embed 048_todo_resolution.sql
 var TodoResolution string
+
+//go:embed 049_webhook_pull_requests.sql
+var WebhookPullRequests string
