@@ -142,3 +142,6 @@ var TodoPendingRelease string
 
 //go:embed 047_document_trigram.sql
 var DocumentTrigram string
+
+//go:embed 048_todo_resolution.sql
+var TodoResolution string
