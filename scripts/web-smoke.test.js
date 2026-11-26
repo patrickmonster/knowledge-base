@@ -8,7 +8,7 @@ const assert=require('node:assert');
 const {openConsole}=require('./web-harness.js');
 const {mockAPI,PROJECT}=require('./web-fixtures.js');
 
-const pages=['projects','search','rules','prompts','documents','todos','todosDone','tasks','reviews','issues','attachments','vectors','usage','rechecks','keys','account','overview','users','audit'];
+const pages=['projects','search','rules','prompts','documents','wiki','todos','todosDone','tasks','reviews','issues','attachments','vectors','usage','rechecks','keys','account','overview','users','audit'];
 
 async function open(t,variant){
   const c=await openConsole(mockAPI(variant));

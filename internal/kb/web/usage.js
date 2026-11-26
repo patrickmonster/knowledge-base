@@ -1,7 +1,7 @@
 'use strict';
 
 // 사용 통계 대시보드: get_usage_stats(일별 추이·상위 작업·사용자·문서) + get_retrieval_metrics(검색 품질).
-const usageKinds={brief:'기획',decision:'결정',history:'작업 이력',artifact:'산출물',reference:'참고',glossary:'용어집'};
+const usageKinds={brief:'기획',decision:'결정',history:'작업 이력',artifact:'산출물',reference:'참고',glossary:'용어집',wiki:'위키'};
 const usageStatuses={active:'active',draft:'draft',archived:'보관'};
 const usageNumber=n=>Number(n||0).toLocaleString('ko-KR');
 const usagePercent=v=>v===null||v===undefined?'—':Math.round(v*100)+'%';

@@ -1,6 +1,6 @@
 'use strict';
 
-const reviewKinds={brief:'기획',decision:'결정',history:'작업 이력',artifact:'산출물',reference:'참고',glossary:'용어집'};
+const reviewKinds={brief:'기획',decision:'결정',history:'작업 이력',artifact:'산출물',reference:'참고',glossary:'용어집',wiki:'위키'};
 
 async function reviewsPage() {
   const projects=[];

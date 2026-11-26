@@ -20,13 +20,15 @@ const (
 	relationImplements = "implements"
 	// relationRelated: undirected; stored once in either direction.
 	relationRelated = "related"
+	// relationCites: a wiki article cites an original document.
+	relationCites = "cites"
 )
 
 type LinkInput struct {
 	ProjectID string `json:"project_id"`
-	SourceID  string `json:"source_id" jsonschema:"supersedes: the newer document; implements: the history; related: either document"`
-	TargetID  string `json:"target_id" jsonschema:"supersedes: the older replaced document; implements: the decision or brief carried out; related: the other document"`
-	Relation  string `json:"relation" jsonschema:"supersedes, implements, or related"`
+	SourceID  string `json:"source_id" jsonschema:"supersedes: the newer document; implements: the history; related: either document; cites: the wiki article"`
+	TargetID  string `json:"target_id" jsonschema:"supersedes: the older replaced document; implements: the decision or brief carried out; related: the other document; cites: the original document"`
+	Relation  string `json:"relation" jsonschema:"supersedes, implements, related, or cites"`
 	Note      string `json:"note,omitempty" jsonschema:"Optional reason, up to 500 characters"`
 }
 
@@ -63,6 +65,8 @@ type DocumentLinks struct {
 	Implements    []LinkedDocument `json:"implements"`
 	ImplementedBy []LinkedDocument `json:"implemented_by"`
 	Related       []LinkedDocument `json:"related"`
+	Cites         []LinkedDocument `json:"cites,omitempty"`
+	CitedBy       []LinkedDocument `json:"cited_by,omitempty"`
 }
 
 // SupersedingDocument identifies an active document that replaces a search hit.
@@ -72,7 +76,7 @@ type SupersedingDocument struct {
 }
 
 func validRelation(s string) bool {
-	return s == relationSupersedes || s == relationImplements || s == relationRelated
+	return s == relationSupersedes || s == relationImplements || s == relationRelated || s == relationCites
 }
 
 func linkDocuments(ctx context.Context, tx *sql.Tx, actor Identity, in LinkInput) (any, error) {
@@ -86,7 +90,7 @@ func linkDocuments(ctx context.Context, tx *sql.Tx, actor Identity, in LinkInput
 		return nil, err
 	}
 	if !validRelation(in.Relation) {
-		return nil, problem("INVALID_INPUT", "relation must be supersedes, implements, or related.")
+		return nil, problem("INVALID_INPUT", "relation must be supersedes, implements, related, or cites.")
 	}
 	in.Note = strings.TrimSpace(in.Note)
 	if err := bounded("note", in.Note, 0, 500); err != nil {
@@ -140,6 +144,10 @@ func linkDocuments(ctx context.Context, tx *sql.Tx, actor Identity, in LinkInput
 		if source != "history" || (target != "decision" && target != "brief") {
 			return nil, problem("INVALID_INPUT", "implements links a history (source) to the decision or brief it carried out (target).")
 		}
+	case relationCites:
+		if source != "wiki" || target == "wiki" {
+			return nil, problem("INVALID_INPUT", "cites links a wiki article to an original document.")
+		}
 	case relationRelated:
 		existing, err := one[DocumentLink](ctx, tx, `SELECT to_jsonb(l) FROM document_links l WHERE relation='related' AND source_id=$1 AND target_id=$2`, in.TargetID, in.SourceID)
 		if err == nil {
@@ -174,7 +182,7 @@ func unlinkDocuments(ctx context.Context, tx *sql.Tx, actor Identity, in LinkInp
 		return nil, err
 	}
 	if !validRelation(in.Relation) {
-		return nil, problem("INVALID_INPUT", "relation must be supersedes, implements, or related.")
+		return nil, problem("INVALID_INPUT", "relation must be supersedes, implements, related, or cites.")
 	}
 	result, err := tx.ExecContext(ctx, `DELETE FROM document_links WHERE project_id=$1 AND relation=$4
 	AND ((source_id=$2 AND target_id=$3) OR ($4='related' AND source_id=$3 AND target_id=$2))`, in.ProjectID, in.SourceID, in.TargetID, in.Relation)
@@ -211,6 +219,10 @@ func documentLinks(ctx context.Context, tx *sql.Tx, projectID, documentID string
 			out.Implements = append(out.Implements, r.LinkedDocument)
 		case r.Relation == relationImplements:
 			out.ImplementedBy = append(out.ImplementedBy, r.LinkedDocument)
+		case r.Relation == relationCites && r.Outgoing:
+			out.Cites = append(out.Cites, r.LinkedDocument)
+		case r.Relation == relationCites:
+			out.CitedBy = append(out.CitedBy, r.LinkedDocument)
 		default:
 			out.Related = append(out.Related, r.LinkedDocument)
 		}
@@ -346,9 +358,9 @@ type LinksQuery struct {
 }
 
 func registerLinkTools(t Tools, s *Store) {
-	add(t, s, "link_documents", "Link two documents. relation: supersedes (newer source replaces older target of the same kind; once the source is active the target ranks below current knowledge in search), implements (history source carried out decision/brief target), related (undirected). Idempotent; no new revision.", true, func(in LinkInput) string { return in.ProjectID }, linkDocuments)
+	add(t, s, "link_documents", "Link two documents. relation: supersedes (newer source replaces older target of the same kind; once the source is active the target ranks below current knowledge in search), implements (history source carried out decision/brief target), related (undirected), cites (wiki article cites an original document). Idempotent; no new revision.", true, func(in LinkInput) string { return in.ProjectID }, linkDocuments)
 	add(t, s, "unlink_documents", "Remove a document link created with link_documents. related links match either direction.", true, func(in LinkInput) string { return in.ProjectID }, unlinkDocuments)
-	add(t, s, "get_document_links", "List a document's links: supersedes, superseded_by, implements, implemented_by (histories that carried out a decision), related.", false, func(in LinksQuery) string { return in.ProjectID }, func(ctx context.Context, tx *sql.Tx, a Identity, in LinksQuery) (any, error) {
+	add(t, s, "get_document_links", "List a document's links: supersedes, superseded_by, implements, implemented_by (histories that carried out a decision), related, cites, cited_by.", false, func(in LinksQuery) string { return in.ProjectID }, func(ctx context.Context, tx *sql.Tx, a Identity, in LinksQuery) (any, error) {
 		if _, err := getDocument(ctx, tx, a, DocumentRef{ProjectID: in.ProjectID, DocumentID: in.DocumentID}); err != nil {
 			return nil, err
 		}

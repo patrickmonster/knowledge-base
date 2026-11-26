@@ -31,7 +31,7 @@ type GrepInput struct {
 	Regex         bool     `json:"regex,omitempty" jsonschema:"Treat pattern as an RE2 regular expression (Go syntax), matched per line"`
 	CaseSensitive bool     `json:"case_sensitive,omitempty" jsonschema:"Match case exactly; default false (case-insensitive)"`
 	Status        string   `json:"status,omitempty" jsonschema:"draft, active, or archived; default active"`
-	Kind          string   `json:"kind,omitempty" jsonschema:"brief, decision, history, artifact, reference, or glossary"`
+	Kind          string   `json:"kind,omitempty" jsonschema:"brief, decision, history, artifact, reference, glossary, or wiki"`
 	Tags          []string `json:"tags,omitempty" jsonschema:"Documents must have every tag (case-insensitive); at most 10"`
 	Context       int      `json:"context,omitempty" jsonschema:"Lines of context before and after each match, 0–5; default 0"`
 	MaxMatches    int      `json:"max_matches,omitempty" jsonschema:"Matching lines returned per document, 1–50; default 5"`

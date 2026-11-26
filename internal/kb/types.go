@@ -68,7 +68,7 @@ type Document struct {
 type DocumentInput struct {
 	ProjectID string   `json:"project_id"`
 	Title     string   `json:"title"`
-	Kind      string   `json:"kind" jsonschema:"brief, decision, history, artifact, reference, or glossary (a term with its synonyms; search expands queries with them)"`
+	Kind      string   `json:"kind" jsonschema:"brief, decision, history, artifact, reference, glossary, or wiki (a curated article based on linked source documents)"`
 	Content   string   `json:"content" jsonschema:"Markdown text; maximum 100000 characters"`
 	Tags      []string `json:"tags,omitempty"`
 	Status    string   `json:"status,omitempty" jsonschema:"draft, active (default), or archived"`
@@ -190,7 +190,7 @@ func bounded(label, s string, min, max int) error {
 }
 func validKind(s string) bool {
 	switch s {
-	case "brief", "decision", "history", "artifact", "reference", "glossary":
+	case "brief", "decision", "history", "artifact", "reference", "glossary", "wiki":
 		return true
 	}
 	return false

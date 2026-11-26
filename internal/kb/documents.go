@@ -149,6 +149,16 @@ func updateDocument(ctx context.Context, tx *sql.Tx, actor Identity, in UpdateIn
 	if err := validateDocument(&input); err != nil {
 		return nil, err
 	}
+	if (d.Kind == "wiki") != (input.Kind == "wiki") {
+		var hasCitations bool
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM document_links
+			WHERE project_id=$1 AND relation='cites' AND (source_id=$2 OR target_id=$2))`, d.ProjectID, d.ID).Scan(&hasCitations); err != nil {
+			return nil, err
+		}
+		if hasCitations {
+			return nil, problem("CONFLICT", "Remove wiki source links before changing the document kind.")
+		}
+	}
 	previousStatus := d.Status
 	d, err = one[Document](ctx, tx, `WITH changed AS (UPDATE documents SET title=$1,kind=$2,content=$3,tags=$4,status=$5,source_url=NULLIF($6,''),
 	revision=revision+1,updated_by=$7,updated_at=clock_timestamp() WHERE id=$8 RETURNING *) SELECT to_jsonb(changed) FROM changed`, input.Title, input.Kind, input.Content, input.Tags, input.Status, input.SourceURL, actor.User.ID, d.ID)
@@ -310,6 +320,7 @@ func listDocuments(ctx context.Context, tx *sql.Tx, actor Identity, in ListInput
 type SearchInput struct {
 	ProjectID string `json:"project_id"`
 	Query     string `json:"query"`
+	Kind      string `json:"kind,omitempty" jsonschema:"Filter by document kind, for example wiki"`
 	Limit     int    `json:"limit,omitempty"`
 	Status    string `json:"status,omitempty"`
 	Mode      string `json:"mode,omitempty" jsonschema:"hybrid (default when configured), semantic, or lexical"`

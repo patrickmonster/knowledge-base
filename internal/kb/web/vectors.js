@@ -1,6 +1,6 @@
 'use strict';
 
-const vectorKinds = {brief:['기획','#3d7963'],decision:['결정','#667bc0'],history:['히스토리','#c18a43'],artifact:['작업물','#ae6b96'],reference:['참고자료','#4697a2'],glossary:['용어집','#7a8a3c']};
+const vectorKinds = {brief:['기획','#3d7963'],decision:['결정','#667bc0'],history:['히스토리','#c18a43'],artifact:['작업물','#ae6b96'],reference:['참고자료','#4697a2'],glossary:['용어집','#7a8a3c'],wiki:['위키','#527084']};
 
 async function vectorPage() {
   const root=el('div',undefined,'vector-page'),toolbar=card(),controls=el('div',undefined,'vector-controls');

@@ -199,7 +199,7 @@ func normalizeDocKinds(kinds []string) ([]string, error) {
 	out := []string{}
 	for _, k := range kinds {
 		if !validKind(k) {
-			return nil, problem("INVALID_INPUT", "document_kinds must be brief, decision, history, artifact, reference, or glossary.")
+			return nil, problem("INVALID_INPUT", "document_kinds must be brief, decision, history, artifact, reference, glossary, or wiki.")
 		}
 		if !seen[k] {
 			seen[k] = true

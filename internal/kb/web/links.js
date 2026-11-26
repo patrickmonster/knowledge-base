@@ -9,6 +9,8 @@ const linkGroups=[
   ['superseded_by','이 문서를 대체한 새 문서',false],
   ['implements','이 작업 이력이 수행한 결정·기획',true],
   ['implemented_by','이 문서를 수행한 작업 이력',false],
+  ['cites','원본 자료',true],
+  ['cited_by','이 자료를 인용한 위키 글',false],
   ['related','관련 문서',true],
 ];
 const linkDocumentCache=new Map();
@@ -23,6 +25,7 @@ function linkRelationOptions(kind) {
   if (kind!=='history') options.push(['supersedes','이 문서가 대체함 (이 문서 = 새 문서)'],['superseded_by','이 문서를 대체함 (상대 = 새 문서)']);
   if (kind==='history') options.push(['implements','이 작업 이력이 결정·기획을 수행함']);
   if (kind==='decision'||kind==='brief') options.push(['implemented_by','작업 이력이 이 문서를 수행함']);
+  if (kind==='wiki') options.push(['cites','원본 자료']);
   options.push(['related','관련 문서']);
   return options;
 }
@@ -30,11 +33,12 @@ function linkRelationOptions(kind) {
 // linkDirection maps a viewpoint relation to link_documents input.
 function linkDirection(relation,selfID,otherID) {
   if (relation==='superseded_by') return {relation:'supersedes',source_id:otherID,target_id:selfID};
+  if (relation==='cited_by') return {relation:'cites',source_id:otherID,target_id:selfID};
   if (relation==='implemented_by') return {relation:'implements',source_id:otherID,target_id:selfID};
   return {relation,source_id:selfID,target_id:otherID};
 }
 
-function linksPanel(d,canEdit) {
+function linksPanel(d,canEdit,openLinked) {
   const root=el('section',undefined,'links-panel');
   root.append(el('h3','문서 관계'));
   const body=el('div');
@@ -50,7 +54,7 @@ function linksPanel(d,canEdit) {
       for (const other of links[key]) {
         const row=el('div',undefined,'link-row');
         const info=el('div');
-        info.append(el('strong',other.title),el('span',` ${documentKinds[other.kind]||other.kind} · ${other.status} · 버전 ${other.revision}`,'small muted'));
+        info.append(openLinked?btn(other.title,()=>openLinked(other),'secondary'):el('strong',other.title),el('span',` ${documentKinds[other.kind]||other.kind} · ${other.status} · 버전 ${other.revision}`,'small muted'));
         if (other.note) info.append(el('div',other.note,'small'));
         info.append(el('code',other.document_id));
         row.append(info);
@@ -71,7 +75,19 @@ function linksPanel(d,canEdit) {
     const target=field(f,'상대 문서 (제목에서 고르거나 ID 붙여넣기)','target');
     const listID='link-targets-'+d.id;target.setAttribute('list',listID);target.autocomplete='off';
     const datalist=el('datalist');datalist.id=listID;f.append(datalist);
-    linkCandidates(d.project_id).then(items=>datalist.replaceChildren(...items.filter(x=>x.id!==d.id).map(x=>{const o=el('option',`${x.title} · ${documentKinds[x.kind]||x.kind} · ${x.status}`);o.value=x.id;return o;}))).catch(()=>{});
+    function fillCandidates() {
+      linkCandidates(d.project_id).then(items=>{
+        const allowed=items.filter(x=>x.id!==d.id&&(relation.value!=='cites'||x.kind!=='wiki'));
+        datalist.replaceChildren(...allowed.map(x=>{
+          const option=el('option',`${x.title} · ${documentKinds[x.kind]||x.kind} · ${x.status}`);
+          option.value=x.id;
+          return option;
+        }));
+      }).catch(()=>{});
+    }
+    if (d.kind==='wiki') relation.value='cites';
+    relation.addEventListener('change',fillCandidates);
+    fillCandidates();
     const note=field(f,'메모 (선택, 500자)','note');note.required=false;note.maxLength=500;
     formSubmit(f,'연결',async data=>{
       const other=data.target.trim();

@@ -54,7 +54,7 @@ func projectScope(ids []string) (string, error) {
 	return "{" + strings.Join(ids, ",") + "}", nil
 }
 
-func lexicalHits(ctx context.Context, tx *sql.Tx, scope, rawQuery, status string, limit int) ([]SearchHit, error) {
+func lexicalHits(ctx context.Context, tx *sql.Tx, scope, rawQuery, status, kind string, limit int) ([]SearchHit, error) {
 	query := QueryText(rawQuery)
 	if query == "" {
 		return []SearchHit{}, nil
@@ -62,8 +62,8 @@ func lexicalHits(ctx context.Context, tx *sql.Tx, scope, rawQuery, status string
 	hits, err := many[SearchHit](ctx, tx, `WITH matched AS (SELECT d.id AS document_id,d.project_id,d.title,d.kind,d.status,d.revision,d.source_url,d.updated_by,d.updated_at,
 	c.position,c.content AS excerpt,ts_rank_cd(c.search_vector,to_tsquery('simple',$2)) AS score,
 	row_number() OVER(PARTITION BY d.id ORDER BY ts_rank_cd(c.search_vector,to_tsquery('simple',$2)) DESC,c.position) AS n
-	FROM documents d JOIN chunks c ON c.document_id=d.id WHERE d.project_id=ANY($1::text::uuid[]) AND d.status=$3 AND c.search_vector@@to_tsquery('simple',$2))
-	SELECT to_jsonb(matched)-'n' FROM matched WHERE n=1 ORDER BY score DESC,updated_at DESC,document_id LIMIT $4`, scope, query, status, limit)
+	FROM documents d JOIN chunks c ON c.document_id=d.id WHERE d.project_id=ANY($1::text::uuid[]) AND d.status=$3 AND ($5='' OR d.kind=$5) AND c.search_vector@@to_tsquery('simple',$2))
+	SELECT to_jsonb(matched)-'n' FROM matched WHERE n=1 ORDER BY score DESC,updated_at DESC,document_id LIMIT $4`, scope, query, status, limit, kind)
 	for i := range hits {
 		hits[i].Citation = fmt.Sprintf("kb://%s/documents/%s?revision=%d#chunk-%d", hits[i].ProjectID, hits[i].DocumentID, hits[i].Revision, hits[i].Position)
 	}
