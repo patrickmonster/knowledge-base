@@ -40,7 +40,15 @@ type Todo struct {
 	AssigneeName string `json:"assignee_name,omitempty"`
 	DueDate      string `json:"due_date,omitempty"`
 	// Branch is the work branch waiting to be merged or deployed (반영 대기).
-	Branch        string  `json:"branch"`
+	Branch string `json:"branch"`
+	// Resolution says how a completed to-do ended: "" (done) or "dropped"
+	// (폐기: out of scope or no longer needed), with a short reason. Dropped
+	// to-dos are not flagged for unmerged pull requests.
+	Resolution     string `json:"resolution"`
+	ResolutionNote string `json:"resolution_note"`
+	// ReleaseAuto: finish_task moved this to pending_release because its pull
+	// requests were not merged yet; it completes once they are.
+	ReleaseAuto   bool    `json:"release_auto"`
 	Position      float64 `json:"position"`
 	Revision      int     `json:"revision"`
 	CreatedBy     string  `json:"created_by"`
@@ -111,6 +119,10 @@ type MoveTodoInput struct {
 	Priority  string  `json:"priority" jsonschema:"Target row: high, medium or low"`
 	BeforeID  string  `json:"before_id,omitempty" jsonschema:"Place before this to-do in the target cell; omit to place last"`
 	Branch    *string `json:"branch,omitempty" jsonschema:"Set the work branch at the same time (useful when moving to pending_release); empty string clears; omit to keep"`
+	// Resolution is only for status completed; omitted, a to-do that stays
+	// completed keeps its resolution and one newly completed is done.
+	Resolution     *string `json:"resolution,omitempty" jsonschema:"With status completed only: done or dropped (폐기 — out of scope or no longer needed; not flagged for unmerged pull requests). Omit to keep the current one (done for a to-do newly completed)"`
+	ResolutionNote string  `json:"resolution_note,omitempty" jsonschema:"Why it was dropped, up to 500 characters; used with resolution dropped"`
 }
 
 type TodoRef struct {
@@ -133,7 +145,7 @@ const todoSelect = `SELECT to_jsonb(t)||jsonb_build_object('assignee_name',COALE
 	'open_task_count',(SELECT count(*) FROM task_runs r WHERE r.todo_id=t.id AND r.status='open'),
 	'open_issue_count',(SELECT count(*) FROM issues i WHERE i.todo_id=t.id AND i.status IN ('open','answered')),
 	'blocking_issue_count',(SELECT count(*) FROM issues i WHERE i.todo_id=t.id AND i.status='open' AND i.blocking),
-	'pull_requests',COALESCE((SELECT jsonb_agg(jsonb_build_object('repository',pr.repository,'number',pr.number,'url',pr.url,'state',pr.state) ORDER BY pr.created_at DESC)
+	'pull_requests',COALESCE((SELECT jsonb_agg(jsonb_build_object('repository',pr.repository,'number',pr.number,'url',pr.url,'state',pr.state,'task_id',pr.task_id,'check_error',pr.check_error,'confirmed_at',pr.confirmed_at) ORDER BY pr.created_at DESC)
 		FROM task_pull_requests pr JOIN task_runs r ON r.id=pr.task_id WHERE r.todo_id=t.id),'[]'::jsonb))||` + todoRelationsSelect + `
 	FROM todos t LEFT JOIN users a ON a.id=t.assignee_id LEFT JOIN users c ON c.id=t.created_by`
 
@@ -348,7 +360,10 @@ func saveTodo(ctx context.Context, tx *sql.Tx, a Identity, in SaveTodoInput) (an
 	if _, err := tx.ExecContext(ctx, `UPDATE todos SET title=$2,body=$3,status=$4,priority=$5,category=$6,progress=$7,assignee_id=$8,
 		due_date=NULLIF($9,'')::date,position=$10,updated_by=$11,updated_at=now(),revision=revision+1,
 		completed_at=CASE WHEN $4<>'completed' THEN NULL WHEN status='completed' THEN completed_at ELSE now() END,
-		branch=`+todoBranchSQL("$12", "$4")+`
+		branch=`+todoBranchSQL("$12", "$4")+`,
+		resolution=CASE WHEN $4='completed' AND status='completed' THEN resolution ELSE '' END,
+		resolution_note=CASE WHEN $4='completed' AND status='completed' THEN resolution_note ELSE '' END,
+		release_auto=CASE WHEN status<>$4 THEN false ELSE release_auto END
 		WHERE id=$1`, current.ID, in.Title, in.Body, in.Status, in.Priority, in.Category, in.Progress, nullableID(in.AssigneeID), in.DueDate, pos, a.User.ID, in.Branch); err != nil {
 		return nil, err
 	}
@@ -374,6 +389,10 @@ func moveTodo(ctx context.Context, tx *sql.Tx, a Identity, in MoveTodoInput) (an
 	if err := normalizeTodoBranch(in.Branch); err != nil {
 		return nil, err
 	}
+	resolution, err := todoResolution(in)
+	if err != nil {
+		return nil, err
+	}
 	// Lock the whole board so concurrent drops in one cell cannot pick the same gap.
 	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('todos:'||$1,0))`, p.ID); err != nil {
 		return nil, err
@@ -392,11 +411,43 @@ func moveTodo(ctx context.Context, tx *sql.Tx, a Identity, in MoveTodoInput) (an
 	if _, err := tx.ExecContext(ctx, `UPDATE todos SET status=$2,priority=$3,position=$4,updated_by=$5,updated_at=now(),revision=revision+1,
 		progress=CASE WHEN $2='completed' AND status<>'completed' AND progress IS NOT NULL THEN 100 ELSE progress END,
 		completed_at=CASE WHEN $2<>'completed' THEN NULL WHEN status='completed' THEN completed_at ELSE now() END,
-		branch=`+todoBranchSQL("$6", "$2")+`
-		WHERE id=$1`, current.ID, in.Status, in.Priority, pos, a.User.ID, in.Branch); err != nil {
+		branch=`+todoBranchSQL("$6", "$2")+`,
+		resolution=CASE WHEN $2<>'completed' THEN '' WHEN $7::text IS NOT NULL THEN $7 WHEN status='completed' THEN resolution ELSE '' END,
+		resolution_note=CASE WHEN $2<>'completed' THEN '' WHEN $7::text IS NOT NULL THEN CASE WHEN $7='dropped' THEN $8 ELSE '' END WHEN status='completed' THEN resolution_note ELSE '' END,
+		release_auto=CASE WHEN status<>$2 THEN false ELSE release_auto END
+		WHERE id=$1`, current.ID, in.Status, in.Priority, pos, a.User.ID, in.Branch, resolution, strings.TrimSpace(in.ResolutionNote)); err != nil {
 		return nil, err
 	}
 	return getTodo(ctx, tx, current.ID)
+}
+
+// todoResolution checks move_todo's resolution: nil keeps the current one,
+// otherwise "" for done or "dropped", only when moving to completed.
+func todoResolution(in MoveTodoInput) (*string, error) {
+	if len([]rune(strings.TrimSpace(in.ResolutionNote))) > 500 {
+		return nil, problem("INVALID_INPUT", "resolution_note must have at most 500 characters.")
+	}
+	if in.Resolution == nil {
+		if strings.TrimSpace(in.ResolutionNote) != "" {
+			return nil, problem("INVALID_INPUT", "resolution_note is only used with resolution dropped.")
+		}
+		return nil, nil
+	}
+	r := strings.TrimSpace(*in.Resolution)
+	switch r {
+	case "", "done":
+		r = ""
+	case "dropped":
+	default:
+		return nil, problem("INVALID_INPUT", "resolution must be done or dropped.")
+	}
+	if in.Status != "completed" {
+		return nil, problem("INVALID_INPUT", "resolution is only used with status completed.")
+	}
+	if r == "" && strings.TrimSpace(in.ResolutionNote) != "" {
+		return nil, problem("INVALID_INPUT", "resolution_note is only used with resolution dropped.")
+	}
+	return &r, nil
 }
 
 func dropPosition(ctx context.Context, tx *sql.Tx, projectID string, in MoveTodoInput, moving string) (float64, error) {
@@ -451,6 +502,6 @@ func deleteTodo(ctx context.Context, tx *sql.Tx, a Identity, in TodoRef) (any, e
 func registerTodoTools(t Tools, s *Store) {
 	add(t, s, "list_todos", "List a project's to-dos (할 일) for the board: each has status (not_started, in_progress, in_review, pending_release, completed, idea), priority (high, medium, low), category, optional progress 0-100, assignee and due date, ordered by priority, status and board position. Each also shows its parent (parent_id, one level of sub-items), the to-dos it waits for (blocked_by, open_blocker_count) and its sub-item counts. Filter by status, priority, category, assignee_id, mine, or query (words that must all appear in the title, body or category) — use query to check whether something is already on the board instead of reading every to-do. Up to 500.", false, func(in ListTodosInput) string { return in.ProjectID }, listTodos)
 	add(t, s, "save_todo", "Add a to-do, or change one with todo_id and expected_revision. Changing replaces every field, so send the current values you want to keep (omitted progress, assignee_id and due_date are cleared); branch, parent_id and blocked_by are kept when omitted. Relations stay inside the project, sub-items are one level deep and blocked_by cycles are rejected. Editor access required.", true, func(in SaveTodoInput) string { return in.ProjectID }, saveTodo)
-	add(t, s, "move_todo", "Move a to-do to a status column and priority row on the board, before before_id or last. Moving to completed fills an existing progress bar. pending_release (반영 대기) is for work done and reviewed that waits to be merged or deployed: pass branch with the work branch, or it is filled from the latest linked task run's branch. Editor access required.", true, func(in MoveTodoInput) string { return in.ProjectID }, moveTodo)
+	add(t, s, "move_todo", "Move a to-do to a status column and priority row on the board, before before_id or last. Moving to completed fills an existing progress bar; pass resolution dropped (with resolution_note) to close it as 폐기 — out of scope or no longer needed — which is not flagged for unmerged pull requests. pending_release (반영 대기) is for work done and reviewed that waits to be merged or deployed: pass branch with the work branch, or it is filled from the latest linked task run's branch. Editor access required.", true, func(in MoveTodoInput) string { return in.ProjectID }, moveTodo)
 	add(t, s, "delete_todo", "Delete a to-do permanently. Editor access required.", true, func(in TodoRef) string { return in.ProjectID }, deleteTodo)
 }

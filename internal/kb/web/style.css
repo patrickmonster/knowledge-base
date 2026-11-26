@@ -86,3 +86,4 @@ html:has(dialog[open]){overflow:hidden}dialog{overscroll-behavior:contain}
 @keyframes intro-in{from{opacity:0;transform:translateY(30px)}to{opacity:1;transform:none}}
 .auth-intro>*{animation:intro-in .6s ease-in-out both}.auth-intro>.mark,.auth-intro>.eyebrow{animation-delay:.1s}.auth-intro>h1{animation-delay:.2s}.auth-intro>p.muted{animation-delay:.3s}
 @media(prefers-reduced-motion:reduce){.auth-intro>*{animation:none}}
+.todo-release-note{margin:6px 0 0;font-size:11px;color:#7d6a3f}.todo-release-note.closed{color:#767676}.todo-closed-prs{display:flex;gap:5px;flex-wrap:wrap;align-items:center}.todo-closed-prs .todo-release-note{flex-basis:100%}.todo-resolution-dropped{font-size:11px;padding:1px 6px;background:#eeeeee;color:#767676;font-weight:600}.todo-dropped-note{font-size:13px;color:#767676;background:#f4f4f4;padding:6px 8px}.todo-done-actions{gap:6px}

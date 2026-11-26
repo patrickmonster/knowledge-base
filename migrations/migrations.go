@@ -142,3 +142,12 @@ var TodoPendingRelease string
 
 //go:embed 047_document_trigram.sql
 var DocumentTrigram string
+
+//go:embed 048_todo_resolution.sql
+var TodoResolution string
+
+//go:embed 049_webhook_pull_requests.sql
+var WebhookPullRequests string
+
+//go:embed 050_scanner_settings.sql
+var ScannerSettings string

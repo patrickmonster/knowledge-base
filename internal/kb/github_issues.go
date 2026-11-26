@@ -35,31 +35,26 @@ const (
 	maxGitHubResponseSize = 16 << 20
 )
 
-// GitHubClient reads the GitHub REST API. Token is optional: public
-// repositories work without one (60 requests per hour per server address);
-// private repositories and higher limits need a token with read access to
-// issues. The token is never returned or logged.
+// GitHubClient reads the GitHub REST API without a token: the server has no
+// GitHub credentials, so only public repositories can be read (60 requests per
+// hour per server address). Private repositories reach the server through
+// their GitHub webhook instead (github_webhooks.go).
 type GitHubClient struct {
 	BaseURL string
-	Token   string
 	HTTP    *http.Client
 }
 
-// NewGitHubClient builds the import client from GITHUB_API_URL (optional,
-// https only, for GitHub Enterprise Server: https://host/api/v3) and
-// GITHUB_TOKEN (optional).
-func NewGitHubClient(baseURL, token string) (*GitHubClient, error) {
-	baseURL, token = strings.TrimSpace(baseURL), strings.TrimSpace(token)
+// NewGitHubClient builds the client from GITHUB_API_URL (optional, https
+// only, for GitHub Enterprise Server: https://host/api/v3).
+func NewGitHubClient(baseURL string) (*GitHubClient, error) {
+	baseURL = strings.TrimSpace(baseURL)
 	if baseURL != "" {
 		u, err := url.Parse(baseURL)
 		if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
 			return nil, errors.New("GITHUB_API_URL must be an https URL without credentials, query, or fragment")
 		}
 	}
-	if strings.ContainsAny(token, " \t\r\n") {
-		return nil, errors.New("GITHUB_TOKEN must not contain whitespace")
-	}
-	return &GitHubClient{BaseURL: baseURL, Token: token}, nil
+	return &GitHubClient{BaseURL: baseURL}, nil
 }
 
 type githubIssue struct {
@@ -162,9 +157,6 @@ func (c *GitHubClient) getJSON(ctx context.Context, rawURL string, out any) erro
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
 	req.Header.Set("User-Agent", "knowledge-base")
-	if c.Token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.Token)
-	}
 	resp, err := c.client().Do(req)
 	if err != nil {
 		if ctx.Err() != nil {
@@ -177,7 +169,7 @@ func (c *GitHubClient) getJSON(ctx context.Context, rawURL string, out any) erro
 	if err != nil {
 		return problem("GITHUB_UNAVAILABLE", "GitHub response could not be read. Retry later.")
 	}
-	if err := githubStatusError(resp, c.Token != ""); err != nil {
+	if err := githubStatusError(resp); err != nil {
 		return err
 	}
 	if len(body) > maxGitHubResponseSize {
@@ -189,26 +181,21 @@ func (c *GitHubClient) getJSON(ctx context.Context, rawURL string, out any) erro
 	return nil
 }
 
-func githubStatusError(resp *http.Response, hasToken bool) error {
+func githubStatusError(resp *http.Response) error {
 	switch {
 	case resp.StatusCode == http.StatusOK:
 		return nil
 	case resp.StatusCode == http.StatusNotFound:
-		if hasToken {
-			return problem("NOT_FOUND", "GitHub repository not found, or the server's GitHub token cannot read it.")
-		}
-		return problem("NOT_FOUND", "GitHub repository not found. Private repositories need GITHUB_TOKEN on the server.")
+		return problem("NOT_FOUND", "GitHub repository not found, or it is private: the server reads public repositories only. Register a GitHub webhook for a private repository (웹훅은 등록 이후의 이벤트를 보냅니다).")
 	case resp.StatusCode == http.StatusUnauthorized:
-		return problem("GITHUB_UNAUTHORIZED", "The server's GitHub token was rejected. Ask an administrator to replace GITHUB_TOKEN.")
+		return problem("GITHUB_UNAUTHORIZED", "GitHub denied access to this repository.")
 	case resp.StatusCode == http.StatusTooManyRequests,
 		resp.StatusCode == http.StatusForbidden && resp.Header.Get("X-RateLimit-Remaining") == "0":
 		msg := "GitHub rate limit reached. Retry later"
 		if reset, err := strconv.ParseInt(resp.Header.Get("X-RateLimit-Reset"), 10, 64); err == nil {
 			msg += " (after " + time.Unix(reset, 0).UTC().Format(time.RFC3339) + ")"
 		}
-		if !hasToken {
-			msg += "; setting GITHUB_TOKEN on the server raises the limit"
-		}
+		msg += "; a GitHub webhook delivers changes without using the limit"
 		return problem("GITHUB_RATE_LIMITED", msg+".")
 	case resp.StatusCode == http.StatusForbidden:
 		return problem("GITHUB_UNAUTHORIZED", "GitHub denied access to this repository's issues.")
@@ -250,7 +237,6 @@ type ImportGitHubIssuesResult struct {
 	Updated             int             `json:"updated"`
 	Unchanged           int             `json:"unchanged"`
 	SkippedPullRequests int             `json:"skipped_pull_requests"`
-	Authenticated       bool            `json:"authenticated"`
 	Issues              []ImportedIssue `json:"issues"`
 }
 
@@ -272,7 +258,7 @@ func (s *Store) ImportGitHubIssues(ctx context.Context, a Identity, in ImportGit
 		return nil, err
 	}
 	// Authorize before calling GitHub so viewers and read-only keys cannot use
-	// the server's token or rate limit.
+	// the server's rate limit.
 	if _, err := s.Perform(ctx, a, "import_github_issues_check", plan.in.ProjectID, true, false, func(tx *sql.Tx) (any, error) {
 		return nil, checkGitHubImportTargets(ctx, tx, a, &plan.in)
 	}); err != nil {
@@ -291,7 +277,7 @@ func (s *Store) ImportGitHubIssues(ctx context.Context, a Identity, in ImportGit
 		if err := checkGitHubImportTargets(ctx, tx, a, &plan.in); err != nil {
 			return nil, err
 		}
-		result := ImportGitHubIssuesResult{Repository: plan.repo, Fetched: len(items), SkippedPullRequests: skipped, Authenticated: gh.Token != "", Issues: []ImportedIssue{}}
+		result := ImportGitHubIssuesResult{Repository: plan.repo, Fetched: len(items), SkippedPullRequests: skipped, Issues: []ImportedIssue{}}
 		for _, item := range items {
 			imported, err := upsertGitHubIssue(ctx, tx, a, plan, item)
 			if err != nil {

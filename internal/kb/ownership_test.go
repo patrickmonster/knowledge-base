@@ -19,6 +19,17 @@ func TestTransferProjectOwner(t *testing.T) {
 	mustCall(t, tools, admin, "set_project_member", MemberInput{ProjectID: p.ID, UserID: editor.User.ID, Role: "editor"})
 	mustCall(t, tools, admin, "set_project_member", MemberInput{ProjectID: p.ID, UserID: viewer.User.ID, Role: "viewer"})
 	transfer := TransferOwnerInput{ProjectID: p.ID, UserID: editor.User.ID, ConfirmSlug: "handover"}
+	// The owner's own area, and one owned by someone else that a transfer must never touch.
+	mine := mustCall(t, tools, admin, "set_work_area", WorkAreaInput{ProjectID: p.ID, Name: "인증", OwnerID: admin.User.ID}).(WorkArea)
+	theirs := mustCall(t, tools, admin, "set_work_area", WorkAreaInput{ProjectID: p.ID, Name: "배포", OwnerID: editor.User.ID}).(WorkArea)
+	areaOwnerOf := func(id string) string {
+		t.Helper()
+		var owner string
+		if err := s.DB.QueryRow(`SELECT owner_id::text FROM work_areas WHERE id=$1`, id).Scan(&owner); err != nil {
+			t.Fatal(err)
+		}
+		return owner
+	}
 
 	// AI clients (MCP keys) cannot transfer, even the owner's write key.
 	keyOut, err := s.CreateKey(ctx, admin, KeyInput{Name: "agent", Access: "read_write", ProjectID: p.ID})
@@ -42,6 +53,9 @@ func TestTransferProjectOwner(t *testing.T) {
 		{ProjectID: p.ID, UserID: admin.User.ID, ConfirmSlug: "handover"},
 		{ProjectID: p.ID, UserID: editor.User.ID, ConfirmSlug: "handover", PreviousOwnerRole: "owner"},
 		{ProjectID: p.ID, UserID: "not-a-uuid", ConfirmSlug: "handover"},
+		{ProjectID: p.ID, UserID: editor.User.ID, ConfirmSlug: "handover", WorkAreas: "drop"},
+		// A viewer cannot own work areas, so keeping them as viewer is refused.
+		{ProjectID: p.ID, UserID: editor.User.ID, ConfirmSlug: "handover", PreviousOwnerRole: "viewer", WorkAreas: "keep"},
 	} {
 		_, err = call(t, tools, admin, "transfer_project_owner", bad)
 		denied(t, err, "INVALID_INPUT")
@@ -53,6 +67,10 @@ func TestTransferProjectOwner(t *testing.T) {
 	out := mustCall(t, tools, admin, "transfer_project_owner", transfer).(map[string]any)
 	if out["owner_id"] != editor.User.ID || out["previous_owner_role"] != "editor" || out["new_owner_previous_role"] != "editor" {
 		t.Fatalf("transfer result: %v", out)
+	}
+	// By default an owner who stays as editor keeps their areas.
+	if out["work_areas"] != "keep" || out["work_areas_moved"] != int64(0) || areaOwnerOf(mine.ID) != admin.User.ID {
+		t.Fatalf("default transfer should keep areas: %v owner %s", out, areaOwnerOf(mine.ID))
 	}
 	roles := map[string]string{}
 	rows, err := s.DB.Query(`SELECT user_id::text,role FROM project_members WHERE project_id=$1`, p.ID)
@@ -85,8 +103,12 @@ func TestTransferProjectOwner(t *testing.T) {
 	_, err = call(t, tools, editor, "set_project_member", MemberInput{ProjectID: p.ID, UserID: editor.User.ID, Role: "remove"})
 	denied(t, err, "FORBIDDEN")
 
-	// Hand it back, leaving the second owner as a viewer.
-	mustCall(t, tools, editor, "transfer_project_owner", TransferOwnerInput{ProjectID: p.ID, UserID: admin.User.ID, ConfirmSlug: "handover", PreviousOwnerRole: "viewer"})
+	// Hand it back, leaving the second owner as a viewer: their areas follow the
+	// new owner without being asked, and other members' areas stay put.
+	back := mustCall(t, tools, editor, "transfer_project_owner", TransferOwnerInput{ProjectID: p.ID, UserID: admin.User.ID, ConfirmSlug: "handover", PreviousOwnerRole: "viewer"}).(map[string]any)
+	if back["work_areas"] != "transfer" || back["work_areas_moved"] != int64(1) || areaOwnerOf(theirs.ID) != admin.User.ID || areaOwnerOf(mine.ID) != admin.User.ID {
+		t.Fatalf("viewer transfer should hand areas over: %v", back)
+	}
 	var role string
 	if err = s.DB.QueryRow(`SELECT role FROM project_members WHERE project_id=$1 AND user_id=$2`, p.ID, editor.User.ID).Scan(&role); err != nil || role != "viewer" {
 		t.Fatalf("previous owner role: %q %v", role, err)
@@ -95,6 +117,17 @@ func TestTransferProjectOwner(t *testing.T) {
 	var target, prevRole string
 	if err = s.DB.QueryRow(`SELECT target_id::text,details->>'previous_owner_role' FROM audit_events WHERE action='transfer_project_owner' AND outcome='success' ORDER BY id DESC LIMIT 1`).Scan(&target, &prevRole); err != nil || target != admin.User.ID || prevRole != "viewer" {
 		t.Fatalf("audit should record new owner and previous role: %q %q %v", target, prevRole, err)
+	}
+
+	// Asked explicitly, an owner who stays as editor hands every area they own over.
+	mustCall(t, tools, admin, "set_project_member", MemberInput{ProjectID: p.ID, UserID: editor.User.ID, Role: "editor"})
+	moved := mustCall(t, tools, admin, "transfer_project_owner", TransferOwnerInput{ProjectID: p.ID, UserID: editor.User.ID, ConfirmSlug: "handover", WorkAreas: "transfer"}).(map[string]any)
+	if moved["work_areas_moved"] != int64(2) || areaOwnerOf(mine.ID) != editor.User.ID || areaOwnerOf(theirs.ID) != editor.User.ID {
+		t.Fatalf("explicit transfer should move both areas: %v", moved)
+	}
+	var mode string
+	if err = s.DB.QueryRow(`SELECT details->>'work_areas' FROM audit_events WHERE action='transfer_project_owner' AND outcome='success' ORDER BY id DESC LIMIT 1`).Scan(&mode); err != nil || mode != "transfer" {
+		t.Fatalf("audit should record the work area choice: %q %v", mode, err)
 	}
 
 	// The tool is hidden from MCP clients.

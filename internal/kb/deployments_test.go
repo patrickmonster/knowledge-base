@@ -267,3 +267,67 @@ func TestTaskDeploymentTracking(t *testing.T) {
 		t.Fatalf("recheck too soon: %d %v", n, err)
 	}
 }
+
+// A pull request GitHub never reported (merged before the repository's
+// webhook existed, private repository) is confirmed by hand in the web console.
+func TestConfirmPullRequest(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+	f, srv := newFakeGitHub(t)
+	s.GitHub = &GitHubClient{BaseURL: srv.URL}
+	tools := NewTools(s)
+	admin := loginAs(t, s, "admin@example.com")
+	editor := inviteAs(t, s, admin, "confirm-editor@example.com")
+	p := mustCall(t, tools, admin, "create_project", CreateProjectInput{Slug: "confirm-pr", Name: "confirm"}).(Project)
+	mustCall(t, tools, admin, "set_project_member", MemberInput{ProjectID: p.ID, UserID: editor.User.ID, Role: "editor"})
+	run := mustCall(t, tools, admin, "start_task", StartTaskInput{ProjectID: p.ID, RequestKey: "confirm-1", Title: "비공개 PR", Task: "비공개 저장소 작업"}).(StartTaskResult).Run
+	finish := finishFixture(p.ID, run.ID)
+	finish.PullRequests = []string{"o/private#4", "o/private#5"}
+	completion := mustCall(t, tools, admin, "finish_task", finish).(TaskCompletion)
+	historyID := completion.Documents[0].ID
+
+	// The private repository is invisible without credentials.
+	r := mustCall(t, tools, admin, "check_task_deployments", DeploymentCheckInput{ProjectID: p.ID}).(DeploymentCheckResult)
+	if len(r.PullRequests) != 2 || r.PullRequests[0].CheckError == nil || *r.PullRequests[0].CheckError != "NOT_FOUND" {
+		t.Fatalf("private repository: %+v", r.PullRequests)
+	}
+
+	in := PullRequestConfirmInput{ProjectID: p.ID, TaskID: run.ID, Repository: "O/private", Number: 4, State: "merged"}
+	_, err := call(t, tools, editor, "confirm_pull_request", in)
+	denied(t, err, "FORBIDDEN")
+	keyOut, err := s.CreateKey(ctx, admin, KeyInput{Name: "rw", Access: "read_write", ProjectID: p.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := s.APIKey(ctx, keyOut.(map[string]any)["token"].(string))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = call(t, tools, key, "confirm_pull_request", in)
+	denied(t, err, "FORBIDDEN")
+	_, err = call(t, tools, admin, "confirm_pull_request", PullRequestConfirmInput{ProjectID: p.ID, TaskID: run.ID, Repository: "o/private", Number: 4, State: "deployed"})
+	denied(t, err, "INVALID_INPUT")
+	_, err = call(t, tools, admin, "confirm_pull_request", PullRequestConfirmInput{ProjectID: p.ID, TaskID: run.ID, Repository: "o/private", Number: 99, State: "merged"})
+	denied(t, err, "NOT_FOUND")
+
+	got := mustCall(t, tools, admin, "confirm_pull_request", in).(TrackedPullRequest)
+	if got.State != "merged" || got.ConfirmedAt == nil || got.ConfirmedByName == nil || got.CheckError != nil {
+		t.Fatalf("confirmed: %+v", got)
+	}
+	// Settled pull requests cannot be confirmed again.
+	_, err = call(t, tools, admin, "confirm_pull_request", in)
+	denied(t, err, "CONFLICT")
+	mustCall(t, tools, admin, "confirm_pull_request", PullRequestConfirmInput{ProjectID: p.ID, TaskID: run.ID, Repository: "o/private", Number: 5, State: "closed"})
+
+	doc := mustCall(t, tools, admin, "get_document", DocumentRef{ProjectID: p.ID, DocumentID: historyID}).(Document)
+	if !strings.Contains(doc.Content, "o/private/pull/4: 병합 — ") || !strings.Contains(doc.Content, "o/private/pull/5: 병합되지 않고 닫힘 — ") ||
+		!strings.Contains(doc.Content, "수동 확인") || !strings.Contains(doc.Content, "Asia/Seoul, 웹 수동 확인)") {
+		t.Fatalf("history after confirmation:\n%s", doc.Content)
+	}
+	// Nothing is left to check on GitHub.
+	calls := f.count()
+	mustCall(t, tools, admin, "check_task_deployments", DeploymentCheckInput{ProjectID: p.ID})
+	if f.count() != calls {
+		t.Fatal("confirmed pull requests were checked on GitHub again")
+	}
+}
