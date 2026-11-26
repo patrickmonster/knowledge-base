@@ -410,3 +410,26 @@ test('usage statistics show to-do flow, lead time and backlog per priority',asyn
   assert.match(empty.querySelectorAll('.usage-kpi')[1].textContent,/평균 소요—/);
   assert.deepStrictEqual([...empty.querySelectorAll('table')[1].querySelectorAll('tbody tr')].map(r=>r.cells[6].textContent),['—','—','—']);
 });
+
+test('owner transfer asks about the owner\'s work areas and hands them over when staying as viewer',async t=>{
+  const c=await open(t,'full');
+  const {PROJECT}=require('./web-fixtures.js');
+  const submit=async(role,areas)=>{
+    await c.call('members',PROJECT);
+    await c.settle();
+    const form=[...c.document.querySelectorAll('#page form')].find(f=>f.querySelector('select[name="work_areas"]'));
+    assert.ok(form,'the transfer form offers the work area choice');
+    assert.match(form.textContent,/조회자면 담당 영역은 자동으로 새 소유자에게/);
+    form.querySelector('select[name="previous_owner_role"]').value=role;
+    form.querySelector('select[name="work_areas"]').value=areas;
+    form.querySelector('input[name="confirm_slug"]').value=PROJECT.slug;
+    c.requests.length=0;
+    form.dispatchEvent(new c.window.Event('submit',{bubbles:true,cancelable:true}));
+    await c.settle();
+    return c.requests.filter(r=>r.path==='/api/tools/transfer_project_owner').map(r=>r.body.work_areas);
+  };
+  assert.deepStrictEqual(await submit('editor','keep'),['keep']);
+  assert.deepStrictEqual(await submit('editor','transfer'),['transfer']);
+  assert.deepStrictEqual(await submit('viewer','keep'),['transfer'],'a viewer cannot keep work areas');
+  check(c,'members › owner transfer');
+});
