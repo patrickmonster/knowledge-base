@@ -9,6 +9,7 @@ function attachmentPreviewURL(f){return `/api/attachments/${encodeURIComponent(f
 function attachmentHasPreview(f){return f.status==='ready'&&(!!attachmentPreviewKind(f)||(f.text_status==='extracted'&&!!f.text_document_id));}
 
 async function attachmentsPage() {
+  const focus=takePageFocus('attachments');
   const root = el('div'), connection = card('버킷 연결 상태');
   const connectionState = el('p','연결 확인 중…');
   connectionState.setAttribute('role','status');
@@ -184,6 +185,7 @@ async function attachmentsPage() {
     const fields=el('fieldset',undefined,'attachment-fields');
     const documentID=field(fields,'연결할 지식 문서 ID (선택)','document_id');
     documentID.required=false;
+    if (focus?.project_id===project.value) documentID.value=focus.document_id||'';
     const file=field(fields,'첨부 파일 · 최대 25MB','file','file');
     form.append(fields);
     const status=el('p','','muted');status.setAttribute('role','status');
@@ -199,6 +201,7 @@ async function attachmentsPage() {
         const response=await fetch(prepared.upload_path,{method:'PUT',headers:{'Content-Type':'application/octet-stream','X-CSRF-Token':csrf},body:selected});
         const body=await response.json();
         if(!response.ok)throw Error(body.error?.message||'파일 업로드에 실패했습니다.');
+        linkDocumentCache.delete(projectID);
         offset=0;busy=false;dialog.close();notify(selected.name+' 파일을 저장했습니다.');
       } catch(e) {status.textContent='저장을 완료하지 못했습니다. 목록에서 상태를 확인한 뒤 새로 업로드해 주세요.';throw e;}
       finally {busy=false;project.disabled=false;fields.disabled=false;cancel.disabled=false;if(project.value===projectID)await refresh();}

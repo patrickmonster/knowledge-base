@@ -527,6 +527,8 @@ func importProject(ctx context.Context, tx *sql.Tx, a Identity, projectID string
 				}
 				valid = !cycle
 			}
+		case l.Relation == relationCites:
+			valid = src.kind == "wiki" && dst.kind != "wiki"
 		case l.Relation == relationImplements:
 			valid = src.kind == "history" && (dst.kind == "decision" || dst.kind == "brief")
 		}

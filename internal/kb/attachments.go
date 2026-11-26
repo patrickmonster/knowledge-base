@@ -188,7 +188,7 @@ func registerAttachmentTools(t Tools, s *Store) {
 		}
 		return s.attachmentUsage(ctx, tx, in.ProjectID)
 	})
-	add(t, s, "list_attachments", "List project files and upload status. Optional document_id or issue_id filters files linked to that document or issue.", false, func(in ListAttachmentsInput) string { return in.ProjectID }, func(ctx context.Context, tx *sql.Tx, a Identity, in ListAttachmentsInput) (any, error) {
+	add(t, s, "list_attachments", "List project files and upload status. Optional document_id or issue_id filters files linked to that document (including its extracted text) or issue.", false, func(in ListAttachmentsInput) string { return in.ProjectID }, func(ctx context.Context, tx *sql.Tx, a Identity, in ListAttachmentsInput) (any, error) {
 		if _, err := projectReadAccess(ctx, tx, a.User.ID, in.ProjectID); err != nil {
 			return nil, err
 		}
@@ -203,7 +203,7 @@ func registerAttachmentTools(t Tools, s *Store) {
 				}
 			}
 		}
-		return many[Attachment](ctx, tx, `SELECT to_jsonb(a)-'object_key'-'upload_token_hash'-'upload_key_id' FROM attachments a WHERE project_id=$1 AND status<>'deleting' AND ($2='' OR document_id=NULLIF($2,'')::uuid) AND ($5='' OR issue_id=NULLIF($5,'')::uuid) ORDER BY created_at DESC,id LIMIT $3 OFFSET $4`, in.ProjectID, in.DocumentID, limit, in.Offset, in.IssueID)
+		return many[Attachment](ctx, tx, `SELECT to_jsonb(a)-'object_key'-'upload_token_hash'-'upload_key_id' FROM attachments a WHERE project_id=$1 AND status<>'deleting' AND ($2='' OR document_id=NULLIF($2,'')::uuid OR text_document_id=NULLIF($2,'')::uuid) AND ($5='' OR issue_id=NULLIF($5,'')::uuid) ORDER BY created_at DESC,id LIMIT $3 OFFSET $4`, in.ProjectID, in.DocumentID, limit, in.Offset, in.IssueID)
 	})
 	add(t, s, "get_attachment_download", "Issue a private download link valid for 5 minutes. Anyone with the link can use it until expiry; do not save it in knowledge documents.", false, func(in AttachmentInput) string { return in.ProjectID }, func(ctx context.Context, tx *sql.Tx, a Identity, in AttachmentInput) (any, error) {
 		f, err := readAttachment(ctx, tx, a, in, false)

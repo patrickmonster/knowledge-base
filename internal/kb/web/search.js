@@ -1,6 +1,6 @@
 'use strict';
 
-const searchKinds={brief:'기획',decision:'결정',history:'작업 이력',artifact:'산출물',reference:'참고',glossary:'용어집'};
+const searchKinds={brief:'기획',decision:'결정',history:'작업 이력',artifact:'산출물',reference:'참고',glossary:'용어집',wiki:'위키'};
 const searchRetrieval={hybrid:'의미+키워드','lexical':'키워드',semantic:'의미','lexical-fallback':'키워드 (임베딩 실패로 대체)'};
 
 async function searchPage() {

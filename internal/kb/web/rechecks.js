@@ -4,7 +4,7 @@
 // 재확인: list_documents(stale_only) + list_recheck_assignments + get_recheck_digest, 담당 지정·확인은 assign_recheck_owner·confirm_recheck.
 // 맥락 피드백: get_retrieval_metrics(검색 품질)와 list_task_runs(작업별 피드백 기록 시각·찾지 못한 지식). 이 카드는 조회 전용입니다.
 // 쓰기 권한은 서버가 판정합니다(편집자 이상). 조회자에게는 동작 버튼을 보여 주지 않고, 우회하지 않습니다.
-const rcKinds={brief:'기획',decision:'결정',history:'작업 이력',artifact:'산출물',reference:'참고',glossary:'용어집'};
+const rcKinds={brief:'기획',decision:'결정',history:'작업 이력',artifact:'산출물',reference:'참고',glossary:'용어집',wiki:'위키'};
 const rcWriters=['owner','admin','editor'];
 const rcNum=n=>Number(n||0).toLocaleString('ko-KR');
 const rcPct=v=>v===null||v===undefined?'—':Math.round(v*100)+'%';

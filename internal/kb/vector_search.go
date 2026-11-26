@@ -34,6 +34,9 @@ func (s *Store) searchProjects(ctx context.Context, tx *sql.Tx, projectIDs []str
 	if !validStatus(in.Status) {
 		return out, problem("INVALID_INPUT", "Unknown status.")
 	}
+	if in.Kind != "" && !validKind(in.Kind) {
+		return out, problem("INVALID_INPUT", "Unknown document kind.")
+	}
 	if in.Mode == "" {
 		in.Mode = "hybrid"
 		if s.Embedder == nil {
@@ -63,7 +66,7 @@ func (s *Store) searchProjects(ctx context.Context, tx *sql.Tx, projectIDs []str
 	issueLimit := min(limit, maxIssueHits)
 	if in.Mode == "lexical" {
 		start := time.Now()
-		out.Hits, err = lexicalHits(ctx, tx, scope, query, in.Status, limit)
+		out.Hits, err = lexicalHits(ctx, tx, scope, query, in.Status, in.Kind, limit)
 		out.timing.Lexical = since(start)
 		if err == nil && in.includeIssues {
 			out.Issues, err = issueLexicalHits(ctx, tx, scope, query, issueLimit)
@@ -79,8 +82,8 @@ func (s *Store) searchProjects(ctx context.Context, tx *sql.Tx, projectIDs []str
 	err = tx.QueryRowContext(ctx, `SELECT
 	count(*) FILTER (WHERE c.embedding IS NULL OR c.embedding_status<>'ready' OR c.embedding_model IS DISTINCT FROM $3),
 	count(*) FILTER (WHERE c.embedding IS NOT NULL AND c.embedding_status='ready' AND c.embedding_model=$3)
-	FROM chunks c JOIN documents d ON d.id=c.document_id WHERE d.project_id=ANY($1::text::uuid[]) AND d.status=$2`,
-		scope, in.Status, s.Embedder.Model()).Scan(&out.UnindexedChunks, &out.timing.ScannedChunks)
+	FROM chunks c JOIN documents d ON d.id=c.document_id WHERE d.project_id=ANY($1::text::uuid[]) AND d.status=$2 AND ($4='' OR d.kind=$4)`,
+		scope, in.Status, s.Embedder.Model(), in.Kind).Scan(&out.UnindexedChunks, &out.timing.ScannedChunks)
 	if err != nil {
 		return out, err
 	}
@@ -103,7 +106,7 @@ func (s *Store) searchProjects(ctx context.Context, tx *sql.Tx, projectIDs []str
 		out.Warning = "Local embedding failed (" + errorCode(err) + "). Results use keyword search only."
 		out.timing.ScannedChunks = 0
 		start = time.Now()
-		out.Hits, err = lexicalHits(ctx, tx, scope, query, in.Status, limit)
+		out.Hits, err = lexicalHits(ctx, tx, scope, query, in.Status, in.Kind, limit)
 		out.timing.Lexical = since(start)
 		if err == nil && in.includeIssues {
 			out.Issues, err = issueLexicalHits(ctx, tx, scope, query, issueLimit)
@@ -132,12 +135,12 @@ func (s *Store) searchProjects(ctx context.Context, tx *sql.Tx, projectIDs []str
 	semantic, err := many[SearchHit](ctx, tx, `WITH scoped AS MATERIALIZED (
 	SELECT d.id AS document_id,d.project_id,d.title,d.kind,d.status,d.revision,d.source_url,d.updated_by,d.updated_at,
 	c.position,c.content AS excerpt,c.embedding FROM documents d JOIN chunks c ON c.document_id=d.id
-	WHERE d.project_id=ANY($1::text::uuid[]) AND d.status=$2 AND c.embedding_status='ready' AND c.embedding IS NOT NULL AND c.embedding_model=$3
+	WHERE d.project_id=ANY($1::text::uuid[]) AND d.status=$2 AND c.embedding_status='ready' AND c.embedding IS NOT NULL AND c.embedding_model=$3 AND ($6='' OR d.kind=$6)
 	), ranked AS (
 	SELECT document_id,project_id,title,kind,status,revision,source_url,updated_by,updated_at,position,excerpt,
 	1-(embedding OPERATOR(public.<=>) $4::public.vector) AS score,
 	row_number() OVER(PARTITION BY document_id ORDER BY embedding OPERATOR(public.<=>) $4::public.vector,position) AS n FROM scoped
-	) SELECT to_jsonb(ranked)-'n' FROM ranked WHERE n=1 ORDER BY score DESC,document_id LIMIT $5`, scope, in.Status, s.Embedder.Model(), vectorLiteral(vectors[0]), max(limit, min(50, limit*3)))
+	) SELECT to_jsonb(ranked)-'n' FROM ranked WHERE n=1 ORDER BY score DESC,document_id LIMIT $5`, scope, in.Status, s.Embedder.Model(), vectorLiteral(vectors[0]), max(limit, min(50, limit*3)), in.Kind)
 	out.timing.Vector = since(start)
 	if err != nil {
 		return out, err
@@ -156,7 +159,7 @@ func (s *Store) searchProjects(ctx context.Context, tx *sql.Tx, projectIDs []str
 		return out, nil
 	}
 	start = time.Now()
-	lexical, err := lexicalHits(ctx, tx, scope, query, in.Status, max(limit, min(50, limit*3)))
+	lexical, err := lexicalHits(ctx, tx, scope, query, in.Status, in.Kind, max(limit, min(50, limit*3)))
 	out.timing.Lexical = since(start)
 	if err != nil {
 		return out, err

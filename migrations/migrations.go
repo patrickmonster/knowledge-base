@@ -151,3 +151,6 @@ var WebhookPullRequests string
 
 //go:embed 050_scanner_settings.sql
 var ScannerSettings string
+
+//go:embed 051_wiki.sql
+var Wiki string
