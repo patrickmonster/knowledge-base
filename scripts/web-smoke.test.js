@@ -8,7 +8,7 @@ const assert=require('node:assert');
 const {openConsole}=require('./web-harness.js');
 const {mockAPI,PROJECT}=require('./web-fixtures.js');
 
-const pages=['projects','search','rules','prompts','documents','todos','todosDone','tasks','reviews','issues','attachments','vectors','usage','rechecks','keys','account','overview','users','audit'];
+const pages=['projects','search','rules','prompts','documents','wiki','todos','todosDone','tasks','reviews','issues','attachments','vectors','usage','rechecks','keys','account','overview','users','audit'];
 
 async function open(t,variant){
   const c=await openConsole(mockAPI(variant));
@@ -89,7 +89,7 @@ test('an API failure is reported, not thrown',async t=>{
   });
   t.after(()=>c.close());
   failing=true;
-  for(const page of ['documents','todos','tasks','issues']){
+  for(const page of ['documents','wiki','todos','tasks','issues']){
     await assert.rejects(c.call('render',page),/서버 오류/,page);
     await c.settle();
     assert.deepStrictEqual(c.problems,[],page);
