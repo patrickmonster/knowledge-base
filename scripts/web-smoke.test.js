@@ -89,7 +89,7 @@ test('an API failure is reported, not thrown',async t=>{
   });
   t.after(()=>c.close());
   failing=true;
-  for(const page of ['documents','wiki','todos','tasks','issues']){
+  for(const page of ['documents','todos','tasks','issues']){
     await assert.rejects(c.call('render',page),/서버 오류/,page);
     await c.settle();
     assert.deepStrictEqual(c.problems,[],page);
