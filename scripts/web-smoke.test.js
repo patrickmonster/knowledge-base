@@ -239,6 +239,34 @@ test('the to-do page opens as a list grouped by status and remembers the board c
   check(c,'todo list view');
 });
 
+test('a list row dropped on another status group moves the to-do there and keeps its priority',async t=>{
+  const c=await open(t,'full');
+  await show(c,'todos');
+  const group=s=>c.document.querySelector(`.todo-list-group[data-status="${s}"]`);
+  assert.strictEqual(c.document.querySelector('.todo-list-group:not([data-status]) .todo-list-label').textContent,'완료','completed is not a drop target');
+  const drag=async(id,target)=>{
+    const data=new Map(),dt={setData:(k,v)=>data.set(k,v),getData:k=>data.get(k)||'',effectAllowed:'',dropEffect:''};
+    const fire=(n,type)=>{const e=new c.window.Event(type,{bubbles:true,cancelable:true});Object.defineProperty(e,'dataTransfer',{value:dt});n.dispatchEvent(e);};
+    const row=c.document.querySelector(`.todo-list-row[data-id="${id}"]`);
+    assert.strictEqual(row.draggable,true);
+    fire(row,'dragstart');
+    assert.ok(c.document.querySelector('.todo-board').classList.contains('drag-active'));
+    fire(target,'dragover');fire(target,'drop');fire(row,'dragend');
+    await c.settle();
+  };
+  c.requests.length=0;
+  await drag('todo-4',group('in_progress'));
+  const moved=c.requests.find(r=>r.path==='/api/tools/move_todo');
+  assert.ok(moved,'move_todo is called');
+  assert.deepStrictEqual({id:moved.body.todo_id,status:moved.body.status,priority:moved.body.priority},{id:'todo-4',status:'in_progress',priority:'low'});
+  // Let go on its own group: nothing to save.
+  c.requests.length=0;
+  await drag('todo-5',group('in_review'));
+  assert.strictEqual(c.requests.find(r=>r.path==='/api/tools/move_todo'),undefined);
+  assert.strictEqual(c.document.querySelector('.todo-list-row[data-id="todo-3"]')?.draggable??false,false,'completed rows do not drag');
+  check(c,'todo list drag');
+});
+
 test('a completed to-do with an unmerged pull request is flagged on the board and the completed page',async t=>{
   const c=await open(t,'full');
   await showBoard(c);

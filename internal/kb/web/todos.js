@@ -248,8 +248,12 @@ async function todosPage(){
       if(s!=='completed'&&hidden.status.has(s))continue;
       // Within a group: priority first, then the board order list_todos returns.
       const rows=s==='completed'?done:items.filter(t=>t.status===s&&!hidden.priority.has(t.priority)).sort((a,b)=>rank[a.priority]-rank[b.priority]);
-      if(!rows.length)continue;
-      const group=el('section',undefined,'todo-list-group');
+      // Empty groups stay in the page, hidden, so a dragged row can still
+      // land on them (CSS shows them while a drag is under way).
+      const droppable=canWrite&&s!=='completed';
+      if(!rows.length&&!droppable)continue;
+      const group=el('section',undefined,'todo-list-group'+(rows.length?'':' empty'));
+      if(droppable)group.dataset.status=s;
       const head=el('div',undefined,'todo-list-head');
       const toggle=el('button',undefined,'todo-list-toggle');toggle.type='button';
       const open=!listCollapsed.has(s);toggle.setAttribute('aria-expanded',String(open));
@@ -273,6 +277,9 @@ async function todosPage(){
           group.append(more);
         }
       }
+      // Dropping a row on a group changes its status and keeps its priority.
+      // Completed is not a target: work is ticked off in the dialog or on the board.
+      if(droppable)dropZone(group);
       list.append(group);
     }
     board.replaceChildren(list);
@@ -303,9 +310,11 @@ async function todosPage(){
       const at=t.status==='completed'?(t.completed_at||t.updated_at):t.updated_at;
       date.textContent=todoShortDate(at);date.title=(t.status==='completed'?'완료 ':'수정 ')+(at||'');
     }
+    r.dataset.priority=t.priority;
     r.append(todoPriorityIcon(t.priority),todoStatusIcon(t.status),title,chips,who,date);
     r.addEventListener('click',()=>todoDialog(root,project,ctx,t));
     r.addEventListener('keydown',e=>{if(e.key==='Enter'&&e.target===r){e.preventDefault();todoDialog(root,project,ctx,t);}});
+    if(canWrite&&t.status!=='completed')draggable(r,t);
     return r;
   }
   function todoCard(t){
@@ -365,16 +374,30 @@ async function todosPage(){
     if(meta){const m=el('p',meta,'todo-meta');if(t.due_date&&t.status!=='completed'&&t.due_date<todayISO())m.classList.add('overdue');c.append(m);}
     c.addEventListener('click',()=>todoDialog(root,project,ctx,t));
     c.addEventListener('keydown',e=>{if(e.key==='Enter'&&e.target===c){e.preventDefault();todoDialog(root,project,ctx,t);}});
-    if(canWrite){
-      c.draggable=true;
-      c.addEventListener('dragstart',e=>{if(touchDrag){e.preventDefault();return;}e.dataTransfer.setData('text/plain',t.id);e.dataTransfer.effectAllowed='move';c.classList.add('dragging');});
-      c.addEventListener('dragend',()=>{c.classList.remove('dragging');clearDropMarks();});
-      touchDraggable(c,t);
-    }
+    if(canWrite)draggable(c,t);
     return c;
   }
-  function beforeCard(cell,y){
-    for(const c of cell.querySelectorAll('.todo-card:not(.dragging)')){const b=c.getBoundingClientRect();if(y<b.top+b.height/2)return c;}
+  // Board cards and list rows drag the same way: the mouse with HTML5 drag
+  // events, a finger after a long press (touchDraggable).
+  let dragging=null;
+  function draggable(n,t){
+    n.draggable=true;
+    n.addEventListener('dragstart',e=>{
+      if(touchDrag){e.preventDefault();return;}
+      e.dataTransfer.setData('text/plain',t.id);e.dataTransfer.effectAllowed='move';
+      n.classList.add('dragging');dragging=t;board.classList.add('drag-active');
+    });
+    n.addEventListener('dragend',()=>{n.classList.remove('dragging');dragging=null;board.classList.remove('drag-active');clearDropMarks();});
+    touchDraggable(n,t);
+  }
+  // The card or row to drop in front of. In the list a group holds every
+  // priority, so only rows of the dragged to-do's priority count.
+  function beforeCard(cell,y,t){
+    const list=cell.classList.contains('todo-list-group');
+    for(const c of cell.querySelectorAll('.todo-card:not(.dragging),.todo-list-row:not(.dragging)')){
+      if(list&&t&&c.dataset.priority!==t.priority)continue;
+      const b=c.getBoundingClientRect();if(y<b.top+b.height/2)return c;
+    }
     return null;
   }
   function dropZone(cell){
@@ -382,14 +405,14 @@ async function todosPage(){
       e.preventDefault();e.dataTransfer.dropEffect='move';
       board.querySelectorAll('.drop-before').forEach(n=>n.classList.remove('drop-before'));
       cell.classList.add('drop-target');
-      const before=beforeCard(cell,e.clientY);
+      const before=beforeCard(cell,e.clientY,dragging);
       if(before)before.classList.add('drop-before');
     });
     cell.addEventListener('dragleave',e=>{if(!cell.contains(e.relatedTarget)){cell.classList.remove('drop-target');cell.querySelectorAll('.drop-before').forEach(n=>n.classList.remove('drop-before'));}});
     cell.addEventListener('drop',async e=>{
       e.preventDefault();
-      const id=e.dataTransfer.getData('text/plain'),before=beforeCard(cell,e.clientY);
-      cell.classList.remove('drop-target');
+      const id=e.dataTransfer.getData('text/plain'),before=beforeCard(cell,e.clientY,ctx.todos.find(x=>x.id===id));
+      cell.classList.remove('drop-target');board.classList.remove('drag-active');
       await moveCard(id,cell,before);
     });
   }
@@ -397,8 +420,11 @@ async function todosPage(){
   async function moveCard(id,cell,before){
     const moving=ctx.todos.find(x=>x.id===id);
     if(!moving)return;
-    const body={project_id:project.id,todo_id:id,status:cell.dataset.status,priority:cell.dataset.priority};
+    // A list group has no priority of its own: the to-do keeps its priority.
+    const body={project_id:project.id,todo_id:id,status:cell.dataset.status,priority:cell.dataset.priority||moving.priority};
     if(before&&before.dataset.id!==id)body.before_id=before.dataset.id;
+    // Let go on its own group with no row to go before: nothing changes.
+    if(!cell.dataset.priority&&body.status===moving.status&&!body.before_id){clearDropMarks();return;}
     if(body.status==='pending_release'&&moving.status!=='pending_release'){
       const branch=askTodoBranch(moving);
       if(branch==null){clearDropMarks();return;}
@@ -449,7 +475,7 @@ async function todosPage(){
     ghost.classList.add('todo-ghost');ghost.removeAttribute('tabindex');ghost.setAttribute('aria-hidden','true');
     ghost.style.width=r.width+'px';
     document.body.append(ghost);
-    c.classList.add('dragging');
+    c.classList.add('dragging');board.classList.add('drag-active');
     touchDrag={card:c,id:t.id,touchID:press.id,ghost,dx:press.x-r.left,dy:press.y-r.top,x:press.x,y:press.y,cell:null,before:null,raf:0};
     try{navigator.vibrate&&navigator.vibrate(10);}catch{}
     trackTouchDrag(press.x,press.y);
@@ -459,12 +485,12 @@ async function todosPage(){
     const d=touchDrag;if(!d)return;
     d.x=x;d.y=y;
     d.ghost.style.transform=`translate(${Math.round(x-d.dx)}px,${Math.round(y-d.dy)}px)`;
-    const under=document.elementFromPoint(x,y),cell=under&&board.contains(under)?under.closest('.todo-cell'):null;
+    const under=document.elementFromPoint(x,y),cell=under&&board.contains(under)?under.closest('.todo-cell,.todo-list-group[data-status]'):null;
     clearDropMarks();
     d.cell=cell;d.before=null;
     if(!cell)return;
     cell.classList.add('drop-target');
-    d.before=beforeCard(cell,y);
+    d.before=beforeCard(cell,y,ctx.todos.find(x=>x.id===d.id));
     if(d.before)d.before.classList.add('drop-before');
   }
   // Holding the card near an edge scrolls the board sideways or the page up and down.
@@ -482,11 +508,11 @@ async function todosPage(){
     const d=touchDrag;if(!d)return;
     touchDrag=null;
     cancelAnimationFrame(d.raf);
-    d.ghost.remove();d.card.classList.remove('dragging');clearDropMarks();
+    d.ghost.remove();d.card.classList.remove('dragging');board.classList.remove('drag-active');clearDropMarks();
     if(!commit||!d.cell)return;
     // Dropped where it already was: nothing to save.
-    let next=d.card.nextElementSibling;if(next&&!next.classList.contains('todo-card'))next=null;
-    if(d.cell===d.card.parentElement&&d.before===next)return;
+    let next=d.card.nextElementSibling;if(next&&!next.classList.contains('todo-card')&&!next.classList.contains('todo-list-row'))next=null;
+    if(d.cell.contains(d.card)&&d.before===next)return;
     moveCard(d.id,d.cell,d.before);
   }
   category.addEventListener('change',draw);
