@@ -13,7 +13,7 @@ Go로 만든 팀 공용 지식 서버입니다. 프로젝트별 기획·결정·
 - 감사 로그: 작업자, 작업 이름, 프로젝트·대상 ID, 권한 변경 값, 결과, 오류 코드, 소요 시간
 - 운영 현황: 최근 24시간의 기록된 작업·차단·오류·로그인 실패와 활성 사용자·키 수
 - 프로젝트·문서 추가·수정·조회, 원본 버전 보관, 동시 수정 충돌 방지
-- 프로젝트 위키([안내](docs/wiki.md)): 원본 자료를 연결한 Markdown 글을 웹과 MCP에서 작성·수정하고 위키 글만 검색
+- 프로젝트 위키([안내](docs/wiki.md)): 원본 자료를 연결한 Markdown 글을 웹과 MCP에서 작성·수정하고 위키 글만 검색. 목록은 작업 영역별로 묶고, 웹에서는 섹션 제목에 마우스를 올려 그 섹션만 바로 편집
 - 태그 정규화: 저장 시 앞뒤 공백·빈 값 제거, 대소문자 무시 중복 제거(처음 표기와 순서 유지). 기존 문서는 `008_normalize_tags.sql`로 정리
 - Ollama 로컬 `bge-m3`로 1,024차원 임베딩 생성, pgvector 저장·의미 검색
 - 한국어 키워드 검색과 의미 검색을 결합한 하이브리드 검색
@@ -142,7 +142,7 @@ Authorization: Bearer <발급받은 MCP 키>
 | `add_project_repository`, `remove_project_repository` | 소유자·관리자: 프로젝트의 소스 저장소 등록·해제. `host/owner/name` 소문자로 정규화해 저장(인증 정보·포트 제거), 프로젝트당 20개. GitHub 웹훅이 걸린 저장소는 마이그레이션 029에서 자동 등록 |
 | `set_project_member`, `list_project_members` | 참여자 권한 관리 |
 | `create_document`, `update_document` | 지식 추가·버전 기반 수정 |
-| `get_document`, `list_documents` | 본문 조회, 종류·상태·태그·기간·작성자 필터 목록과 재확인 필요 표시 |
+| `get_document`, `list_documents` | 본문 조회, 종류·상태·태그·기간·작성자·작업 영역 필터 목록과 재확인 필요 표시 |
 | `get_document_history` | 최근 50개 수정 버전의 작성자·이유 조회 |
 | `link_documents`, `unlink_documents`, `get_document_links` | 문서 간 관계(`supersedes`, `implements`, `related`) 추가·삭제·조회 |
 | `search_knowledge` | 프로젝트 내 하이브리드·의미·키워드 검색(관련 질의·이슈는 `issues`로 따로) |
@@ -174,6 +174,7 @@ Authorization: Bearer <발급받은 MCP 키>
 - `updated_after`, `updated_before`: 최종 수정 시각 범위. `YYYY-MM-DD`는 한국 시간(UTC+9) 기준이며 끝 날짜는 그날 전체를 포함합니다. RFC3339 시각은 그대로 쓰고 `updated_before`는 그 시각을 포함하지 않습니다.
 - `author`: 사용자 ID. 문서를 만든 사람 또는 마지막으로 수정한 사람이 일치하면 포함합니다.
 - `stale_only`, `stale_days`: 재확인 필요 문서만 보기, 기준 일수(기본 90, 1~3650)
+- `area_id`: 공통 작업 영역 ID. `none`이면 영역이 없는 문서만 봅니다. 문서의 작업 영역은 `create_document`·`update_document`(`patch.area_id`, 빈 문자열이면 해제)로 지정하며, 웹 위키 목록은 이 값으로 글을 묶습니다(`052_document_area` 마이그레이션 필요).
 
 목록의 각 문서에는 `needs_recheck`, `days_since_update`, `stale_after_days`가 붙습니다. `needs_recheck`는 **active 상태의 `reference`·`brief` 문서**가 기준 일수 넘게 갱신되지 않았을 때만 `true`입니다. `decision`·`history`는 특정 시점의 기록이라 표시하지 않고, draft·archived 문서도 제외합니다. AI는 이 표시가 있는 문서를 근거로 쓰기 전에 현재 상태를 확인하고, 여전히 맞으면 `update_document`로 갱신해 표시를 해제합니다. 같은 판정(기본 90일)은 `get_document`(현재 버전만), `search_knowledge`, `search_across_projects`, `start_task`·`get_task_context`의 출처 발췌에도 `recheck` 객체(`needs_recheck`, `days_since_update`, `stale_after_days`, `message`)로 붙습니다. 검색 순위는 바꾸지 않고 경고만 붙입니다. 웹 **지식 문서** 화면에서 같은 필터로 문서를 찾고 본문을 열어 볼 수 있으며 재확인 필요 문서에는 배지가 표시됩니다. 마이그레이션은 필요 없습니다.
 

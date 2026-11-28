@@ -154,3 +154,6 @@ var ScannerSettings string
 
 //go:embed 051_wiki.sql
 var Wiki string
+
+//go:embed 052_document_area.sql
+var DocumentArea string

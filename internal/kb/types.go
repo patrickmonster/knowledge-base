@@ -51,11 +51,13 @@ type Document struct {
 	Tags      []string `json:"tags"`
 	Status    string   `json:"status"`
 	SourceURL *string  `json:"source_url"`
-	Revision  int      `json:"revision"`
-	CreatedBy string   `json:"created_by"`
-	UpdatedBy string   `json:"updated_by"`
-	CreatedAt string   `json:"created_at"`
-	UpdatedAt string   `json:"updated_at"`
+	// AreaID is the shared work area the document belongs to, if any.
+	AreaID    *string `json:"area_id"`
+	Revision  int     `json:"revision"`
+	CreatedBy string  `json:"created_by"`
+	UpdatedBy string  `json:"updated_by"`
+	CreatedAt string  `json:"created_at"`
+	UpdatedAt string  `json:"updated_at"`
 	// Links is attached by get_document for the current revision only; it is
 	// link metadata, never part of a revision snapshot.
 	Links *DocumentLinks `json:"links,omitempty"`
@@ -73,6 +75,7 @@ type DocumentInput struct {
 	Tags      []string `json:"tags,omitempty"`
 	Status    string   `json:"status,omitempty" jsonschema:"draft, active (default), or archived"`
 	SourceURL string   `json:"source_url,omitempty"`
+	AreaID    string   `json:"area_id,omitempty" jsonschema:"Shared work area (list_work_areas) the document belongs to; the wiki index groups articles by area"`
 }
 type DocumentPatch struct {
 	Title     *string   `json:"title,omitempty"`
@@ -81,6 +84,7 @@ type DocumentPatch struct {
 	Tags      *[]string `json:"tags,omitempty"`
 	Status    *string   `json:"status,omitempty"`
 	SourceURL *string   `json:"source_url,omitempty" jsonschema:"Set to an empty string to clear the source URL"`
+	AreaID    *string   `json:"area_id,omitempty" jsonschema:"Shared work area ID; set to an empty string to clear it"`
 }
 type SearchHit struct {
 	DocumentID string  `json:"document_id"`
