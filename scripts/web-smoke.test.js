@@ -201,6 +201,37 @@ test('completed to-dos live on their own page; only in-progress, in-review and p
   check(c,'todosDone');
 });
 
+test('the to-do board switches to a list grouped by status and remembers the choice',async t=>{
+  const c=await open(t,'full');
+  await show(c,'todos');
+  const switchBtn=v=>c.document.querySelector(`.todo-view-switch button[data-view="${v}"]`);
+  assert.strictEqual(switchBtn('board').getAttribute('aria-pressed'),'true','board is the default');
+  press(c,switchBtn('list'));await c.settle();
+  assert.strictEqual(c.document.querySelector('.todo-card'),null,'no board cards in the list view');
+  const groups=[...c.document.querySelectorAll('.todo-list-group .todo-list-label')].map(n=>n.textContent);
+  assert.deepStrictEqual(groups,['진행 중','검토대기','반영 대기','시작 전','아이디어','완료']);
+  // Within a group: high priority first.
+  const pending=[...c.document.querySelectorAll('.todo-list-group')][2];
+  assert.deepStrictEqual([...pending.querySelectorAll('.todo-list-row')].map(r=>r.dataset.id),['todo-6','todo-11','todo-7']);
+  // Completed starts folded and opens on click.
+  const done=[...c.document.querySelectorAll('.todo-list-group')][5];
+  assert.strictEqual(done.querySelector('.todo-list-row'),null);
+  press(c,done.querySelector('.todo-list-toggle'));await c.settle();
+  assert.strictEqual([...c.document.querySelectorAll('.todo-list-group')][5].querySelectorAll('.todo-list-row').length,4);
+  const row=c.document.querySelector('.todo-list-row[data-id="todo-1"]');
+  assert.ok(row.querySelector('.todo-pri-high'));
+  assert.ok(row.querySelector('.todo-st-in_progress'));
+  assert.match(row.querySelector('.todo-list-chips').textContent,/Work/);
+  assert.match(row.querySelector('.todo-list-chips').textContent,/#\d+ PR 열림/);
+  assert.match(row.querySelector('.todo-avatar').title,/^담당 /);
+  assert.match(row.querySelector('.todo-list-date').textContent,/마감 11월 30일/);
+  press(c,row);await c.settle();
+  assert.ok(c.document.querySelector('dialog.todo-dialog[open]'),'a row opens the edit dialog');
+  await show(c,'todos');
+  assert.strictEqual(switchBtn('list').getAttribute('aria-pressed'),'true','the list view is remembered');
+  check(c,'todo list view');
+});
+
 test('a completed to-do with an unmerged pull request is flagged on the board and the completed page',async t=>{
   const c=await open(t,'full');
   await show(c,'todos');

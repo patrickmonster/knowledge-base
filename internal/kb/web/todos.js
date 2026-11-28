@@ -50,6 +50,31 @@ function todoHidden(kind,known){
 }
 function saveTodoHidden(kind,set){try{localStorage.setItem(todoHiddenKeys[kind],JSON.stringify([...set]));}catch{}}
 
+// 목록 / 보드: the same to-dos as one list grouped by status (work under way
+// first, completed last and folded) or as the status × priority board. The
+// choice and the folded groups are kept per browser.
+const todoViewKey='kb.todo.view',todoListCollapseKey='kb.todo.list.collapsed';
+const todoListStatuses=['in_progress','in_review','pending_release','not_started','idea','completed'].map(s=>[s,todoStatusLabel[s]]);
+const todoListDoneLimit=50;
+function todoView(){try{return localStorage.getItem(todoViewKey)==='list'?'list':'board';}catch{return 'board';}}
+function saveTodoView(v){try{localStorage.setItem(todoViewKey,v);}catch{}}
+function todoListCollapsed(){
+  try{const v=localStorage.getItem(todoListCollapseKey);const a=v==null?['completed']:JSON.parse(v);return new Set(Array.isArray(a)?a:[]);}catch{return new Set(['completed']);}
+}
+function saveTodoListCollapsed(set){try{localStorage.setItem(todoListCollapseKey,JSON.stringify([...set]));}catch{}}
+function todoStatusIcon(s){const i=el('span',undefined,'todo-st-icon todo-st-'+s);i.setAttribute('aria-hidden','true');return i;}
+function todoPriorityIcon(p){
+  const i=el('span',undefined,'todo-pri-icon todo-pri-'+p);i.title='우선순위 '+(todoPriorityLabel[p]||p);
+  i.setAttribute('role','img');i.setAttribute('aria-label',i.title);
+  for(let n=0;n<3;n++)i.append(el('span'));
+  return i;
+}
+function todoShortDate(v){
+  if(!v)return '';
+  const d=new Date(/^\d{4}-\d{2}-\d{2}$/.test(v)?v+'T00:00:00':v);
+  return isNaN(d)?'':`${d.getMonth()+1}월 ${d.getDate()}일`;
+}
+
 async function todosPage(){
   const root=el('div',undefined,'todo-page');
   const project=projectList.find(p=>p.id===currentProjectID);
@@ -70,7 +95,14 @@ async function todosPage(){
   hideMenu.hidden=true;hideMenu.setAttribute('role','group');hideMenu.setAttribute('aria-label','열·행 숨기기');
   hideWrap.append(hideBtn,hideMenu);
   const search=todoSearchBox(()=>draw());
-  filters.append(category,search,mineLabel,staleLabel,hideWrap,summary);
+  let view=todoView();
+  const viewSwitch=el('div',undefined,'todo-view-switch');viewSwitch.setAttribute('role','group');viewSwitch.setAttribute('aria-label','보기 방식');
+  for(const [v,label] of [['list','목록'],['board','보드']]){
+    const b=el('button',label);b.type='button';b.dataset.view=v;
+    b.addEventListener('click',()=>{if(view===v)return;view=v;saveTodoView(v);draw();});
+    viewSwitch.append(b);
+  }
+  filters.append(viewSwitch,category,search,mineLabel,staleLabel,hideWrap,summary);
   bar.append(filters);
   const barActions=el('div',undefined,'todo-bar-actions');
   const doneLink=btn('완료된 할 일',()=>render('todosDone'),'secondary todo-done-link');
@@ -83,7 +115,7 @@ async function todosPage(){
   // complete: ctx.todos holds every to-do, so the dialog can pick relations.
   const ctx={todos:[],members:[],stale:new Map(),staleDays:14,reload:refresh,complete:true};
   let generation=0;
-  const collapsed=todoCollapsed();
+  const collapsed=todoCollapsed(),listCollapsed=todoListCollapsed();
   const hidden={status:todoHidden('status',todoBoardStatuses.map(x=>x[0])),priority:todoHidden('priority',todoPriorities.map(x=>x[0]))};
   const hiddenCount=()=>hidden.status.size+hidden.priority.size;
   const shownStatuses=()=>todoBoardStatuses.filter(([s])=>!hidden.status.has(s));
@@ -161,6 +193,9 @@ async function todosPage(){
     const onBoard=items.filter(t=>!hidden.status.has(t.status)&&!hidden.priority.has(t.priority)).length;
     summary.textContent=`${onBoard}건`+(onBoard<items.length?` · 숨김 ${items.length-onBoard}건`:'')+(ctx.todos.length>=500?' · 최대 500건까지 표시':'');
     drawHideMenu();
+    for(const b of viewSwitch.children){const on=b.dataset.view===view;b.classList.toggle('active',on);b.setAttribute('aria-pressed',String(on));}
+    board.classList.toggle('todo-board-list',view==='list');
+    if(view==='list'){drawList(items,onBoard);return;}
     const inner=el('div',undefined,'todo-board-inner');
     inner.style.setProperty('--todo-cols',String(statuses.length));
     const head=el('div',undefined,'todo-row todo-columns');
@@ -202,6 +237,76 @@ async function todosPage(){
     if(items.length&&!onBoard)board.append(el('p','조건에 맞는 할 일이 모두 숨겨진 열·행에 있습니다. 숨김 설정에서 보이게 할 수 있습니다.','empty'));
     if(!items.length&&ctx.todos.length)board.append(el('p','조건에 맞는 할 일이 없습니다.','empty'));
     if(!ctx.todos.length)board.append(el('p',canWrite?'아직 할 일이 없습니다. 칸의 “새로 만들기”나 오른쪽 위 버튼으로 추가하세요.':'아직 할 일이 없습니다.','empty'));
+  }
+  function drawList(items,onBoard){
+    const words=todoWords(search.value),rank={high:0,medium:1,low:2};
+    // Completed to-dos are not on the board but close the list, newest first.
+    const done=staleOnly.checked?[]:ctx.todos.filter(t=>t.status==='completed'&&(!category.value||t.category===category.value)&&(!mine.checked||t.assignee_id===me.id)&&todoMatches(t,words))
+      .sort((a,b)=>(b.completed_at||b.updated_at||'').localeCompare(a.completed_at||a.updated_at||''));
+    const list=el('div',undefined,'todo-list');
+    for(const [s,label] of todoListStatuses){
+      if(s!=='completed'&&hidden.status.has(s))continue;
+      // Within a group: priority first, then the board order list_todos returns.
+      const rows=s==='completed'?done:items.filter(t=>t.status===s&&!hidden.priority.has(t.priority)).sort((a,b)=>rank[a.priority]-rank[b.priority]);
+      if(!rows.length)continue;
+      const group=el('section',undefined,'todo-list-group');
+      const head=el('div',undefined,'todo-list-head');
+      const toggle=el('button',undefined,'todo-list-toggle');toggle.type='button';
+      const open=!listCollapsed.has(s);toggle.setAttribute('aria-expanded',String(open));
+      toggle.append(el('span',open?'▾':'▸','todo-caret'),todoStatusIcon(s),el('span',label,'todo-list-label'),el('span',String(rows.length),'todo-count'));
+      toggle.addEventListener('click',()=>{listCollapsed.has(s)?listCollapsed.delete(s):listCollapsed.add(s);saveTodoListCollapsed(listCollapsed);draw();});
+      head.append(toggle);
+      if(canWrite&&s!=='completed'){
+        const add=el('button','+','todo-list-add');add.type='button';add.title=`${label}에 새 할 일`;add.setAttribute('aria-label',add.title);
+        add.addEventListener('click',()=>todoDialog(root,project,ctx,{status:s,priority:'medium'}));
+        head.append(add);
+      }
+      group.append(head);
+      if(open){
+        const ul=el('ul',undefined,'todo-list-rows');
+        const shown=s==='completed'?rows.slice(0,todoListDoneLimit):rows;
+        for(const t of shown)ul.append(todoRow(t));
+        group.append(ul);
+        if(shown.length<rows.length){
+          const more=el('p',undefined,'todo-list-more small muted');
+          more.append(document.createTextNode(`최근 ${shown.length}건만 표시합니다. `),btn('완료된 할 일 전체 보기',()=>render('todosDone'),'secondary small'));
+          group.append(more);
+        }
+      }
+      list.append(group);
+    }
+    board.replaceChildren(list);
+    if(items.length&&!onBoard)board.append(el('p','조건에 맞는 진행 중인 할 일이 모두 숨겨진 상태·우선순위에 있습니다. 숨김 설정에서 보이게 할 수 있습니다.','empty'));
+    if(!items.length&&!done.length&&ctx.todos.length)board.append(el('p','조건에 맞는 할 일이 없습니다.','empty'));
+    if(!ctx.todos.length)board.append(el('p',canWrite?'아직 할 일이 없습니다. 오른쪽 위 “새 할 일” 버튼으로 추가하세요.':'아직 할 일이 없습니다.','empty'));
+  }
+  function todoRow(t){
+    const r=el('li',undefined,'todo-list-row'+(t.resolution==='dropped'?' dropped':''));r.tabIndex=0;r.dataset.id=t.id;
+    r.setAttribute('aria-label',`${t.title}, ${todoStatusLabel[t.status]}, 우선순위 ${todoPriorityLabel[t.priority]||t.priority}`);
+    const title=el('span',undefined,'todo-list-title');
+    if(t.parent_id)title.append(el('span',(t.parent_title||'상위 할 일')+' ›','todo-list-parent'));
+    title.append(el('span',t.title,'todo-list-text'));
+    const chips=el('span',undefined,'todo-list-chips');
+    if(t.category)chips.append(el('span',t.category,'todo-category'));
+    const idle=ctx.stale.get(t.id);
+    if(idle){const b=el('span',`${idle.idle_days}일 정체`,'todo-stale');b.title=`${idle.idle_days}일 동안 변경이 없었습니다.`;chips.append(b);}
+    if(t.resolution==='dropped')chips.append(el('span','폐기','todo-link-pill'));
+    if(t.progress!=null&&t.status!=='completed')chips.append(el('span',t.progress+'%','todo-link-pill'));
+    for(const pills of [todoLinkPills(t),todoRelationPills(t)])if(pills)chips.append(...pills.children);
+    const who=el('span',t.assignee_name?[...t.assignee_name.trim()][0]||'?':'','todo-avatar'+(t.assignee_name?'':' none'));
+    who.title=t.assignee_name?'담당 '+t.assignee_name:'담당자 없음';
+    const date=el('span','','todo-list-date');
+    if(t.due_date&&t.status!=='completed'){
+      date.textContent='마감 '+todoShortDate(t.due_date);date.title='마감일 '+t.due_date;
+      if(t.due_date<todayISO())date.classList.add('overdue');
+    }else{
+      const at=t.status==='completed'?(t.completed_at||t.updated_at):t.updated_at;
+      date.textContent=todoShortDate(at);date.title=(t.status==='completed'?'완료 ':'수정 ')+(at||'');
+    }
+    r.append(todoPriorityIcon(t.priority),todoStatusIcon(t.status),title,chips,who,date);
+    r.addEventListener('click',()=>todoDialog(root,project,ctx,t));
+    r.addEventListener('keydown',e=>{if(e.key==='Enter'&&e.target===r){e.preventDefault();todoDialog(root,project,ctx,t);}});
+    return r;
   }
   function todoCard(t){
     const c=el('article',undefined,'todo-card');c.tabIndex=0;c.dataset.id=t.id;
