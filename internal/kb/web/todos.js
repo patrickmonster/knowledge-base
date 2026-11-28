@@ -56,7 +56,7 @@ function saveTodoHidden(kind,set){try{localStorage.setItem(todoHiddenKeys[kind],
 const todoViewKey='kb.todo.view',todoListCollapseKey='kb.todo.list.collapsed';
 const todoListStatuses=['in_progress','in_review','pending_release','not_started','idea','completed'].map(s=>[s,todoStatusLabel[s]]);
 const todoListDoneLimit=50;
-function todoView(){try{return localStorage.getItem(todoViewKey)==='list'?'list':'board';}catch{return 'board';}}
+function todoView(){try{return localStorage.getItem(todoViewKey)==='board'?'board':'list';}catch{return 'list';}}
 function saveTodoView(v){try{localStorage.setItem(todoViewKey,v);}catch{}}
 function todoListCollapsed(){
   try{const v=localStorage.getItem(todoListCollapseKey);const a=v==null?['completed']:JSON.parse(v);return new Set(Array.isArray(a)?a:[]);}catch{return new Set(['completed']);}
