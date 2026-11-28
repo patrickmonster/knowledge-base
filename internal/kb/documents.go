@@ -47,9 +47,12 @@ func createDocument(ctx context.Context, tx *sql.Tx, actor Identity, in Document
 	if _, err := projectAccess(ctx, tx, actor.User.ID, in.ProjectID, true); err != nil {
 		return nil, err
 	}
-	d, err := one[Document](ctx, tx, `WITH inserted AS (INSERT INTO documents(id,project_id,title,kind,content,tags,status,source_url,created_by,updated_by)
-	VALUES($1,$2,$3,$4,$5,$6,$7,NULLIF($8,''),$9,$9) RETURNING *) SELECT to_jsonb(inserted) FROM inserted`,
-		uuid.NewString(), in.ProjectID, in.Title, in.Kind, in.Content, in.Tags, in.Status, in.SourceURL, actor.User.ID)
+	if err := checkDocumentArea(ctx, tx, in.ProjectID, in.AreaID); err != nil {
+		return nil, err
+	}
+	d, err := one[Document](ctx, tx, `WITH inserted AS (INSERT INTO documents(id,project_id,title,kind,content,tags,status,source_url,area_id,created_by,updated_by)
+	VALUES($1,$2,$3,$4,$5,$6,$7,NULLIF($8,''),NULLIF($9,'')::uuid,$10,$10) RETURNING *) SELECT to_jsonb(inserted) FROM inserted`,
+		uuid.NewString(), in.ProjectID, in.Title, in.Kind, in.Content, in.Tags, in.Status, in.SourceURL, in.AreaID, actor.User.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -58,6 +61,24 @@ func createDocument(ctx context.Context, tx *sql.Tx, actor Identity, in Document
 	}
 	notifyDocumentBestEffort(ctx, tx, actor, d, eventDocumentCreated)
 	return d, nil
+}
+
+// checkDocumentArea accepts an empty area or a work area of the project.
+func checkDocumentArea(ctx context.Context, tx *sql.Tx, projectID, areaID string) error {
+	if areaID == "" {
+		return nil
+	}
+	if err := validID(areaID); err != nil {
+		return problem("INVALID_INPUT", "area_id must be a work area ID (canonical lowercase UUID).")
+	}
+	var exists bool
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM work_areas WHERE id=$1 AND project_id=$2)`, areaID, projectID).Scan(&exists); err != nil {
+		return err
+	}
+	if !exists {
+		return problem("NOT_FOUND", "Work area not found in this project.")
+	}
+	return nil
 }
 
 type DocumentRef struct {
@@ -114,12 +135,21 @@ func updateDocument(ctx context.Context, tx *sql.Tx, actor Identity, in UpdateIn
 	if len(in.Edits) > 0 && p.Content != nil {
 		return nil, problem("INVALID_INPUT", "Use either patch.content (full replacement) or edits, not both.")
 	}
-	if p.Title == nil && p.Kind == nil && p.Content == nil && p.Tags == nil && p.Status == nil && p.SourceURL == nil && len(in.Edits) == 0 {
+	if p.Title == nil && p.Kind == nil && p.Content == nil && p.Tags == nil && p.Status == nil && p.SourceURL == nil && p.AreaID == nil && len(in.Edits) == 0 {
 		return nil, problem("INVALID_INPUT", "Provide at least one changed field.")
 	}
 	input := DocumentInput{ProjectID: d.ProjectID, Title: d.Title, Kind: d.Kind, Content: d.Content, Tags: d.Tags, Status: d.Status}
 	if d.SourceURL != nil {
 		input.SourceURL = *d.SourceURL
+	}
+	if d.AreaID != nil {
+		input.AreaID = *d.AreaID
+	}
+	if p.AreaID != nil {
+		input.AreaID = *p.AreaID
+		if err := checkDocumentArea(ctx, tx, d.ProjectID, input.AreaID); err != nil {
+			return nil, err
+		}
 	}
 	if p.Title != nil {
 		input.Title = *p.Title
@@ -161,7 +191,7 @@ func updateDocument(ctx context.Context, tx *sql.Tx, actor Identity, in UpdateIn
 	}
 	previousStatus := d.Status
 	d, err = one[Document](ctx, tx, `WITH changed AS (UPDATE documents SET title=$1,kind=$2,content=$3,tags=$4,status=$5,source_url=NULLIF($6,''),
-	revision=revision+1,updated_by=$7,updated_at=clock_timestamp() WHERE id=$8 RETURNING *) SELECT to_jsonb(changed) FROM changed`, input.Title, input.Kind, input.Content, input.Tags, input.Status, input.SourceURL, actor.User.ID, d.ID)
+	area_id=NULLIF($9,'')::uuid,revision=revision+1,updated_by=$7,updated_at=clock_timestamp() WHERE id=$8 RETURNING *) SELECT to_jsonb(changed) FROM changed`, input.Title, input.Kind, input.Content, input.Tags, input.Status, input.SourceURL, actor.User.ID, d.ID, input.AreaID)
 	if err != nil {
 		return nil, err
 	}
@@ -187,6 +217,7 @@ type ListInput struct {
 	UpdatedAfter  string   `json:"updated_after,omitempty" jsonschema:"Last updated at or after: YYYY-MM-DD (Asia/Seoul start of day) or RFC3339"`
 	UpdatedBefore string   `json:"updated_before,omitempty" jsonschema:"Last updated on or before: YYYY-MM-DD (Asia/Seoul, inclusive) or RFC3339 (exclusive)"`
 	Author        string   `json:"author,omitempty" jsonschema:"User ID that created or last updated the document"`
+	AreaID        string   `json:"area_id,omitempty" jsonschema:"Only documents in this work area; none lists documents without an area"`
 	StaleOnly     bool     `json:"stale_only,omitempty" jsonschema:"Only active reference/brief documents that need re-checking"`
 	StaleDays     int      `json:"stale_days,omitempty" jsonschema:"Days without updates before active reference/brief documents need re-checking; default 90, 1–3650"`
 	Sort          string   `json:"sort,omitempty" jsonschema:"Sort key: updated_at (default), title, kind, status, revision, or author (creator name)"`
@@ -281,6 +312,11 @@ func listDocuments(ctx context.Context, tx *sql.Tx, actor Identity, in ListInput
 			return nil, problem("INVALID_INPUT", "author must be a user ID (canonical lowercase UUID).")
 		}
 	}
+	if in.AreaID != "" && in.AreaID != "none" {
+		if err := validID(in.AreaID); err != nil {
+			return nil, problem("INVALID_INPUT", "area_id must be a work area ID or none.")
+		}
+	}
 	after, err := parseListTime("updated_after", in.UpdatedAfter, false)
 	if err != nil {
 		return nil, err
@@ -310,11 +346,12 @@ func listDocuments(ctx context.Context, tx *sql.Tx, actor Identity, in ListInput
 		AND NOT EXISTS (SELECT 1 FROM unnest($6::text[]) want WHERE NOT EXISTS (SELECT 1 FROM unnest(d.tags) have WHERE lower(have)=want))
 		AND ($7::timestamptz IS NULL OR d.updated_at >= $7::timestamptz)
 		AND ($8::timestamptz IS NULL OR d.updated_at < $8::timestamptz)
-		AND ($9='' OR d.created_by::text=$9 OR d.updated_by::text=$9))
+		AND ($9='' OR d.created_by::text=$9 OR d.updated_by::text=$9)
+		AND ($13='' OR ($13='none' AND d.area_id IS NULL) OR d.area_id::text=$13))
 	SELECT (to_jsonb(l)-'content')||jsonb_build_object('days_since_update',floor(extract(epoch FROM now()-l.updated_at)/86400)::int,'stale_after_days',$10::int)
 	FROM listed l WHERE NOT $12::bool OR l.needs_recheck
 	ORDER BY `+orderBy+` LIMIT $2 OFFSET $3`,
-		in.ProjectID, limit, in.Offset, in.Status, in.Kind, tags, after, before, in.Author, staleDays, staleKinds, in.StaleOnly)
+		in.ProjectID, limit, in.Offset, in.Status, in.Kind, tags, after, before, in.Author, staleDays, staleKinds, in.StaleOnly, in.AreaID)
 }
 
 type SearchInput struct {

@@ -11,7 +11,7 @@ const OTHER={id:'user-2',name:'김철수',email:'other@example.com',global_role:
 const PROJECT={id:'project-1',slug:'demo',name:'데모 프로젝트',description:'스모크 테스트용',owner_id:ME.id,role:'owner',created_at:T,repositories:['github.com/example/demo']};
 
 const attachment=(over={})=>({id:'att-1',project_id:PROJECT.id,document_id:'doc-1',document_revision:2,issue_id:null,filename:'보고서.pdf',size_bytes:123456,sha256:'ab'.repeat(32),status:'ready',text_status:'extracted',text_document_id:'doc-3',created_by:ME.id,created_at:T,updated_at:T,...over});
-const document=(over={})=>({id:'doc-1',project_id:PROJECT.id,title:'시스템 구조',kind:'reference',content:'# 시스템 구조\n\n본문 **강조** `code`\n\n- 항목 1\n- 항목 2\n\n| a | b |\n|---|---|\n| 1 | 2 |\n',tags:['구조','reference'],status:'active',source_url:'https://example.com/doc',revision:2,created_by:ME.id,updated_by:ME.id,created_at:T,updated_at:T,...over});
+const document=(over={})=>({id:'doc-1',project_id:PROJECT.id,title:'시스템 구조',kind:'reference',content:'# 시스템 구조\n\n본문 **강조** `code`\n\n- 항목 1\n- 항목 2\n\n| a | b |\n|---|---|\n| 1 | 2 |\n',tags:['구조','reference'],status:'active',source_url:'https://example.com/doc',area_id:null,revision:2,created_by:ME.id,updated_by:ME.id,created_at:T,updated_at:T,...over});
 const linked=(id,title)=>({document_id:id,title,kind:'decision',status:'active',revision:1,note:'메모',created_at:T});
 const links=full=>full?{supersedes:[linked('doc-2','이전 결정')],superseded_by:[],implements:[],implemented_by:[linked('doc-4','구현 이력')],related:[linked('doc-5','관련 문서')]}:{supersedes:[],superseded_by:[],implements:[],implemented_by:[],related:[]};
 const recheck={needs_recheck:true,days_since_update:120,stale_after_days:90,message:'90일 넘게 갱신되지 않았습니다.'};
@@ -72,7 +72,8 @@ function mockAPI(variant){
     save_task_prompt:()=>taskPrompt('prompt-9'),
     delete_task_prompt:()=>({id:'prompt-1',deleted:true}),
     set_task_prompt_enabled:()=>taskPrompt('prompt-1',{enabled:false}),
-    list_documents:b=>b.offset?[]:list([{...document(),content:undefined,needs_recheck:true,days_since_update:120,stale_after_days:90},{...document({id:'doc-2',title:'이전 결정',kind:'decision',status:b.status||'draft',tags:[],source_url:null,revision:1}),content:undefined,needs_recheck:false,days_since_update:1,stale_after_days:90}]),
+    list_documents:b=>b.offset?[]:list([{...document(full?{area_id:'area-1'}:{}),content:undefined,needs_recheck:true,days_since_update:120,stale_after_days:90},{...document({id:'doc-2',title:'이전 결정',kind:'decision',status:b.status||'draft',tags:[],source_url:null,revision:1}),content:undefined,needs_recheck:false,days_since_update:1,stale_after_days:90}]),
+    update_document:b=>document({id:b.document_id,revision:(b.expected_revision||1)+1}),
     get_document:b=>b.revision&&b.revision<2?document({id:b.document_id,revision:b.revision,content:'# 이전 본문\n',tags:['구조']}):document({id:b.document_id,...(full?{links:links(true),recheck}:{})}),
     get_document_history:()=>full?revisions():revisions().slice(0,1),
     get_document_links:()=>links(full),

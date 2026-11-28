@@ -471,3 +471,86 @@ test('owner transfer asks about the owner\'s work areas and hands them over when
   assert.deepStrictEqual(await submit('viewer','keep'),['transfer'],'a viewer cannot keep work areas');
   check(c,'members › owner transfer');
 });
+
+test('wiki segments split at headings outside fenced code',async t=>{
+  const c=await open(t,'empty');
+  const md='도입 문단\n\n## 개요\n본문\n### 세부\n```\n# 코드 안 제목\n```\n## 다음\n끝\n';
+  const plain=v=>JSON.parse(JSON.stringify(v));
+  const segments=plain(c.call('wikiSegments',md));
+  assert.deepStrictEqual(segments.map(s=>[s.level,s.title]),[[0,''],[2,'개요'],[3,'세부'],[2,'다음']]);
+  assert.strictEqual(segments.map(s=>md.slice(s.start,s.end)).join(''),md,'segments cover the whole body');
+  const range=c.call('wikiSectionRange',segments,1);
+  assert.strictEqual(md.slice(range.start,range.end),'## 개요\n본문\n### 세부\n```\n# 코드 안 제목\n```\n','a section keeps its subsections');
+  assert.deepStrictEqual(plain(c.call('wikiSegments','## 하나\n')).map(s=>s.title),['하나'],'no empty lead');
+});
+
+const {mockAPI:baseAPI}=require('./web-fixtures.js');
+function wikiAPI(content){
+  const base=baseAPI('full');
+  const wikiDoc={id:'wiki-1',project_id:PROJECT.id,title:'로그인',kind:'wiki',content,tags:[],status:'active',source_url:null,area_id:'area-1',revision:3,created_by:'user-1',updated_by:'user-1',created_at:'2026-11-15T06:08:01Z',updated_at:'2026-11-15T06:08:01Z',links:{supersedes:[],superseded_by:[],implements:[],implemented_by:[],related:[],cites:[],cited_by:[]}};
+  return req=>{
+    if(req.path==='/api/tools/list_documents')return req.body.offset?[]:[{...wikiDoc,content:undefined},{...wikiDoc,id:'wiki-2',title:'용어',area_id:null,content:undefined}];
+    if(req.path==='/api/tools/get_document'&&!req.body.revision)return wikiDoc;
+    if(req.path==='/api/tools/get_document_history')return [];
+    return base(req);
+  };
+}
+
+test('the wiki index groups articles by work area',async t=>{
+  const {openConsole}=require('./web-harness.js');
+  const c=await openConsole(wikiAPI('본문'));
+  t.after(()=>c.close());
+  await show(c,'wiki');check(c,'wiki');
+  const groups=[...c.document.querySelectorAll('#page .wiki-area')].map(g=>[g.querySelector('h3').textContent,[...g.querySelectorAll('.wiki-article-list li > button')].map(b=>b.textContent)]);
+  assert.deepStrictEqual(groups,[['배포',['로그인']],['문서',[]],['영역 없음',['용어']]]);
+  assert.match(c.document.querySelector('#page .wiki-area').textContent,/담당 김철수/);
+  // Writing from an area preselects it.
+  press(c,[...c.document.querySelectorAll('#page .wiki-area button')].find(b=>b.textContent==='이 영역에 글 쓰기'));
+  await c.settle();
+  assert.strictEqual(c.document.querySelector('#page select[name="area_id"]').value,'area-1');
+  check(c,'wiki › write in area');
+});
+
+test('a wiki section is edited in place and saved as a partial edit',async t=>{
+  const {openConsole}=require('./web-harness.js');
+  const content='도입\n\n## 흐름\n로그인한다\n### 예외\n잠금\n## 기타\n끝\n';
+  const c=await openConsole(wikiAPI(content));
+  t.after(()=>c.close());
+  await c.call('openPage','wiki',{document_id:'wiki-1'});
+  await c.settle();check(c,'wiki article');
+  assert.match(c.document.querySelector('#page').textContent,/배포 · active · 버전 3/);
+  const edits=[...c.document.querySelectorAll('#page .wiki-section-edit')];
+  assert.deepStrictEqual(edits.map(b=>b.getAttribute('aria-label')),["'도입부' 섹션 편집","'흐름' 섹션 편집","'예외' 섹션 편집","'기타' 섹션 편집"]);
+  assert.deepStrictEqual([...c.document.querySelectorAll('#page .wiki-contents li')].map(n=>n.textContent),['흐름','예외','기타'],'the contents leave out the edit buttons');
+  press(c,edits[1]);await c.settle();
+  const form=c.document.querySelector('#page .wiki-section-form');
+  const text=form.querySelector('textarea');
+  assert.strictEqual(text.value,'## 흐름\n로그인한다\n### 예외\n잠금','the section brings its subsection');
+  assert.strictEqual([...c.document.querySelectorAll('#page .wiki-section')].filter(n=>n.hidden).length,2,'the edited blocks are hidden');
+  text.value='## 흐름\nMFA로 로그인한다';
+  c.requests.length=0;
+  form.dispatchEvent(new c.window.Event('submit',{bubbles:true,cancelable:true}));
+  await c.settle();check(c,'wiki › section save');
+  const sent=c.requests.filter(r=>r.path==='/api/tools/update_document').map(r=>r.body);
+  assert.deepStrictEqual(sent,[{project_id:PROJECT.id,document_id:'wiki-1',expected_revision:3,reason:"섹션 '흐름' 수정",
+    edits:[{old_str:'## 흐름\n로그인한다\n### 예외\n잠금\n',new_str:'## 흐름\nMFA로 로그인한다\n'}]}]);
+});
+
+test('a wiki section edit reports a revision conflict and offers a reload',async t=>{
+  const {openConsole}=require('./web-harness.js');
+  const api=wikiAPI('## 하나\n가\n');
+  const c=await openConsole(req=>{
+    if(req.path==='/api/tools/update_document')throw Object.assign(Error('REVISION_CONFLICT: Current revision is 4.'),{status:409,code:'REVISION_CONFLICT'});
+    return api(req);
+  });
+  t.after(()=>c.close());
+  await c.call('openPage','wiki',{document_id:'wiki-1'});
+  await c.settle();
+  press(c,c.document.querySelector('#page .wiki-section-edit'));await c.settle();
+  const form=c.document.querySelector('#page .wiki-section-form');
+  form.querySelector('textarea').value='## 하나\n나';
+  form.dispatchEvent(new c.window.Event('submit',{bubbles:true,cancelable:true}));
+  await c.settle();
+  assert.match(c.notices.join(' '),/다른 사람이 먼저 이 글을 고쳤습니다/);
+  assert.ok(form.isConnected&&form.querySelector('.wiki-reload'),'the editor stays open with a reload button');
+});
