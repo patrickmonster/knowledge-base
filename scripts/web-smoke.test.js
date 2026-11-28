@@ -24,6 +24,11 @@ async function show(c,page){
 }
 // Things a user can press on the page or in a dialog opened from it.
 const clickable=c=>[...c.document.querySelectorAll('#page button, #page summary, #page a:not([href]), #page [role="button"], #page [tabindex="0"], dialog[open] button, dialog[open] summary')].filter(n=>!n.disabled&&!n.closest('[hidden]'));
+// The to-do page opens as a list; board tests pick the board first.
+async function showBoard(c){
+  c.window.localStorage.setItem('kb.todo.view','board');
+  await show(c,'todos');
+}
 const check=(c,where)=>assert.deepStrictEqual([...c.problems,...c.faults()],[],where);
 const press=(c,n)=>n.dispatchEvent(new c.window.MouseEvent('click',{bubbles:true,cancelable:true}));
 const label=n=>(n.textContent.trim()||n.getAttribute('aria-label')||n.title||n.className||n.tagName).slice(0,40);
@@ -141,7 +146,7 @@ test('a task links to its questions and history document',async t=>{
 
 test('to-do cards show sub-items and predecessors; the dialog saves only changed relations',async t=>{
   const c=await open(t,'full');
-  await show(c,'todos');
+  await showBoard(c);
   const parent=c.document.querySelector('.todo-card[data-id="todo-1"]'),child=c.document.querySelector('.todo-card[data-id="todo-2"]');
   assert.match(parent.textContent,/하위 0\/1/);
   assert.match(child.querySelector('.todo-parent').textContent,/할 일 todo-1/);
@@ -156,7 +161,7 @@ test('to-do cards show sub-items and predecessors; the dialog saves only changed
   await c.settle();
   let saved=c.requests.find(r=>r.path==='/api/tools/save_todo').body;
   assert.ok(!('parent_id' in saved)&&!('blocked_by' in saved),'unchanged relations are not sent');
-  await show(c,'todos');
+  await showBoard(c);
   press(c,c.document.querySelector('.todo-card[data-id="todo-2"]'));await c.settle();
   const again=c.document.querySelector('dialog.todo-dialog[open]');
   again.querySelector('select[name="parent_id"]').value='';
@@ -188,7 +193,7 @@ test('task start sources list upstream and related projects apart, by project',a
 
 test('completed to-dos live on their own page; only in-progress, in-review and pending-release cards can be ticked',async t=>{
   const c=await open(t,'full');
-  await show(c,'todos');
+  await showBoard(c);
   const heads=[...c.document.querySelectorAll('.todo-col-head .todo-status')].map(n=>n.textContent);
   assert.deepStrictEqual(heads,['시작 전','진행 중','검토대기','반영 대기','아이디어']);
   assert.strictEqual(c.document.querySelector('.todo-card[data-id="todo-3"]'),null,'completed card is not on the board');
@@ -201,9 +206,42 @@ test('completed to-dos live on their own page; only in-progress, in-review and p
   check(c,'todosDone');
 });
 
-test('a completed to-do with an unmerged pull request is flagged on the board and the completed page',async t=>{
+test('the to-do page opens as a list grouped by status and remembers the board choice',async t=>{
   const c=await open(t,'full');
   await show(c,'todos');
+  const switchBtn=v=>c.document.querySelector(`.todo-view-switch button[data-view="${v}"]`);
+  assert.strictEqual(switchBtn('list').getAttribute('aria-pressed'),'true','the list is the default');
+  assert.strictEqual(c.document.querySelector('.todo-card'),null,'no board cards in the list view');
+  const groups=[...c.document.querySelectorAll('.todo-list-group .todo-list-label')].map(n=>n.textContent);
+  assert.deepStrictEqual(groups,['진행 중','검토대기','반영 대기','시작 전','아이디어','완료']);
+  // Within a group: high priority first.
+  const pending=[...c.document.querySelectorAll('.todo-list-group')][2];
+  assert.deepStrictEqual([...pending.querySelectorAll('.todo-list-row')].map(r=>r.dataset.id),['todo-6','todo-11','todo-7']);
+  // Completed starts folded and opens on click.
+  const done=[...c.document.querySelectorAll('.todo-list-group')][5];
+  assert.strictEqual(done.querySelector('.todo-list-row'),null);
+  press(c,done.querySelector('.todo-list-toggle'));await c.settle();
+  assert.strictEqual([...c.document.querySelectorAll('.todo-list-group')][5].querySelectorAll('.todo-list-row').length,4);
+  const row=c.document.querySelector('.todo-list-row[data-id="todo-1"]');
+  assert.ok(row.querySelector('.todo-pri-high'));
+  assert.ok(row.querySelector('.todo-st-in_progress'));
+  assert.match(row.querySelector('.todo-list-chips').textContent,/Work/);
+  assert.match(row.querySelector('.todo-list-chips').textContent,/#\d+ PR 열림/);
+  assert.match(row.querySelector('.todo-avatar').title,/^담당 /);
+  assert.match(row.querySelector('.todo-list-date').textContent,/마감 11월 30일/);
+  press(c,row);await c.settle();
+  assert.ok(c.document.querySelector('dialog.todo-dialog[open]'),'a row opens the edit dialog');
+  for(const d of c.document.querySelectorAll('dialog[open]'))d.close();
+  press(c,switchBtn('board'));await c.settle();
+  assert.ok(c.document.querySelector('.todo-card'),'the board shows cards');
+  await show(c,'todos');
+  assert.strictEqual(switchBtn('board').getAttribute('aria-pressed'),'true','the board choice is remembered');
+  check(c,'todo list view');
+});
+
+test('a completed to-do with an unmerged pull request is flagged on the board and the completed page',async t=>{
+  const c=await open(t,'full');
+  await showBoard(c);
   // todo-8's latest PR is deployed, an older one is still open: every PR counts.
   const link=c.document.querySelector('.todo-done-link');
   assert.match(link.textContent,/완료된 할 일 4건 · ⚠ 미병합 PR 2/);
@@ -259,7 +297,7 @@ test('completed to-dos go back to 반영 대기 while a PR may land, or are drop
 
 test('a 반영 대기 card shows auto completion, or the way out when every PR closed',async t=>{
   const c=await open(t,'full');
-  await show(c,'todos');
+  await showBoard(c);
   const cardOf=id=>c.document.querySelector(`.todo-card[data-id="${id}"]`);
   assert.match(cardOf('todo-6').querySelector('.todo-release-note').textContent,/PR 병합 시 자동 완료/);
   assert.strictEqual(cardOf('todo-6').querySelector('.todo-closed-prs'),null);
@@ -277,7 +315,7 @@ test('a 반영 대기 card shows auto completion, or the way out when every PR c
 
 test('pending-release cards show their work branch and the dialog edits it',async t=>{
   const c=await open(t,'full');
-  await show(c,'todos');
+  await showBoard(c);
   const branch=id=>c.document.querySelector(`.todo-card[data-id="${id}"] .todo-branch`);
   assert.strictEqual(branch('todo-6').querySelector('code').textContent,'feat/todo-pending-release');
   assert.match(branch('todo-7').textContent,/브랜치 미입력/);
@@ -301,7 +339,7 @@ test('a closed task can drop its to-do link, an open one changes it',async t=>{
 
 test('to-dos idle for a while carry a badge and can be shown alone',async t=>{
   const c=await open(t,'full');
-  await show(c,'todos');
+  await showBoard(c);
   const badges=[...c.document.querySelectorAll('.todo-card .todo-stale')].map(n=>[n.closest('.todo-card').dataset.id,n.textContent]);
   assert.deepStrictEqual(badges,[['todo-2','21일 정체']]);
   const label=c.document.querySelector('.todo-stale-filter');
@@ -315,7 +353,7 @@ test('to-dos idle for a while carry a badge and can be shown alone',async t=>{
 
 test('the stale filter stays hidden when nothing is stale',async t=>{
   const c=await open(t,'empty');
-  await show(c,'todos');
+  await showBoard(c);
   assert.ok(c.document.querySelector('.todo-stale-filter').hidden);
   assert.strictEqual(c.document.querySelector('.todo-stale'),null);
 });
@@ -353,7 +391,7 @@ test('search results mark documents that need a recheck',async t=>{
 
 test('the board search box keeps only cards holding every word',async t=>{
   const c=await open(t,'full');
-  await show(c,'todos');
+  await showBoard(c);
   const ids=()=>[...c.document.querySelectorAll('.todo-card')].map(n=>n.dataset.id).sort();
   const before=ids();
   assert.ok(before.length>1,'the board starts with several cards');
